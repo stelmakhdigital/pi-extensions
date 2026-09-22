@@ -24,15 +24,20 @@
 Целиком:
 
 ```bash
-pi install git:github.com/stelmakhdigital/pi-extensions@v0.3.0
+pi install git:github.com/stelmakhdigital/pi-extensions@master
 ```
 
 После установки `/reload` (или перезапуск pi). Обновление:
 
 ```bash
-pi update --extensions          # обновить пакеты
-pi install git:github.com/stelmakhdigital/pi-extensions@v0.3.1   # перевязать на будущий новый тег
+pi update --extensions   # обновить пакеты (подтянет актуальный HEAD ветки master)
 ```
+
+Привязка к ветке = «latest»: в пакет попадают все свежие коммиты.
+Если нужна закреплённая версия — ставь тег или хеш коммита:
+`pi install git:github.com/stelmakhdigital/pi-extensions@v0.3.0`.
+Обновление фиксированного тега `pi update` не поднимает (fetch идёт `--no-tags`) —
+нужен повторный `pi install ...@<новый тег>`.
 
 ## Установка по отдельности
 
@@ -56,7 +61,7 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.3.1   # перевя�
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
 			"extensions": ["extensions/prompt-snippets/*"]
 		}
 	]
@@ -71,7 +76,7 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.3.1   # перевя�
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
 			"extensions": ["extensions/bash-guard/*"]
 		}
 	]
@@ -88,7 +93,7 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.3.1   # перевя�
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
 			"extensions": ["extensions/ask-user-question/*"]
 		}
 	]
@@ -103,7 +108,7 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.3.1   # перевя�
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
 			"extensions": ["extensions/graft/*"]
 		}
 	]
@@ -123,7 +128,7 @@ CLI ставится отдельно: `npm i -g @nanonets/graft` (без нег
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
 			"extensions": ["extensions/sandbox/*"]
 		}
 	]
@@ -189,7 +194,7 @@ python3 <путь>/scripts/insights.py --errors-only --json  # JSON
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
 			"extensions": [
 				"extensions/prompt-snippets/*",
 				"extensions/bash-guard/*"
