@@ -29,24 +29,80 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.1.1   # перевя�
 ## Установка по отдельности
 
 Пакет — это весь репозиторий, но в настройках можно загрузить только нужные
-расширения через фильтры (объектная форма записи пакета). Пример — только
-`prompt-snippets` в глобальных настройках `~/.pi/agent/settings.json`:
+расширения через фильтры (объектная форма записи пакета). Конкретный паттерн
+для каждого расширения:
+
+| Расширение | Фильтр |
+|---|---|
+| prompt-snippets | `extensions/prompt-snippets/*` |
+| bash-guard | `extensions/bash-guard/*` |
+| ask-user-question | `extensions/ask-user-question/*` |
+
+Далее — пример для каждого (глобальные настройки `~/.pi/agent/settings.json`).
+
+### Только prompt-snippets
 
 ```json
 {
 	"packages": [
 		{
 			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
-			"extensions": ["extensions/prompt-snippets/index.ts"]
+			"extensions": ["extensions/prompt-snippets/*"]
 		}
 	]
 }
 ```
 
-Глобальные паттерны тоже работают, например:
+Даст меню `alt+s` / `/snippets` и сниппеты из `extensions/prompt-snippets/snippets/`.
+
+### Только bash-guard
 
 ```json
-"extensions": ["extensions/prompt-snippets/*", "extensions/bash-guard/*"]
+{
+	"packages": [
+		{
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"extensions": ["extensions/bash-guard/*"]
+		}
+	]
+}
+```
+
+Даст диалог «Выполнить / Отменить» на рискованные bash-команды, `/bash-guard`
+и флаги `--bash-guard-disabled` / `--bash-guard-auto-allow`. Зависимость
+`shell-quote` ставится автоматически (npm install при установке пакета).
+
+### Только ask-user-question
+
+```json
+{
+	"packages": [
+		{
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"extensions": ["extensions/ask-user-question/*"]
+		}
+	]
+}
+```
+
+Даст инструмент `ask_user_question`.
+
+### Несколько расширений
+
+Несколько паттернов в одном пакете (или в разных записях пакета — так же):
+
+```json
+{
+	"packages": [
+		{
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"extensions": [
+				"extensions/prompt-snippets/*",
+				"extensions/bash-guard/*"
+			]
+		}
+	]
+}
 ```
 
 Чтобы вообще ничего из пакета не грузить: `"extensions": []`.
