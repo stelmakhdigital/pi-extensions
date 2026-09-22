@@ -11,6 +11,7 @@
 | [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах |
 | [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: задаёт пользователю один вопрос (текст, выбор одного, мультивыбор) и ждёт ответа |
 | [graft](extensions/graft/) | Интеграция [Graft](https://github.com/trailhq/Graft): нативные инструменты `graft_ask/grep/callers/skeleton/map/check/blast`, карта репо в системном промпте, blast radius после write/edit, бейдж свежести |
+| [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, маркер `.sandbox` по репо, fake $HOME, env-allowlist |
 
 ## Установка
 
@@ -39,6 +40,7 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.1.1   # перевя�
 | bash-guard | `extensions/bash-guard/*` |
 | ask-user-question | `extensions/ask-user-question/*` |
 | graft | `extensions/graft/*` |
+| sandbox | `extensions/sandbox/*` |
 
 Далее — пример для каждого (глобальные настройки `~/.pi/agent/settings.json`).
 
@@ -109,6 +111,26 @@ blast radius после write/edit, бейдж свежести и команд�
 CLI ставится отдельно: `npm i -g @nanonets/graft` (без него расширение
 автоматически использует `npx -y @nanonets/graft`).
 
+### Только sandbox
+
+```json
+{
+	"packages": [
+		{
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"extensions": ["extensions/sandbox/*"]
+		}
+	]
+}
+```
+
+Даст пер-командную песочницу для bash-команд агента: уровни `dev`/
+`untrusted` (bwrap на Linux, sandbox-exec на macOS), файл-маркер
+`.sandbox` в репо для автоматического включения, `/sandbox status|on|test`,
+бейдж в футере. Без песочницы команды агента не выполняются (fail-closed),
+если уровень включён, но бэкенд недоступен. Windows — только контейнерный
+режим (см. `sandbox/README.md`).
+
 ### Несколько расширений
 
 Несколько паттернов в одном пакете (или в разных записях пакета — так же):
@@ -147,6 +169,8 @@ extensions/
     index.ts
   graft/
     index.ts                  # интеграция @nanonets/graft (CLI) в pi
+  sandbox/
+    index.ts                  # per-command sandbox (bwrap / sandbox-exec)
 sandbox/
   Dockerfile                  # pi-контур для недоверенного кода (см. sandbox/README.md)
   README.md

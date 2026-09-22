@@ -583,6 +583,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event)) return;
 
+		// sandbox-расширение уже обёрнуло команду в bwrap/Seatbelt (маркер на событии) —
+		// повторное подтверждение не нужно: команда исполняется в изоляции.
+		if ((event as unknown as { __sandboxWrapped?: unknown }).__sandboxWrapped) return;
+
 		const command = event.input.command;
 
 		// Отключённый (автономный) режим: без интерактивных запросов, но

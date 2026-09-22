@@ -1,0 +1,108 @@
+# sandbox (расширение pi)
+
+Пер-командная изоляция bash-вызовов **агента** — уровень L1 «лестницы
+доверия» (L0 = обычный pi + bash-guard; L2 = весь pi в контейнере/VM, см.
+[`sandbox/`](../../sandbox/README.md) — Docker-контур в этом репозитории).
+
+Механика: расширение перехватывает `tool_call` на `bash` и оборачивает
+команду бэкендом песочницы; исполняет её штатный bash-тул pi. Пользователь
+(и bash-guard) видят полную команду с бэкендом. Команда пишется в
+скрипт-файл, который монтируется в песочницу read-only — без хрупкого
+квоутинга тела команды.
+
+## Уровни
+
+| Уровень | Что даёт | Сеть |
+|---|---|---|
+| `off` (L0) | passthrough, ничего не меняем | — |
+| `dev` (L1) | FS-изоляция: видна курируемая системная подсистема (ro) + workspace (rw); home-каталоги и секреты не монтируются; fake `$HOME`; env — только allowlist (ключей провайдеров нет) | есть |
+| `untrusted` (L1+) | то же + `--unshare-net` (Linux) / network deny (macOS) | нет |
+| `vm` (L2) | пер-команда VM не делает: **fail-closed** — bash агента блокируется с инструкцией запустить pi под Gondolin/Docker | — |
+
+## Выбор уровня
+
+Приоритет: флаг `--sandbox-level` → файл-маркер `.sandbox` (первый
+найденный вверх от корня проекта; содержимое: `dev`, `untrusted`, `vm`,
+`off`) → `off`. В сессии переопределяется: `/sandbox on <level>` /
+`/sandbox off`.
+
+Маркер — killer feature: положи `.sandbox` с `untrusted` в чужой репо —
+и агент в нём работает в изолированной среде автоматически, без настройки.
+
+## Механика бэкендов
+
+### Linux — bubblewrap (`bwrap`)
+
+```
+bwrap
+  --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib* ...   # подсистема ro
+  --ro-bind /etc/resolv.conf ... --ro-bind /etc/ssl ...         # только нужное из /etc
+  --tmpfs /tmp --tmpfs /home --tmpfs /root                      # хостовые /tmp и home скрыты
+  --bind <workspace> <workspace>                                # проект rw (write-through)
+  --dev /dev --proc /proc --unshare-pid --die-with-parent --new-session
+  [--unshare-net]                                               # untrusted
+  --clearenv --setenv PATH=... --setenv HOME=<fake> ...         # env-allowlist
+  -- bash /run/pi-sbx-cmd.sh
+```
+
+- workspace — корень git-репо (вверх от cwd), не текущий каталог;
+- `~/.pi/agent` (ключи!), `~/.ssh`, `~/.aws`, другие проекты — не видны;
+- env — явный allowlist (`PATH`, `USER`, `SHELL`, `TERM`, `LANG`,
+  `LC_ALL`, fake `HOME`): **ничего из `API_KEY/TOKEN/SECRET` не
+  наследуется**;
+- в `fake $HOME` копируется только `.gitconfig` (identity), без креденшелов.
+
+### macOS — `sandbox-exec` (Seatbelt)
+
+Генерируется SBPL-профиль: deny default, read на системные префиксы,
+read-write на workspace и tmp, deny на home-секреты, network по уровню.
+Окружение — через `env -i` с allowlist-переменными. (Проверен ревьюем;
+на Linux-машине сборки не запускался.)
+
+## Команды и флаги
+
+- `/sandbox status` — уровень, источник, платформа, бэкенд, workspace;
+- `/sandbox on dev|untrusted|vm|off` — переопределить на сессию;
+- `/sandbox test` — self-test: короткая команда в песочнице с проверкой
+  (секреты не видны, workspace rw);
+- `--sandbox-level <level>` — уровень на флаг (высший приоритет);
+- бейдж в футере: `⧉ sandbox: dev` / `⧉ sandbox: untrusted`.
+
+## Взаимодействие с bash-guard
+
+Если sandbox обёрнул команду, на событии стоит маркер `__sandboxWrapped`,
+и bash-guard (если загружен позже) пропускает повторный запрос: команда
+уже исполняется в изоляции. Если bash-guard сработал раньше — диалог
+показывает исходную команду; после подтверждения исполняется обёрнутая.
+В обоих случаях безопасно.
+
+## Границы доверия
+
+- **Пользовательские `!`-команды всегда на хосте** — человек доверяется
+  полностью, агент — нет. Если агенту нужен доступ, которого песочница не
+  даёт, пусть предложит тебе `!`-команду или `/sandbox on off` на время.
+- Файловые тулы pi (read/write/edit) в v1 работают на хосте напрямую —
+  write-through в workspace осознанно.
+
+## Честные ограничения (v1)
+
+- Нет user-namespace (на части систем unprivileged userns ограничен
+  AppArmor — на Ubuntu это нормально: bwrap работает и без него, но
+  процесс внутри — твой реальный uid, без uid-маппинга);
+- нет seccomp-фильтра (блокировка `mount`/`unshare`/`ptrace` изнутри) —
+  TODO v2; в наших тестах `unshare` изнутри и так EPERM;
+- нет cgroup-лимитов (pids/memory, защита от fork-bomb/OOM) — TODO v2
+  (`systemd-run --scope -p TasksMax=... -p MemoryMax=...`);
+- fail-closed: если bwrap не установлен/не запускается — bash агента
+  блокируется, а не «выполняется без песочницы».
+
+Проверено (Linux, Ubuntu 26.04, bwrap 0.11.1): секреты home не видны,
+другие проекты не видны, workspace rw, env-секреты не наследуются,
+untrusted режет сеть (по IP, не только DNS), node/git/curl внутри работают.
+
+## Требования
+
+- Linux: `bwrap` (Ubuntu/Debian: `sudo apt install bwrap`);
+- macOS: `sandbox-exec` (системный).
+- Windows: не поддерживается — для Windows используйте режим
+  «pi целиком в контейнере» (`sandbox/README.md`).

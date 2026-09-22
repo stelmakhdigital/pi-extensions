@@ -257,6 +257,87 @@ const noUiCtx = {
 	});
 }
 
+
+// === 5. sandbox ===
+{
+	const sbxExt = jiti("../extensions/sandbox/index.ts");
+	const pi = makePi();
+	sbxExt.default(pi);
+
+	const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+	const { execFileSync, execFile } = await import("node:child_process");
+
+	// Фикстура-проект (НЕ в /tmp: bwrap маскирует /tmp свежим tmpfs)
+	const fixture = "/home/arkalaust/pi-sbx-fixture";
+	if (!existsSync(fixture + "/.git")) {
+		mkdirSync(fixture, { recursive: true });
+		execFileSync("git", ["init", "-q"], { cwd: fixture });
+	}
+	writeFileSync(fixture + "/.sandbox", "dev\n");
+	const ctxSbx = { ...noUiCtx, cwd: fixture };
+
+	await check("sandbox: .sandbox=dev оборачивает bash-команду в bwrap", async () => {
+		const ev = { toolName: "bash", input: { command: "echo hello-sbx" } };
+		await pi.handlers.tool_call(ev, ctxSbx);
+		if (!String(ev.input.command).includes("bwrap")) throw new Error("не обёрнуто: " + String(ev.input.command).slice(0, 120));
+		if (!ev.__sandboxWrapped) throw new Error("нет маркера __sandboxWrapped");
+	});
+
+	async function runWrapped(command, cwd) {
+		const ev = { toolName: "bash", input: { command } };
+		await pi.handlers.tool_call(ev, { ...noUiCtx, cwd });
+		return await new Promise((res) =>
+			execFile("bash", ["-c", ev.input.command], { timeout: 60000, maxBuffer: 1024 * 1024 }, (e, so, se) =>
+				res(((so || "") + (se ? "\n" + se : "")).trim()),
+			),
+		);
+	}
+
+	await check("sandbox: home/секреты скрыты, workspace rw (e2e)", async () => {
+		const out = await runWrapped(
+			'ls -A /home/arkalaust 2>/dev/null | tr "\n" " " | grep -qE "\.(ssh|gnupg)" && echo SECRETS-VISIBLE || echo SECRETS-HIDDEN; ls /home/arkalaust/.ssh >/dev/null 2>&1 && echo SSH-VISIBLE || echo SSH-HIDDEN; ls /home/arkalaust/Code >/dev/null 2>&1 && echo CODE-VISIBLE || echo CODE-HIDDEN; touch "' + fixture + '/.wtest" && echo WS-RW || echo WS-FAIL; rm -f "' + fixture + '/.wtest"',
+			fixture,
+		);
+		if (!out.includes("SECRETS-HIDDEN")) throw new Error("секретные home-каталоги видны: " + out);
+		if (!out.includes("SSH-HIDDEN")) throw new Error("ssh виден: " + out);
+		if (!out.includes("CODE-HIDDEN")) throw new Error("другие проекты видны: " + out);
+		if (!out.includes("WS-RW")) throw new Error("workspace не rw: " + out);
+	});
+
+	await check("sandbox: секреты env не попадают в песочницу", async () => {
+		process.env.FAKE_API_KEY_SANDBOX_TEST = "secret123";
+		const out = await runWrapped("env | grep -c FAKE_API_KEY_SANDBOX_TEST || true", fixture);
+		if (!out.trim().startsWith("0")) throw new Error("секрет виден: " + out);
+		delete process.env.FAKE_API_KEY_SANDBOX_TEST;
+	});
+
+	await check("sandbox: untrusted блокирует сеть (e2e)", async () => {
+		writeFileSync(fixture + "/.sandbox", "untrusted\n");
+		const out = await runWrapped("timeout 6 curl -sI https://1.1.1.1 >/dev/null 2>&1 && echo NET-OK || echo NET-BLOCKED", fixture);
+		if (!out.includes("NET-BLOCKED")) throw new Error("сеть жива: " + out);
+		writeFileSync(fixture + "/.sandbox", "dev\n");
+	});
+
+	await check("sandbox: vm-уровень блокирует bash с инструкцией", async () => {
+		const piVm = makePi();
+		piVm.getFlag = (name) => (name === "--sandbox-level" ? "vm" : false);
+		sbxExt.default(piVm);
+		const res = await piVm.handlers.tool_call({ toolName: "bash", input: { command: "echo x" } }, ctxSbx);
+		if (!res?.block || !res.reason.includes("vm")) throw new Error("нет блока: " + JSON.stringify(res));
+	});
+
+	await check("sandbox: без маркера — passthrough", async () => {
+		const plain = "/home/arkalaust/pi-sbx-fixture-plain";
+		if (!existsSync(plain + "/.git")) {
+			mkdirSync(plain, { recursive: true });
+			execFileSync("git", ["init", "-q"], { cwd: plain });
+		}
+		const ev = { toolName: "bash", input: { command: "echo plain" } };
+		await pi.handlers.tool_call(ev, { ...noUiCtx, cwd: plain });
+		if (ev.input.command !== "echo plain") throw new Error("команду тронули: " + ev.input.command);
+	});
+}
+
 console.log(results.join("\n"));
 const failed = results.filter((r) => r.startsWith("FAIL"));
 process.exit(failed.length ? 1 : 0);
