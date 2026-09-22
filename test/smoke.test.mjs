@@ -147,6 +147,86 @@ const noUiCtx = {
 	});
 }
 
+
+// === 4. graft ===
+{
+	// makePi.getFlag по умолчанию возвращает false — для graft нужны дефолты из registerFlag
+	function makePi2() {
+		const base = makePi();
+		base.getFlag = (name) => {
+			const f = base.flags.find((x) => x.name === name.replace(/^--/, ""));
+			return f ? f.default : false;
+		};
+		return base;
+	}
+	const graftExt = jiti("../extensions/graft/index.ts");
+	const pi = makePi2();
+	graftExt.default(pi);
+
+	const ctxNoGraph = { ...noUiCtx, cwd: process.cwd() }; // в корне проекта графа нет
+
+	await check("graft: 7 инструментов зарегистрированы", () => {
+		for (const name of ["graft_ask", "graft_grep", "graft_callers", "graft_skeleton", "graft_map", "graft_check", "graft_blast"]) {
+			if (!pi.tools.find((t) => t.name === name)) throw new Error("нет " + name);
+		}
+	});
+	await check("graft: /graft-команда и флаги", () => {
+		if (!pi.commands.some((c) => c.name === "graft")) throw new Error("нет /graft");
+		if (!pi.flags.some((f) => f.name === "graft-push")) throw new Error("нет --graft-push");
+	});
+	await check("graft: без графа — подсказка о graft build", async () => {
+		const tool = pi.tools.find((t) => t.name === "graft_map");
+		const res = await tool.execute("id", {}, new AbortController().signal, () => {}, ctxNoGraph);
+		const text = res.content[0].text;
+		if (!text.includes("graft build")) throw new Error("нет подсказки: " + text.slice(0, 120));
+	});
+
+	// Фикстура с графом
+	const { existsSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+	const { spawnSync } = await import("node:child_process");
+	const fixture = "/tmp/pi-ext-graft-fixture";
+	if (!existsSync(fixture + "/graft")) {
+		rmSync(fixture, { recursive: true, force: true });
+		mkdirSync(fixture, { recursive: true });
+		writeFileSync(fixture + "/a.ts", "export function auth(req: string): string { return \"ok-\" + req; }\nexport function handler(req: string) { return auth(req).toUpperCase(); }\n");
+		const b = spawnSync("git", ["init", "-q"], { cwd: fixture });
+		if (b.status !== 0) throw new Error("git init failed");
+		const build = spawnSync("npx", ["-y", "@nanonets/graft", "build"], { cwd: fixture, timeout: 180000, encoding: "utf8" });
+		if (build.status !== 0) throw new Error("graft build failed: " + (build.stdout || "").slice(-300));
+	}
+	const ctxGraph = { ...noUiCtx, cwd: fixture };
+
+	await check("graft: graft_map возвращает карту репо", async () => {
+		const tool = pi.tools.find((t) => t.name === "graft_map");
+		const res = await tool.execute("id", {}, new AbortController().signal, () => {}, ctxGraph);
+		const text = res.content[0].text;
+		if (!text.includes("repo map")) throw new Error("нет 'repo map': " + text.slice(0, 200));
+	});
+	await check("graft: graft_ask находит символы", async () => {
+		const tool = pi.tools.find((t) => t.name === "graft_ask");
+		const res = await tool.execute("id", { query: "where is auth" }, new AbortController().signal, () => {}, ctxGraph);
+		const text = res.content[0].text;
+		if (!text.includes("auth")) throw new Error("нет 'auth': " + text.slice(0, 200));
+	});
+	await check("graft: graft_callers находит зависимых", async () => {
+		const tool = pi.tools.find((t) => t.name === "graft_callers");
+		const res = await tool.execute("id", { symbol: "auth" }, new AbortController().signal, () => {}, ctxGraph);
+		const text = res.content[0].text;
+		if (!text.includes("handler")) throw new Error("нет 'handler': " + text.slice(0, 200));
+	});
+	await check("graft: before_agent_start ставит секцию <graft> с картой", async () => {
+		const sections = {};
+		await pi.handlers.before_agent_start({ prompt: "fix auth bug", systemPromptOptions: { sections } }, ctxGraph);
+		if (!sections.graft || !sections.graft.includes("repo map")) throw new Error("секция не установлена: " + JSON.stringify(Object.keys(sections)));
+	});
+	await check("graft: tool_result (write) дописывает blast radius", async () => {
+		const res = await pi.handlers.tool_result({ isError: false, toolName: "write", input: { path: "a.ts" }, content: [{ type: "text", text: "written" }] }, ctxGraph);
+		if (!res) throw new Error("ожидался результат с blast radius");
+		const texts = res.content.map((c) => c.text).join("\n");
+		if (!texts.includes("blast radius") || !texts.includes("auth")) throw new Error("нет blast: " + texts.slice(0, 300));
+	});
+}
+
 console.log(results.join("\n"));
 const failed = results.filter((r) => r.startsWith("FAIL"));
 process.exit(failed.length ? 1 : 0);
