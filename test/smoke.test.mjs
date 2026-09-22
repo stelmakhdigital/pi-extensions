@@ -461,6 +461,56 @@ print(found)`,
 	});
 }
 
+// === 8. gen-speed ===
+{
+	const genSpeed = jiti("../extensions/gen-speed/index.ts");
+	const piG = makePi();
+	genSpeed.default(piG);
+
+	const status = {};
+	const ctxG = {
+		hasUI: true,
+		mode: "tui",
+		ui: { setStatus: (k, v) => { status[k] = v; } },
+	};
+
+	await check("gen-speed: скорость и TTFT считаются из message_start/update/end", async () => {
+		const realNow = Date.now.bind(Date);
+		let fake = 1_000_000;
+		Date.now = () => fake;
+		try {
+			await piG.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxG);
+			fake += 300; // TTFT = 300ms
+			await piG.handlers.message_update({ message: { role: "assistant", usage: { output: 100 } } }, ctxG);
+			fake += 2700; // 3.0s суммарно
+			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 100 }, stopReason: "stop" } }, ctxG);
+		}
+		finally { Date.now = realNow; }
+		const badge = status["gen-speed"] ?? "";
+		if (!badge.includes("33 t/s")) throw new Error("нет 33 t/s: " + badge);
+		if (!badge.includes("300ms")) throw new Error("нет TTFT: " + badge);
+	});
+
+	await check("gen-speed: короткий ответ (<800ms) не двигает статистику", async () => {
+		const realNow = Date.now.bind(Date);
+		let fake = 2_000_000;
+		Date.now = () => fake;
+		try {
+			await piG.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxG);
+			fake += 200;
+			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 5 }, stopReason: "stop" } }, ctxG);
+		}
+		finally { Date.now = realNow; }
+		const badge = status["gen-speed"] ?? "";
+		if (badge !== "33 t/s · ⌀ 300ms") throw new Error("бейдж изменился: " + badge);
+	});
+
+	await check("gen-speed: session_start очищает бейдж", async () => {
+		await piG.handlers.session_start({ reason: "startup" }, ctxG);
+		if (status["gen-speed"] !== undefined) throw new Error("не очищено: " + status["gen-speed"]);
+	});
+}
+
 console.log(results.join("\n"));
 const failed = results.filter((r) => r.startsWith("FAIL"));
 process.exit(failed.length ? 1 : 0);

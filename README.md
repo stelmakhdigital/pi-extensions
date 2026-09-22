@@ -12,6 +12,7 @@
 | [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: задаёт пользователю один вопрос (текст, выбор одного, мультивыбор) и ждёт ответа |
 | [graft](extensions/graft/) | Интеграция [Graft](https://github.com/trailhq/Graft): нативные инструменты `graft_ask/grep/callers/skeleton/map/check/blast`, карта репо в системном промпте, blast radius после write/edit, бейдж свежести |
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
+| [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41 t/s · ⌀ 0.8s` (EMA по ответам, на лету при стриминге; TTFT — время до первого токена; aborted/короткие ответы не считаются) |
 
 ## Скиллы
 
@@ -52,6 +53,7 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 | ask-user-question | `extensions/ask-user-question/*` |
 | graft | `extensions/graft/*` |
 | sandbox | `extensions/sandbox/*` |
+| gen-speed | `extensions/gen-speed/*` |
 
 Далее — пример для каждого (глобальные настройки `~/.pi/agent/settings.json`).
 
@@ -226,6 +228,8 @@ extensions/
     index.ts                  # интеграция @nanonets/graft (CLI) в pi
   sandbox/
     index.ts                  # per-command sandbox (bwrap / sandbox-exec)
+  gen-speed/
+    index.ts                  # бейдж скорости генерации токенов + TTFT в футере
 sandbox/
   Dockerfile                  # pi-контур для недоверенного кода (см. sandbox/README.md)
   README.md
