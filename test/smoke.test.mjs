@@ -424,6 +424,43 @@ const noUiCtx = {
 	delete process.env.PI_SANDBOX_TRUST_FILE;
 }
 
+
+// === 7. session-insights (skills) ===
+{
+	const { spawnSync } = await import("node:child_process");
+	const script = fileURLToPath(new URL("../skills/session-insights/scripts/insights.py", import.meta.url));
+
+	await check("session-insights: insights.py --json валиден", async () => {
+		const r = spawnSync("python3", [script, "--since", "90d", "--json"], { encoding: "utf8", timeout: 120000 });
+		if (r.status !== 0) throw new Error("exit " + r.status + ": " + (r.stderr || "").slice(0, 200));
+		const d = JSON.parse(r.stdout);
+		for (const k of ["totals", "sessions_top", "tool_errors", "max_tool_output_chars", "repeated_prompt_lines", "prompt_keywords"]) {
+			if (!(k in d)) throw new Error("нет ключа " + k);
+		}
+		if (!Number.isInteger(d.totals.sessions) || d.totals.sessions <= 0) throw new Error("sessions = " + d.totals.sessions);
+	});
+
+	await check("session-insights: sessions.summarize_session парсит реальную сессию", async () => {
+		const lib = fileURLToPath(new URL("../skills/session-insights/scripts/sessions.py", import.meta.url));
+		const r = spawnSync("python3", [
+			"-c",
+			`import sys, os; sys.path.insert(0, os.path.dirname(sys.argv[1])); import sessions as S
+from pathlib import Path
+found = 0
+for p in S.iter_session_files(include_subagents=False):
+    s = S.summarize_session(p)
+    if s and s.message_count >= 10:
+        assert s.id and s.cwd, p
+        assert s.tool_result_count >= 0 and s.error_count >= 0
+        found += 1
+assert found > 0, "нет сессий с сообщениями"
+print(found)`,
+			lib,
+		], { encoding: "utf8", timeout: 120000 });
+		if (r.status !== 0) throw new Error((r.stderr || "").slice(0, 300));
+	});
+}
+
 console.log(results.join("\n"));
 const failed = results.filter((r) => r.startsWith("FAIL"));
 process.exit(failed.length ? 1 : 0);
