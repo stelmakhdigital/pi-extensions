@@ -28,6 +28,9 @@
 			"extensions/ask-user-question/index.ts",
 			"extensions/graft/index.ts",
 			"extensions/sandbox/index.ts"
+		],
+		"skills": [
+			"skills/session-insights"
 		]
 	}
 }
