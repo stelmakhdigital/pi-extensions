@@ -529,6 +529,7 @@ print(found)`,
 		const stats = lines[1];
 		if (!stats.includes("33t/s")) throw new Error("нет 33t/s: " + stats);
 		if (!stats.includes("300ms")) throw new Error("нет TTFT: " + stats);
+		if (stats.includes("⌀") || stats.includes(" · ")) throw new Error("лишние символы в бейдже: " + stats);
 		if (!stats.includes("↑")) throw new Error("нет токенов ↑: " + stats);
 		if (!stats.includes("24.0%/200k (auto)")) throw new Error("нет context%: " + stats);
 		if (!stats.includes("test-model • medium")) throw new Error("нет модели справа: " + stats);

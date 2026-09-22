@@ -70,9 +70,7 @@ export default function (pi: ExtensionAPI) {
 	const badge = (): string => {
 		if (emaSpeed == null) return "";
 		const ttft =
-			emaTtft == null
-				? ""
-				: ` · ⌀ ${emaTtft < 1 ? (emaTtft * 1000).toFixed(0) + "ms" : emaTtft.toFixed(1) + "s"}`;
+			emaTtft == null ? "" : emaTtft < 1 ? (emaTtft * 1000).toFixed(0) + "ms" : emaTtft.toFixed(1) + "s";
 		return `${Math.round(emaSpeed)}t/s${ttft ? ` (${ttft})` : ""}`;
 	};
 
