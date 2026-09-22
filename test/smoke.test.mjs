@@ -193,7 +193,11 @@ const noUiCtx = {
 	const pi = makePi2();
 	graftExt.default(pi);
 
-	const ctxNoGraph = { ...noUiCtx, cwd: process.cwd() }; // в корне проекта графа нет
+	// в корне проекта сейчас есть граф — берём пустой каталож
+	const { mkdirSync: mkdirG, existsSync: existsG } = await import("node:fs");
+	const noGraphDir = "/tmp/pi-ext-no-graft";
+	mkdirG(noGraphDir, { recursive: true });
+	const ctxNoGraph = { ...noUiCtx, cwd: noGraphDir }; // в нём графа нет
 
 	await check("graft: 7 инструментов зарегистрированы", () => {
 		for (const name of ["graft_ask", "graft_grep", "graft_callers", "graft_skeleton", "graft_map", "graft_check", "graft_blast"]) {
@@ -467,14 +471,47 @@ print(found)`,
 	const piG = makePi();
 	genSpeed.default(piG);
 
-	const status = {};
+	// ctx в стиле TUI: футер устанавливается через setFooter
+	let footerFactory = null;
+	let lastTheme = null;
+	const themeStub = { fg: (c, s) => `[${c}]${s}`, bold: (s) => `*${s}*` };
 	const ctxG = {
 		hasUI: true,
 		mode: "tui",
-		ui: { setStatus: (k, v) => { status[k] = v; } },
+		cwd: "/home/arkalaust/Code/AGENTS/pi-extensions",
+		model: { id: "test-model", contextWindow: 200000, reasoning: true },
+		thinkingLevel: "medium",
+		getContextUsage: () => ({ tokens: 48000, contextWindow: 200000, percent: 24 }),
+		sessionManager: {
+			getEntries: () => [
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						usage: { input: 30000, output: 18000, cacheRead: 0, cacheWrite: 0, totalTokens: 48000, cost: { total: 0.5 } },
+						stopReason: "stop",
+					},
+				},
+			],
+			getSessionName: () => "test-session",
+			getCwd: () => "/home/arkalaust/Code/AGENTS/pi-extensions",
+		},
+		ui: { setFooter: (f) => { footerFactory = f; } },
+	};
+	const tuiStub = { requestRender: () => {} };
+	const footerDataStub = {
+		getGitBranch: () => "master",
+		getExtensionStatuses: () => new Map([["graft", "graft: ok"]]),
+		getAvailableProviderCount: () => 1,
+		onBranchChange: () => () => {},
+	};
+	const renderFooter = () => {
+		if (!footerFactory) throw new Error("setFooter не вызван");
+		lastTheme = themeStub;
+		return footerFactory(tuiStub, themeStub, footerDataStub).render(200);
 	};
 
-	await check("gen-speed: скорость и TTFT считаются из message_start/update/end", async () => {
+	await check("gen-speed: футер устанавливается и бейдж в строке токенов", async () => {
 		const realNow = Date.now.bind(Date);
 		let fake = 1_000_000;
 		Date.now = () => fake;
@@ -484,14 +521,24 @@ print(found)`,
 			await piG.handlers.message_update({ message: { role: "assistant", usage: { output: 100 } } }, ctxG);
 			fake += 2700; // 3.0s суммарно
 			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 100 }, stopReason: "stop" } }, ctxG);
+		} finally {
+			Date.now = realNow;
 		}
-		finally { Date.now = realNow; }
-		const badge = status["gen-speed"] ?? "";
-		if (!badge.includes("33 t/s")) throw new Error("нет 33 t/s: " + badge);
-		if (!badge.includes("300ms")) throw new Error("нет TTFT: " + badge);
+		const lines = renderFooter();
+		if (lines.length < 2) throw new Error("мало строк: " + JSON.stringify(lines));
+		const stats = lines[1];
+		if (!stats.includes("33 t/s")) throw new Error("нет 33 t/s: " + stats);
+		if (!stats.includes("300ms")) throw new Error("нет TTFT: " + stats);
+		if (!stats.includes("↑")) throw new Error("нет токенов ↑: " + stats);
+		if (!stats.includes("24.0%/200k (auto)")) throw new Error("нет context%: " + stats);
+		if (!stats.includes("test-model • medium")) throw new Error("нет модели справа: " + stats);
+		if (lines[0] !== "[dim]~/Code/AGENTS/pi-extensions (master) • test-session") throw new Error("pwd-строка: " + lines[0]);
+		// бейдж в строке токенов, а НЕ в строке статусов
+		if (lines[2] && lines[2].includes("t/s")) throw new Error("бейдж дублируется в статус-строке: " + lines[2]);
+		if (!lines[2] || !lines[2].includes("graft: ok")) throw new Error("статусы других расширений потеряны: " + JSON.stringify(lines));
 	});
 
-	await check("gen-speed: короткий ответ (<800ms) не двигает статистику", async () => {
+	await check("gen-speed: короткий ответ (<800ms) не двигает бейдж", async () => {
 		const realNow = Date.now.bind(Date);
 		let fake = 2_000_000;
 		Date.now = () => fake;
@@ -499,15 +546,43 @@ print(found)`,
 			await piG.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxG);
 			fake += 200;
 			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 5 }, stopReason: "stop" } }, ctxG);
+		} finally {
+			Date.now = realNow;
 		}
-		finally { Date.now = realNow; }
-		const badge = status["gen-speed"] ?? "";
-		if (badge !== "33 t/s · ⌀ 300ms") throw new Error("бейдж изменился: " + badge);
+		const stats = renderFooter()[1];
+		if (!stats.includes("33 t/s")) throw new Error("бейдж изменился: " + stats);
 	});
 
-	await check("gen-speed: session_start очищает бейдж", async () => {
+	await check("gen-speed: aborted-ответ не двигает бейдж", async () => {
+		const realNow = Date.now.bind(Date);
+		let fake = 3_000_000;
+		Date.now = () => fake;
+		try {
+			await piG.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxG);
+			fake += 3000;
+			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 500 }, stopReason: "aborted" } }, ctxG);
+		} finally {
+			Date.now = realNow;
+		}
+		const stats = renderFooter()[1];
+		if (!stats.includes("33 t/s")) throw new Error("бейдж изменился: " + stats);
+	});
+
+	await check("gen-speed: session_start сбрасывает статистику и переустанавливает футер", async () => {
+		footerFactory = null;
 		await piG.handlers.session_start({ reason: "startup" }, ctxG);
-		if (status["gen-speed"] !== undefined) throw new Error("не очищено: " + status["gen-speed"]);
+		if (!footerFactory) throw new Error("футер не переустановлен");
+		const lines = renderFooter();
+		if (lines[1].includes("t/s")) throw new Error("бейдж не сброшен: " + lines[1]);
+	});
+
+	await check("gen-speed: в режиме print футер не устанавливается", async () => {
+		const piP = makePi();
+		genSpeed.default(piP);
+		let called = false;
+		const ctxP = { ...ctxG, mode: "print", hasUI: false, ui: { setFooter: () => { called = true; } } };
+		await piP.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxP);
+		if (called) throw new Error("setFooter вызван в print-режиме");
 	});
 }
 
