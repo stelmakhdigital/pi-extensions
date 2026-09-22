@@ -100,8 +100,38 @@ const noUiCtx = {
 		const res = await toolHandler({ toolName: "bash", input: { command: "ls -la" } }, noUiCtx);
 		if (res !== undefined) throw new Error("ожидалось undefined, получили: " + JSON.stringify(res));
 	});
-	await check("bash-guard: git status блокируется (спрашивает на любой git)", async () => {
+	await check("bash-guard: git status не блокируется (read-only allowlist)", async () => {
 		const res = await toolHandler({ toolName: "bash", input: { command: "git status" } }, noUiCtx);
+		if (res !== undefined) throw new Error("ожидалось undefined, получили: " + JSON.stringify(res));
+	});
+	await check("bash-guard: git commit блокируется", async () => {
+		const res = await toolHandler({ toolName: "bash", input: { command: "git commit -m x" } }, noUiCtx);
+		if (!res?.block) throw new Error("ожидалось block, получили: " + JSON.stringify(res));
+	});
+	await check("bash-guard: git push --force блокируется (read-only не снимает high)", async () => {
+		const res = await toolHandler({ toolName: "bash", input: { command: "git push --force origin main" } }, noUiCtx);
+		if (!res?.block) throw new Error("ожидалось block, получили: " + JSON.stringify(res));
+	});
+	await check("bash-guard: многострочный обход (echo 1\\nrm -rf) блокируется", async () => {
+		const res = await toolHandler({ toolName: "bash", input: { command: "echo ok\nrm -rf /tmp/xyz" } }, noUiCtx);
+		if (!res?.block) throw new Error("ожидалось block, получили: " + JSON.stringify(res));
+	});
+	await check("bash-guard: вложенный bash -c блокируется", async () => {
+		// без рекурсии в -c команда `bash -c "rm -rf …"` была бы безобидной и прошла
+		const res = await toolHandler({ toolName: "bash", input: { command: 'bash -c "rm -rf /tmp/xyz"' } }, noUiCtx);
+		if (!res?.block) throw new Error("ожидалось block, получили: " + JSON.stringify(res));
+	});
+	await check("bash-guard: rm по пути с «-r» внутри не помечается рекурсивным", async () => {
+		const res = await toolHandler({ toolName: "bash", input: { command: "rm /tmp/my-report-r.txt" } }, noUiCtx);
+		if (!res?.block) throw new Error("rm всё равно блокируется: " + JSON.stringify(res));
+		if (res.reason.includes("рекурсивное")) throw new Error("ложный «рекурсивное»: " + res.reason);
+	});
+	await check("bash-guard: strict-режим (--bash-guard-git-strict) спрашивает и на git status", async () => {
+		const bashGuardStrict = jiti("../extensions/bash-guard/index.ts");
+		const piStrict = makePi();
+		piStrict.getFlag = (name) => (name === "--bash-guard-git-strict" ? true : false);
+		bashGuardStrict.default(piStrict);
+		const res = await piStrict.handlers.tool_call({ toolName: "bash", input: { command: "git status" } }, noUiCtx);
 		if (!res?.block) throw new Error("ожидалось block, получили: " + JSON.stringify(res));
 	});
 	await check("bash-guard: curl|sh блокируется", async () => {

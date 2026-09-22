@@ -4,6 +4,16 @@ import type { SelectItem } from "@earendil-works/pi-tui";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 import { parse as shellParse } from "shell-quote";
 
+/**
+ * Перехватывает вызовы инструмента `bash` и применяет разную защиту в зависимости
+ * от того, интерактивная ли сессия (главная) или нет (субагент).
+ *
+ * Анализ: shell-quote построчно (перенос строки — не обход), рекурсия во вложенные
+ * `sh -c`/`bash -c` (глубина ≤ 2), строгая проверка флагов (не substring по путям).
+ * Read-only git (status/log/diff/…) не спрашивается по умолчанию;
+ * --bash-guard-git-strict возвращает режим «спрашивать на любой git».
+ */
+
 type Severity = "high" | "medium";
 
 type Risk = {
@@ -46,7 +56,39 @@ function anyArgStartsWith(args: string[], prefix: string): boolean {
 	return args.some((a) => a.startsWith(prefix));
 }
 
-function analyzeSegment(seg: Token[]): Risk | null {
+/** Кластерный флажок с буквой (-r, -rf, -Rf), а не путь/строка, содержащая «-r». */
+function hasShortFlagWith(args: string[], letters: string): boolean {
+	const re = new RegExp(`^-[a-zA-Z]*[${letters}]$`);
+	return args.some((a) => re.test(a));
+}
+
+/** Read-only git-подкоманды: не мутируют репозиторий и конфиг. Консервативный список: в сомнении — не read-only. */
+function isGitReadonly(sub: string | undefined, subArgs: string[]): boolean {
+	if (!sub) return false;
+	switch (sub) {
+		case "status": case "log": case "diff": case "show": case "describe":
+		case "shortlog": case "whatchanged": case "ls-files": case "ls-tree":
+		case "rev-parse": case "var": case "help": case "count-objects":
+			return true;
+		case "reflog":
+			return !subArgs.includes("expire");
+		case "branch":
+			// Только список: нет аргументов или флажки без d/D/m/M/r/R (delete/merge/rename…)
+			return subArgs.length === 0 || (subArgs.length > 0 && subArgs.every((a) => a.startsWith("-") && !/[dDmMrR]/.test(a.replace(/^-{1,2}/, ""))));
+		case "tag":
+			return subArgs.length === 0 || subArgs.includes("-l") || subArgs.includes("--list");
+		case "remote":
+			return subArgs[0] === "-v" || subArgs[0] === "-V" || subArgs[0] === "show";
+		case "stash":
+			return subArgs[0] === "list" || subArgs[0] === "show" || subArgs[0] === "status";
+		case "config":
+			return subArgs.length <= 1 || ["--get", "--list", "--get-regexp", "--get-regexp-all", "get", "list"].includes(subArgs[0]);
+		default:
+			return false;
+	}
+}
+
+function analyzeSegment(seg: Token[], depth = 0, strictGit = false): Risk | null {
 	const reasons: string[] = [];
 	let severity: Severity = "medium";
 
@@ -69,13 +111,26 @@ function analyzeSegment(seg: Token[]): Risk | null {
 		severity = "high";
 	}
 
+	// Вложенная команда внутри sh -c / bash -c / zsh -c / …: разбираем её тоже (глубина ≤ 2).
+	// Без этого `bash -c "rm -rf x"` проходила бы неразобранной строкой-аргументом.
+	if ((cmd === "sh" || cmd === "bash" || cmd === "zsh" || cmd === "dash" || cmd === "fish") && rest.includes("-c") && depth < 2) {
+		const ci = rest.indexOf("-c");
+		const inner = rest[ci + 1];
+		if (typeof inner === "string" && inner.trim()) {
+			const innerRisk = analyzeBashCommand(inner, depth + 1, strictGit);
+			if (innerRisk) {
+				if (innerRisk.severity === "high") severity = "high";
+				for (const r of innerRisk.reasons) reasons.push(`${cmd} -c: ${r}`);
+			}
+		}
+	}
+
 	// rm/rmdir/unlink
 	if (cmd === "rm" || cmd === "rmdir" || cmd === "unlink") {
 		severity = "high";
 		reasons.push(`${cmd} (удаление файлов)`);
-		if (rest.some((a) => a.includes("-r") || a.includes("-R"))) reasons.push("рекурсивное удаление (-r/-R)");
-		if (rest.some((a) => a.includes("-f"))) reasons.push("принудительное удаление (-f)");
-		if (ops.includes("glob")) reasons.push("расширение glob-шаблона (можно удалить много файлов)");
+		if (hasShortFlagWith(rest, "rR") || rest.includes("--recursive")) reasons.push("рекурсивное удаление (-r/-R)");
+		if (hasShortFlagWith(rest, "f") || rest.includes("--force")) reasons.push("принудительное удаление (-f)");
 	}
 
 	// find -delete
@@ -84,41 +139,48 @@ function analyzeSegment(seg: Token[]): Risk | null {
 		reasons.push("find -delete (массовое удаление)");
 	}
 
-	// git-операции (спрашивать при ЛЮБОЙ git-команде)
+		// git-операции: спрашиваем на мутирующие команды; read-only (status/log/diff/…)
+	// — без запроса, если не задан --bash-guard-git-strict
 	if (cmd === "git") {
 		const sub = rest[0];
 		const subArgs = rest.slice(1);
-
-		// Всегда спрашивать на git-команды (по требованию пользователя). Тяжесть — medium, если не выявлен явно рискованный паттерн.
-		reasons.push(sub ? `git ${sub} (git-команда)` : "git (git-команда)");
+		let gitHigh = false;
+		const gitReasons: string[] = [];
 
 		if (sub === "rm") {
-			severity = "high";
-			reasons.push("git rm (удаляет файлы из дерева и добавляет удаления в индекс)");
+			gitHigh = true;
+			gitReasons.push("git rm (удаляет файлы из дерева и добавляет удаления в индекс)");
 		}
-		if (sub === "clean" && (subArgs.some((a) => a.includes("-f")) || subArgs.includes("-d") || subArgs.includes("-x"))) {
-			severity = "high";
-			reasons.push("git clean (может удалить неотслеживаемые файлы)");
+		if (sub === "clean" && (hasShortFlagWith(subArgs, "f") || subArgs.includes("--force") || hasShortFlagWith(subArgs, "dx"))) {
+			gitHigh = true;
+			gitReasons.push("git clean (может удалить неотслеживаемые файлы)");
 		}
 		if (sub === "reset" && subArgs.includes("--hard")) {
-			severity = "high";
-			reasons.push("git reset --hard (сбрасывает изменения)");
+			gitHigh = true;
+			gitReasons.push("git reset --hard (сбрасывает изменения)");
 		}
 		if ((sub === "checkout" || sub === "restore") && (subArgs.includes(".") || subArgs.includes("--") || subArgs.includes("--source"))) {
-			severity = severity === "high" ? "high" : "medium";
-			reasons.push("git checkout/restore (может перезаписать рабочее дерево)");
+			gitReasons.push("git checkout/restore (может перезаписать рабочее дерево)");
 		}
-		if (sub === "push" && (subArgs.includes("--force") || subArgs.includes("--force-with-lease") || subArgs.includes("-f"))) {
-			severity = "high";
-			reasons.push("git push --force (переписывает историю на удалённом)");
+		if (sub === "push" && (subArgs.includes("--force") || subArgs.includes("--force-with-lease") || hasShortFlagWith(subArgs, "f"))) {
+			gitHigh = true;
+			gitReasons.push("git push --force (переписывает историю на удалённом)");
 		}
 		if (sub === "reflog" && subArgs.includes("expire")) {
-			severity = "high";
-			reasons.push("git reflog expire (может удалить историю восстановления)");
+			gitHigh = true;
+			gitReasons.push("git reflog expire (может удалить историю восстановления)");
 		}
 		if (sub === "gc" && subArgs.some((a) => a.startsWith("--prune"))) {
-			severity = "high";
-			reasons.push("git gc --prune (может безвозвратно удалить объекты)");
+			gitHigh = true;
+			gitReasons.push("git gc --prune (может безвозвратно удалить объекты)");
+		}
+
+		if (!gitHigh && !strictGit && isGitReadonly(sub, subArgs)) {
+			// чистый read-only git — без запроса
+		} else {
+			if (gitReasons.length === 0) gitReasons.push(sub ? `git ${sub} (git-команда)` : "git (git-команда)");
+			reasons.push(...gitReasons);
+			if (gitHigh) severity = "high";
 		}
 	}
 
@@ -266,10 +328,28 @@ function analyzeSegment(seg: Token[]): Risk | null {
 	return { severity, reasons };
 }
 
-function analyzeBashCommand(command: string): Risk | null {
+function analyzeBashCommand(command: string, depth = 0, strictGit = false): Risk | null {
+	// Каждую строку разбираем отдельно: shell-quote теряет переносы строк, и без этого
+	// опасная команда, «спрятанная» за безобидной первой строкой (echo 1\nrm -rf /),
+	// ушла бы незамеченной.
+	const lines = command.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+	const reasons: string[] = [];
+	let severity: Severity = "medium";
+	for (const line of lines) {
+		const lineRisk = analyzeLine(line, depth, strictGit);
+		if (!lineRisk) continue;
+		if (lineRisk.severity === "high") severity = "high";
+		for (const r of lineRisk.reasons) reasons.push(r);
+	}
+	const uniq = [...new Set(reasons)];
+	if (uniq.length === 0) return null;
+	return { severity, reasons: uniq };
+}
+
+function analyzeLine(line: string, depth: number, strictGit: boolean): Risk | null {
 	let tokens: Token[];
 	try {
-		tokens = shellParse(command) as Token[];
+		tokens = shellParse(line) as Token[];
 	} catch {
 		// Запасной вариант: если разобрать не удалось, считаем команду подозрительной
 		return { severity: "medium", reasons: ["разобрать shell-команду не удалось (безопасный анализ невозможен)"] };
@@ -291,10 +371,10 @@ function analyzeBashCommand(command: string): Risk | null {
 		reasons.push("оператор конвейера (составная команда)");
 	}
 
-	// Анализ сегментов (разбивка по &&, ||, ;)
+	// Сегменты (разбивка по &&, ||, ;)
 	const segments = splitOnOps(tokens, ["&&", "||", ";"]);
 	for (const seg of segments) {
-		const segRisk = analyzeSegment(seg);
+		const segRisk = analyzeSegment(seg, depth, strictGit);
 		if (!segRisk) continue;
 		if (segRisk.severity === "high") severity = "high";
 		for (const r of segRisk.reasons) reasons.push(r);
@@ -360,8 +440,9 @@ const _isSubagent = Number.isFinite(_subagentDepth) && _subagentDepth >= 1;
 // Паттерны жёсткого блока для режима субагента (без UI). Критерий: по умолчанию
 // необратимо И маловероятно, что это осознанный шаг в автоматическом контексте.
 // Меньше ложных срабатываний важнее широкого покрытия — остальное в главной
-// сессии закрывает интерактивный запрос.
-const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string }> = [
+// сессии закрывает интерактивный запрос. `sessionOnly: true` — действует только
+// в сессиях, а не в «поле» автономного режима главной сессии.
+const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean }> = [
 	// Рекурсивное удаление
 	{ pattern: /(?<!\bgit\s+)\brm\b[^#\n]*\s-(?:[a-zA-Z]*[rR]|-\brecursive\b)/, reason: "рекурсивное удаление (rm -r / -rf / -Rf)" },
 	// Повышение привилегий
@@ -384,9 +465,9 @@ const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string }> = [
 	{ pattern: /\bkubectl\s+delete\b/, reason: "удаление ресурсов Kubernetes" },
 	{ pattern: /\baws\s+s3\s+rm\b[^#\n]*--recursive/, reason: "массовое удаление в S3 (aws s3 rm --recursive)" },
 	// Разрушительные git-операции
-	{ pattern: /\bgit\s+commit\b/, reason: "git commit (коммиты — операция главной сессии)" },
-	{ pattern: /\bgit\s+pull\b/, reason: "git pull (pull — операция главной сессии)" },
-	{ pattern: /\bgit\s+push\b/, reason: "git push (push — операция главной сессии)" },
+	{ pattern: /\bgit\s+commit\b/, reason: "git commit (коммиты — операция главной сессии)", sessionOnly: true },
+	{ pattern: /\bgit\s+pull\b/, reason: "git pull (pull — операция главной сессии)", sessionOnly: true },
+	{ pattern: /\bgit\s+push\b/, reason: "git push (push — операция главной сессии)", sessionOnly: true },
 	{ pattern: /\bgit\s+reset\b[^#\n]*--hard\b/, reason: "сброс всех несохранённых изменений (git reset --hard)" },
 	{ pattern: /\bgit\s+clean\b[^#\n]*-[a-zA-Z]*f/, reason: "удаление неотслеживаемых файлов (git clean -f)" },
 	{ pattern: /\bgit\s+reflog\s+expire\b/, reason: "истечение reflog (удаление истории восстановления)" },
@@ -397,17 +478,10 @@ const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string }> = [
 // bash-guard отключён в интерактивной (главной) сессии. Пользователь явно
 // выбирает автономию, поэтому рутинные git-операции (commit/pull/push)
 // разрешены; блокируются только по-настоящему катастрофические/необратимые
-// паттерны.
-const MAIN_DISABLED_BLOCKED: Array<{ pattern: RegExp; reason: string }> = HEADLESS_BLOCKED.filter(
-	({ pattern }) => {
-		const src = pattern.source;
-		return !(
-			src.includes("git\\s+commit") ||
-			src.includes("git\\s+pull") ||
-			// git push --force остаётся заблокированным, обычный git push разрешён.
-			src === "\\bgit\\s+push\\b"
-		);
-	},
+// паттерны. Помечены явно (sessionOnly), а не матчингом source регулярных
+// выражений — изменение формулировок больше не ломает «пол» молча.
+const MAIN_DISABLED_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean }> = HEADLESS_BLOCKED.filter(
+	(r) => !r.sessionOnly,
 );
 
 // Предупреждение, показываемое через ctx.ui.setStatus, когда bash-guard отключён.
@@ -457,6 +531,12 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
+	pi.registerFlag("bash-guard-git-strict", {
+		description: "Строгий git-режим: спрашивать на ЛЮБУЮ git-команду, включая read-only (status/log/diff/…)",
+		type: "boolean",
+		default: false,
+	});
+
 	// Переключатель живёт только внутри сессии. Намеренно не сохраняется между перезагрузками и перезапусками.
 	let disabled = false;
 
@@ -497,6 +577,8 @@ export default function (pi: ExtensionAPI) {
 	// Защита от раздражающих циклов повторных попыток: если команду недавно отменили, блокируем её автоматически.
 	const recentlyAborted = new Map<string, number>();
 	const ABORT_REMEMBER_MS = 60_000;
+	// Ключ нормализуем (схлопываем пробелы), чтобы `rm -rf  x` не была «новой» командой.
+	const normalizeCmd = (c: string) => c.replace(/\s+/g, " ").trim();
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event)) return;
@@ -520,11 +602,16 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const risk = analyzeBashCommand(command);
+		const risk = analyzeBashCommand(command, 0, pi.getFlag("--bash-guard-git-strict") === true);
 		if (!risk) return;
 
 		const now = Date.now();
-		const lastAbort = recentlyAborted.get(command);
+		// Подчищаем просроченные записи (карта маленькая, проход дешёвый)
+		for (const [k, t] of recentlyAborted) {
+			if (now - t >= ABORT_REMEMBER_MS) recentlyAborted.delete(k);
+		}
+		const key = normalizeCmd(command);
+		const lastAbort = recentlyAborted.get(key);
 		if (lastAbort && now - lastAbort < ABORT_REMEMBER_MS) {
 			return {
 				block: true,
@@ -541,7 +628,7 @@ export default function (pi: ExtensionAPI) {
 		const choice = await promptRunOrAbort(ctx, command, risk);
 		if (choice === "run") return;
 
-		recentlyAborted.set(command, now);
+		recentlyAborted.set(key, now);
 		return {
 			block: true,
 			reason:

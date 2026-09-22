@@ -8,7 +8,7 @@
 | Расширение | Назначение |
 |---|---|
 | [prompt-snippets](extensions/prompt-snippets/) | Комбинируемые одноцелевые промпт-правила: включаются на каждое сообщение через меню (`alt+s` / `/snippets`), вставляются перед или после вашего текста |
-| [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд в главной сессии, жёсткий блок катастрофических операций в субагентах |
+| [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах |
 | [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: задаёт пользователю один вопрос (текст, выбор одного, мультивыбор) и ждёт ответа |
 | [graft](extensions/graft/) | Интеграция [Graft](https://github.com/trailhq/Graft): нативные инструменты `graft_ask/grep/callers/skeleton/map/check/blast`, карта репо в системном промпте, blast radius после write/edit, бейдж свежести |
 
@@ -147,6 +147,9 @@ extensions/
     index.ts
   graft/
     index.ts                  # интеграция @nanonets/graft (CLI) в pi
+sandbox/
+  Dockerfile                  # pi-контур для недоверенного кода (см. sandbox/README.md)
+  README.md
 ```
 
 ## Лицензия
