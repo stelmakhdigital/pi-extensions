@@ -527,7 +527,7 @@ print(found)`,
 		const lines = renderFooter();
 		if (lines.length < 2) throw new Error("мало строк: " + JSON.stringify(lines));
 		const stats = lines[1];
-		if (!stats.includes("33 t/s")) throw new Error("нет 33 t/s: " + stats);
+		if (!stats.includes("33t/s")) throw new Error("нет 33t/s: " + stats);
 		if (!stats.includes("300ms")) throw new Error("нет TTFT: " + stats);
 		if (!stats.includes("↑")) throw new Error("нет токенов ↑: " + stats);
 		if (!stats.includes("24.0%/200k (auto)")) throw new Error("нет context%: " + stats);
@@ -550,7 +550,7 @@ print(found)`,
 			Date.now = realNow;
 		}
 		const stats = renderFooter()[1];
-		if (!stats.includes("33 t/s")) throw new Error("бейдж изменился: " + stats);
+		if (!stats.includes("33t/s")) throw new Error("бейдж изменился: " + stats);
 	});
 
 	await check("gen-speed: aborted-ответ не двигает бейдж", async () => {
@@ -565,7 +565,7 @@ print(found)`,
 			Date.now = realNow;
 		}
 		const stats = renderFooter()[1];
-		if (!stats.includes("33 t/s")) throw new Error("бейдж изменился: " + stats);
+		if (!stats.includes("33t/s")) throw new Error("бейдж изменился: " + stats);
 	});
 
 	await check("gen-speed: ответ 700ms (быстрая модель) учитывается", async () => {
@@ -582,8 +582,8 @@ print(found)`,
 			Date.now = realNow;
 		}
 		const stats = renderFooter()[1];
-		// EMA от 33.3 и 128.6 (90 tok / 0.7s) с alpha 0.4 ≈ 71.4 → 71 t/s
-		if (!stats.includes("71 t/s")) throw new Error("быстрый ответ не учтён: " + stats);
+		// EMA от 33.3 и 128.6 (90 tok / 0.7s) с alpha 0.4 ≈ 71.4 → 71t/s
+		if (!stats.includes("71t/s")) throw new Error("быстрый ответ не учтён: " + stats);
 	});
 
 	await check("gen-speed: session_start сбрасывает статистику и переустанавливает футер", async () => {

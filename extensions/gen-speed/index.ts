@@ -2,7 +2,7 @@
  * gen-speed: скорость генерации токенов и TTFT в футере — в строке токенов
  * (рядом с «↑1.6M ↓30k 24.2%/262k (auto)»), тем же dim-стилем.
  *
- * Бейдж: 41 t/s · ⌀ 0.8s
+ * Бейдж: 41t/s (0.8s)
  * - скорость: EMA по завершённым ассистент-ответам (alpha 0.4, полупериод ~3);
  * - TTFT: EMA времени до первого токена
  * - aborted/error-ответы и ответы короче 800ms не участвуют в статистике
@@ -73,7 +73,7 @@ export default function (pi: ExtensionAPI) {
 			emaTtft == null
 				? ""
 				: ` · ⌀ ${emaTtft < 1 ? (emaTtft * 1000).toFixed(0) + "ms" : emaTtft.toFixed(1) + "s"}`;
-		return `${Math.round(emaSpeed)} t/s${ttft}`;
+		return `${Math.round(emaSpeed)}t/s${ttft ? ` (${ttft})` : ""}`;
 	};
 
 	const asAssistant = (m: unknown): m is AssistantMessage =>
