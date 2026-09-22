@@ -201,8 +201,10 @@ export default function (pi: ExtensionAPI) {
 			try {
 				const j = JSON.parse(r.out);
 				const stale = j?.graph?.stale?.length ?? 0;
-				const missing = j?.graph?.missing === true || j?.context?.missing === true;
-				if (missing) {
+				// context.missing — нет LLM-контекста (build без --deep): граф при этом работает,
+				// «нет графа» показываем только когда сам граф отсутствует
+				const graphMissing = j?.graph?.missing === true || j?.graph?.ok === false;
+				if (graphMissing) {
 					ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "graft: нет графа — graft build"));
 				} else if (stale > 0) {
 					ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `graft: ⚠ ${stale} stale`));
