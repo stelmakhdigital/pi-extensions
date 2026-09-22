@@ -538,7 +538,7 @@ print(found)`,
 		if (!lines[2] || !lines[2].includes("graft: ok")) throw new Error("статусы других расширений потеряны: " + JSON.stringify(lines));
 	});
 
-	await check("gen-speed: короткий ответ (<800ms) не двигает бейдж", async () => {
+	await check("gen-speed: очень короткий ответ (<300ms) не двигает бейдж", async () => {
 		const realNow = Date.now.bind(Date);
 		let fake = 2_000_000;
 		Date.now = () => fake;
@@ -566,6 +566,24 @@ print(found)`,
 		}
 		const stats = renderFooter()[1];
 		if (!stats.includes("33 t/s")) throw new Error("бейдж изменился: " + stats);
+	});
+
+	await check("gen-speed: ответ 700ms (быстрая модель) учитывается", async () => {
+		const realNow = Date.now.bind(Date);
+		let fake = 4_000_000;
+		Date.now = () => fake;
+		try {
+			await piG.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxG);
+			fake += 100; // TTFT
+			await piG.handlers.message_update({ message: { role: "assistant", usage: { output: 90 } } }, ctxG);
+			fake += 600;
+			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 90 }, stopReason: "stop" } }, ctxG);
+		} finally {
+			Date.now = realNow;
+		}
+		const stats = renderFooter()[1];
+		// EMA от 33.3 и 128.6 (90 tok / 0.7s) с alpha 0.4 ≈ 71.4 → 71 t/s
+		if (!stats.includes("71 t/s")) throw new Error("быстрый ответ не учтён: " + stats);
 	});
 
 	await check("gen-speed: session_start сбрасывает статистику и переустанавливает футер", async () => {

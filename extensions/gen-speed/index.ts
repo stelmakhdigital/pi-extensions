@@ -19,7 +19,7 @@ import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const EMA_ALPHA = 0.4;
-const MIN_DT_MS = 800; // ответы короче этого не считаются (шум)
+const MIN_DT_MS = 300; // ответы короче этого не считаются (защита от нуля в делителе); у быстрых моделей 100+ токенов генерится за <800ms
 
 type Theme = {
 	fg: (color: string, text: string) => string;
