@@ -41,3 +41,53 @@
 | `--graft-push` | false | Подмешивать `graft ask` под каждый промпт |
 | `--graft-blast` | true | Blast radius после write/edit |
 | `--graft-max-output` | 16000 | Лимит вывода инструментов, символы |
+
+## Ключи и переменные окружения
+
+### LLM-провайдер (нужен только для `graft build --deep`)
+
+Базовый граф (`build`, `ask`, `grep`, `map`, `check`, `callers`, `blast`) —
+детерминированный tree-sitter, без ключей и сети. Ключи нужны лишь для
+LLM-слоя: суммаризация файлов, концепт-ноды, per-symbol crux.
+
+| Переменная | Назначение |
+|---|---|
+| `GRAFT_PROVIDER` | Wire-формат, не компания: `openai` (любой OpenAI-совместимый endpoint), `anthropic`, `litellm` (прокси), `orcarouter` |
+| `GRAFT_API_KEY` | Ключ провайдера |
+| `GRAFT_MODEL` | Идентификатор модели в терминологии провайдера (например `openai/gpt-4o-mini`, `claude-sonnet-5`) |
+| `GRAFT_BASE_URL` | Для формата `openai`: как выбрать провайдера — OpenRouter `https://openrouter.ai/api/v1`, Groq `https://api.groq.com/openai/v1`, Fireworks `https://api.fireworks.ai/inference/v1`, LiteLLM `http://localhost:4000`, Ollama `http://localhost:11434/v1`; для `anthropic` не нужна |
+
+Примеры:
+
+```bash
+# OpenRouter
+export GRAFT_PROVIDER=openai GRAFT_BASE_URL=https://openrouter.ai/api/v1
+export GRAFT_API_KEY=sk-or-... GRAFT_MODEL=openai/gpt-4o-mini
+
+# Anthropic напрямую
+export GRAFT_PROVIDER=anthropic GRAFT_API_KEY=sk-ant-... GRAFT_MODEL=claude-sonnet-5
+
+# Локальная модель (Ollama)
+export GRAFT_PROVIDER=openai GRAFT_BASE_URL=http://localhost:11434/v1
+export GRAFT_API_KEY=ollama GRAFT_MODEL=qwen2.5-coder:14b
+```
+
+### Расширение (pi)
+
+| Переменная | Назначение |
+|---|---|
+| `GRAFT_CMD` | Явный путь/имя CLI, которым расширение запускает graft (приоритет над поиском `graft` в PATH и npx) |
+| `DO_NOT_TRACK` | Расширение само ставит `DO_NOT_TRACK=1` дочерним процессам — телеметрия выключена; переменная дополнительно не нужна |
+
+### Graft CLI (настройки поведения)
+
+| Переменная | Назначение |
+|---|---|
+| `GRAFT_DIR` | Где лежит граф (по умолчанию `graft/` в корне репо) — расширение находит граф именно так, поэтому при нестандартном месте настраивать надо и CLI, и расширение |
+| `GRAFT_NO_REFRESH=1` | Выключить автопересборку графа перед запросами (по умолчанию каждый запрос обновляет граф по working tree, $0) |
+| `GRAFT_REFRESH=hash` | Сравнивать файлы по хэшу, а не size+mtime (медленнее, надёжнее) |
+| `GRAFT_NO_GITIGNORE=1` | Не писать `graft/` в `.gitignore` (если игнорируется глобально) |
+| `GRAFT_NO_IGNORE=1` | Не создавать `.ignore` (ripgrep re-admit) — только если поиском управляете сами |
+| `GRAFT_NO_STATUSLINE=1` | `graft init` не трогает statusLine Claude Code (для pi нерелевантно, но если репо общий) |
+
+Наследуемые фолбэки (если `GRAFT_API_KEY` не задан): `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` / `GRAFT_OPENROUTER_MODEL`, затем `ORCAROUTER_API_KEY` и т.д. — см. `.env.example` в [репозитории Graft](https://github.com/trailhq/Graft/blob/main/.env.example).
