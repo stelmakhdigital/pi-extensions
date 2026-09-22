@@ -36,9 +36,9 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, statSync, mkdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type Level = "off" | "dev" | "untrusted" | "vm";
@@ -46,6 +46,49 @@ type Platform = "linux" | "macos" | "unsupported";
 
 const STATUS_KEY = " sandbox"; // ведущий пробел: бейдж не обрезается футером
 const SCRIPT_IN_SANDBOX = "/run/pi-sbx-cmd.sh";
+
+/** Варианты стартового промпта «Доверяешь ли ты этому проекту?» */
+const TRUST_PROMPT_OPTIONS: Array<{ label: string; level: Level }> = [
+	{ label: "Доверяю (L0 — без песочницы)", level: "off" },
+	{ label: "Изолировать: dev (L1 — песочница, сеть разрешена)", level: "dev" },
+	{ label: "Изолировать: untrusted (L1+ — песочница, без сети)", level: "untrusted" },
+];
+
+/** Глобальное хранилище решений о доверии (per-user): корень проекта → уровень.
+ *  pi-нативное доверие (project_trust) — бинарное yes/no и спрашивается только
+ *  для проектов с .pi-ресурсами. Наше хранилище расширяет его до уровней и
+ *  покрывает проекты БЕЗ .pi (через session_start-фолбэк). */
+const trustStoreFile = (): string => process.env.PI_SANDBOX_TRUST_FILE ?? join(homedir(), ".pi", "agent", "sandbox-trust.json");
+type TrustStore = Record<string, { level: Level; at: number }>;
+function loadTrustStore(): TrustStore {
+	try {
+		return JSON.parse(readFileSync(trustStoreFile(), "utf8")) as TrustStore;
+	} catch {
+		return {};
+	}
+}
+function savedLevel(root: string): Level | null {
+	const e = loadTrustStore()[root];
+	return e && (e.level === "off" || e.level === "dev" || e.level === "untrusted" || e.level === "vm") ? e.level : null;
+}
+function rememberLevel(root: string, level: Level) {
+	const store = loadTrustStore();
+	if (level === "off") delete store[root];
+	else store[root] = { level, at: Date.now() };
+	try {
+		mkdirSync(dirname(trustStoreFile()), { recursive: true });
+		writeFileSync(trustStoreFile(), JSON.stringify(store, null, 2));
+	} catch {
+		// не критично: решение действует в этой сессии в любом случае
+	}
+}
+function forgetLevel(root: string) {
+	const store = loadTrustStore();
+	delete store[root];
+	try {
+		writeFileSync(trustStoreFile(), JSON.stringify(store, null, 2));
+	} catch {}
+}
 
 function isDir(p: string): boolean {
 	try {
@@ -230,12 +273,16 @@ export default function (pi: ExtensionAPI) {
 
 	// Переопределение живёт в сессии (не сохраняется между запусками).
 	let sessionLevel: Level | null = null;
+	// Корни, по которым уже показан доверительный промпт (project_trust или
+	// session_start-фолбэк), чтобы не спрашивать дважды за один запуск.
+	const trustPromptedRoots = new Set<string>();
 
 	function activeLevel(ctx: ExtensionContext): Level {
 		if (sessionLevel) return sessionLevel;
 		const flag = pi.getFlag("--sandbox-level");
 		if (typeof flag === "string" && flag) return flag as Level;
-		return markerLevel(ctx.cwd) ?? "off";
+		const root = projectRoot(ctx.cwd);
+		return markerLevel(root) ?? savedLevel(root) ?? "off";
 	}
 
 	function levelSource(ctx: ExtensionContext): string {
@@ -243,8 +290,52 @@ export default function (pi: ExtensionAPI) {
 		const flag = pi.getFlag("--sandbox-level");
 		if (typeof flag === "string" && flag) return "флаг --sandbox-level";
 		if (markerLevel(ctx.cwd)) return "файл .sandbox";
+		if (savedLevel(projectRoot(ctx.cwd))) return "сохранённое решение о доверии";
 		return "по умолчанию (off)";
 	}
+
+	/** Уровень → бинарное доверие pi: L0/L1-dev — ресурсы проекта грузим
+	 *  (доверие с изоляцией выполнения), L1+/vm — не грузим. */
+	const trustFlag = (l: Level): "yes" | "no" => (l === "off" || l === "dev" ? "yes" : "no");
+
+	/** Нативное событие pi: спрашивается при старте, если у проекта есть .pi-ресурсы.
+	 *  Отвечаем за pi: показываем свой (более богатый) выбор уровня. */
+	pi.on("project_trust", async (event, tctx) => {
+		const root = projectRoot(event.cwd);
+		trustPromptedRoots.add(root);
+		const marker = markerLevel(root);
+		if (marker) return { trusted: trustFlag(marker) };
+		const saved = savedLevel(root);
+		if (saved) return { trusted: trustFlag(saved) };
+		if (!tctx.hasUI) return { trusted: "undecided" };
+		const label = await tctx.ui.select(`Доверяешь ли ты проекту ${root}?`, TRUST_PROMPT_OPTIONS.map((o) => o.label));
+		const opt = TRUST_PROMPT_OPTIONS.find((o) => o.label === label);
+		if (!opt) return { trusted: "undecided" };
+		rememberLevel(root, opt.level);
+		return { trusted: trustFlag(opt.level), remember: true };
+	});
+
+	pi.on("session_start", async (event, ctx) => {
+		badge(ctx, activeLevel(ctx));
+		// Фолбэк для проектов БЕЗ .pi-ресурсов (pi их сам не спрашивает):
+		// первый интерактивный старт в неизвестной директории — разовый промпт.
+		if (event.reason !== "startup" || !ctx.hasUI) return;
+		const root = projectRoot(ctx.cwd);
+		if (trustPromptedRoots.has(root)) return;
+		if (markerLevel(root) || savedLevel(root)) return;
+		const flag = pi.getFlag("--sandbox-level");
+		if (typeof flag === "string" && flag) return;
+		const label = await ctx.ui.select(`Проект ${root}: доверяешь ли ты ему? (первый запуск)`, TRUST_PROMPT_OPTIONS.map((o) => o.label));
+		const opt = TRUST_PROMPT_OPTIONS.find((o) => o.label === label);
+		if (!opt) return;
+		trustPromptedRoots.add(root);
+		rememberLevel(root, opt.level);
+		badge(ctx, opt.level);
+		ctx.ui.notify(
+			opt.level === "off" ? "Проект отмечен как доверенный (L0, без песочницы)." : `Песочница включена (${opt.level}) для ${root}.`,
+			opt.level === "off" ? "info" : "warning",
+		);
+	});
 
 	function badge(ctx: ExtensionContext, level: Level) {
 		if (!ctx.hasUI) return;
@@ -256,10 +347,6 @@ export default function (pi: ExtensionAPI) {
 		const label = level === "vm" ? "⧉ sandbox: vm (нужен контейнер)" : level === "untrusted" ? "⧉ sandbox: untrusted" : "⧉ sandbox: dev";
 		ctx.ui.setStatus(STATUS_KEY, level === "untrusted" ? t.fg("warning", label) : t.fg("accent", label));
 	}
-
-	pi.on("session_start", (_e, ctx) => {
-		badge(ctx, activeLevel(ctx));
-	});
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "bash") return;
@@ -314,7 +401,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	pi.registerCommand("sandbox", {
-		description: "Sandbox: /sandbox status | on <dev|untrusted|vm|off> | test",
+		description: "Sandbox: /sandbox status | on <dev|untrusted|vm|off> | test | forget",
 		handler: async (args: string, ctx) => {
 			const a = args.trim().split(/\s+/);
 			if (a[0] === "on" || a[0] === "off") {
@@ -328,7 +415,14 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`sandbox: ${want === "off" ? "выключен" : "включён (" + want + ")"} на эту сессию`, "info");
 				return;
 			}
-			if (a[0] === "test") {
+			if (a[0] === "forget") {
+			forgetLevel(projectRoot(ctx.cwd));
+			sessionLevel = null;
+			badge(ctx, activeLevel(ctx));
+			ctx.ui.notify("Решение о доверии для текущего проекта удалено — при следующем старте спросят снова.", "info");
+			return;
+		}
+		if (a[0] === "test") {
 				await selfTest(ctx);
 				return;
 			}

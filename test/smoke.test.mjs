@@ -338,6 +338,92 @@ const noUiCtx = {
 	});
 }
 
+
+// === 6. sandbox: trust prompt (project_trust + session_start fallback) ===
+{
+	const { unlinkSync, readFileSync: rfs } = await import("node:fs");
+	const trustFile = "/tmp/pi-sbx-trust-test.json";
+	const cleanStore = () => { try { unlinkSync(trustFile); } catch {} };
+	process.env.PI_SANDBOX_TRUST_FILE = trustFile;
+
+	const plain = "/home/arkalaust/pi-sbx-fixture-plain"; // без .sandbox
+	const mkCtx = (cwd) => ({
+		hasUI: true,
+		cwd,
+		mode: "default",
+		signal: new AbortController().signal,
+		ui: {
+			theme: { fg: (_c, t) => t, bold: (t) => t, bg: (_c, t) => t },
+			setStatus: () => {},
+			notify: () => {},
+			select: async () => undefined,
+		},
+	});
+
+	await check("sandbox-trust: project_trust без маркера спрашивает уровень и запоминает", async () => {
+		cleanStore();
+		const sbxExt2 = jiti("../extensions/sandbox/index.ts");
+		const pi2 = makePi();
+		sbxExt2.default(pi2);
+		let calls = 0;
+		const ctxT = mkCtx(plain);
+		ctxT.ui.select = async (_t, opts) => { calls++; return opts[2]; };
+		const res = await pi2.handlers.project_trust({ type: "project_trust", cwd: plain }, ctxT);
+		if (calls !== 1) throw new Error("select не вызван: " + calls);
+		if (res.trusted !== "no" || res.remember !== true) throw new Error("неверный результат: " + JSON.stringify(res));
+		const store = JSON.parse(rfs(trustFile, "utf8"));
+		if (store[plain]?.level !== "untrusted") throw new Error("не сохранено: " + JSON.stringify(store));
+	});
+
+	await check("sandbox-trust: сохранённое решение — без вопроса, уровень применяется", async () => {
+		const sbxExt3 = jiti("../extensions/sandbox/index.ts");
+		const pi3 = makePi();
+		sbxExt3.default(pi3);
+		let calls = 0;
+		const ctxT = mkCtx(plain);
+		ctxT.ui.select = async () => { calls++; return "x"; };
+		const res = await pi3.handlers.project_trust({ type: "project_trust", cwd: plain }, ctxT);
+		if (calls !== 0) throw new Error("спросил повторно");
+		if (res.trusted !== "no") throw new Error("неверный trust: " + JSON.stringify(res));
+		const ev = { toolName: "bash", input: { command: "echo x" } };
+		await pi3.handlers.tool_call(ev, { ...noUiCtx, cwd: plain });
+		if (!String(ev.input.command).includes("unshare-net")) throw new Error("не untrusted: " + String(ev.input.command).slice(0, 150));
+	});
+
+	await check("sandbox-trust: маркер .sandbox — промпт не показывается", async () => {
+		const sbxExt4 = jiti("../extensions/sandbox/index.ts");
+		const pi4 = makePi();
+		sbxExt4.default(pi4);
+		let calls = 0;
+		const fixture = "/home/arkalaust/pi-sbx-fixture"; // .sandbox = dev
+		const ctxT = mkCtx(fixture);
+		ctxT.ui.select = async () => { calls++; return "x"; };
+		const res = await pi4.handlers.project_trust({ type: "project_trust", cwd: fixture }, ctxT);
+		if (calls !== 0) throw new Error("спросил при маркере");
+		if (res.trusted !== "yes") throw new Error("dev должен быть yes: " + JSON.stringify(res));
+	});
+
+	await check("sandbox-trust: session_start-фолбэк спрашивает при первом старте, не спрашивает при resume", async () => {
+		cleanStore();
+		const sbxExt5 = jiti("../extensions/sandbox/index.ts");
+		const pi5 = makePi();
+		sbxExt5.default(pi5);
+		let calls = 0;
+		const ctxS = mkCtx(plain);
+		ctxS.ui.select = async (_t, opts) => { calls++; return opts[1]; };
+		await pi5.handlers.session_start({ type: "session_start", reason: "startup" }, ctxS);
+		if (calls !== 1) throw new Error("select не вызван: " + calls);
+		const store = JSON.parse(rfs(trustFile, "utf8"));
+		if (store[plain]?.level !== "dev") throw new Error("не сохранено: " + JSON.stringify(store));
+		const ctxS2 = mkCtx(plain);
+		ctxS2.ui.select = async () => { calls++; return "x"; };
+		await pi5.handlers.session_start({ type: "session_start", reason: "resume" }, ctxS2);
+		if (calls !== 1) throw new Error("спросил при resume: " + calls);
+	});
+
+	delete process.env.PI_SANDBOX_TRUST_FILE;
+}
+
 console.log(results.join("\n"));
 const failed = results.filter((r) => r.startsWith("FAIL"));
 process.exit(failed.length ? 1 : 0);
