@@ -24,14 +24,14 @@
 Целиком:
 
 ```bash
-pi install git:github.com/stelmakhdigital/pi-extensions@v0.1.0
+pi install git:github.com/stelmakhdigital/pi-extensions@v0.3.0
 ```
 
 После установки `/reload` (или перезапуск pi). Обновление:
 
 ```bash
 pi update --extensions          # обновить пакеты
-pi install git:github.com/stelmakhdigital/pi-extensions@v0.1.1   # перевязать на новый тег
+pi install git:github.com/stelmakhdigital/pi-extensions@v0.3.1   # перевязать на будущий новый тег
 ```
 
 ## Установка по отдельности
@@ -56,7 +56,7 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.1.1   # перевя�
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
 			"extensions": ["extensions/prompt-snippets/*"]
 		}
 	]
@@ -71,7 +71,7 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.1.1   # перевя�
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
 			"extensions": ["extensions/bash-guard/*"]
 		}
 	]
@@ -88,7 +88,7 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.1.1   # перевя�
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
 			"extensions": ["extensions/ask-user-question/*"]
 		}
 	]
@@ -103,7 +103,7 @@ pi install git:github.com/stelmakhdigital/pi-extensions@v0.1.1   # перевя�
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
 			"extensions": ["extensions/graft/*"]
 		}
 	]
@@ -123,7 +123,7 @@ CLI ставится отдельно: `npm i -g @nanonets/graft` (без нег
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
 			"extensions": ["extensions/sandbox/*"]
 		}
 	]
@@ -189,7 +189,7 @@ python3 <путь>/scripts/insights.py --errors-only --json  # JSON
 {
 	"packages": [
 		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.1.0",
+			"source": "git:github.com/stelmakhdigital/pi-extensions@v0.3.0",
 			"extensions": [
 				"extensions/prompt-snippets/*",
 				"extensions/bash-guard/*"
