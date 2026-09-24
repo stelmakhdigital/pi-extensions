@@ -83,7 +83,7 @@
       PI_SUBAGENTS_SPAWNING=1, spawn-тулзы в allowlist) и `deny-tools: a,b,c`
       (--exclude-tools)
 - [x] Компиляция и тестирование (tsc strict, unit 32, smoke) + live-интеграция v2 в tmux: doctor, usage-виджет, /iterate (fork 19.3k ctx), spawning-цепочка parent→boss→grandchild, /plan (3 фазы, файл создан)
-- [ ] Разрешение на коммит (явная команда)
+- [x] Разрешение на коммит (явная команда) — a50b72e, pushed
 
 ## v3 (итерация от 2026-09-24, по явной команде пользователя)
 - [x] 1. Детектор «без ответа» (child.ts): auto-exit автономного агента без assistant-текста
@@ -94,4 +94,4 @@
 - [x] 3. Повторные stall-пинги: watchdog.stallRepingTicks (дефолт 30, 0 = один раз)
 - [x] 4. /plan: 4-я фаза `test` (прогон тестов/сборки после ревью; окно plan: test)
 - [x] Компиляция и тестирование (tsc strict, unit 36, smoke) + live-интеграция v3 в tmux: авто-пинг «без ответа» (⇠ nocase2 ping), явная agent_done → noSummary-карточка, явный agent_ping, stall-репинг (SIGSTOP-ребёнок: first → still stalled … 171s), /plan 4 фазы (plan: test, v3.txt создан). Пойман и отфильтрован pi-плейсхолдер «(no response)»
-- [ ] Разрешение на коммит v3 (явная команда)
+- [x] Разрешение на коммит v3 (явная команда) — f443b28, pushed

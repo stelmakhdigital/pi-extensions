@@ -123,8 +123,8 @@
 
 ## СТАТУС (по итогам сессии — продолжить отсюда)
 
-**v1, v2 (1–7) и v3 завершены и live-проверены в tmux (2026-09-24). Коммиты — не сделаны,
-ждут явной команды (v2+v3 одним коммитом или двумя — по выбору пользователя).**
+**v1, v2 (1–7) и v3 завершены и live-проверены в tmux (2026-09-24). Коммиты сделаны и
+pushed: v1 098ac5b, v2 a50b72e, v3 f443b28 (по явной команде, двумя коммитами).**
 
 Состав: `extensions/subagents/*` (8 ts + 4 bundled-агента), `test/subagents.test.mjs` (unit 36),
 `test/smoke.test.mjs` (секция 9), package.json, README (корневой + расширения).
@@ -182,8 +182,8 @@ Live-интеграция v2 (tmux 3.6, локальная LLM): doctor — вс
 ребёнка → `--no-extensions` по умолчанию (`child.extensions`).
 
 Осталось:
-1. Коммит v2+v3 — только по явной команде (один коммит или два — по выбору).
-2. Дальнейший бэклог (roadmap §«Вне v2»): detached-хост-сессия, другие MuxBackend.
+1. Дальнейший бэклог (roadmap §«Вне v2»): detached-хост-сессия, другие MuxBackend,
+   repeated stall-пинги — уже есть (v3), /plan-фаза test — уже есть (v3).
 
 Замечания для отладки: артефакты запуска — в `<sessionDir>/artifacts/<childId>/`;
 sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог событий.
