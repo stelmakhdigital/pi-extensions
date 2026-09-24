@@ -13,6 +13,7 @@
 | [graft](extensions/graft/) | Интеграция [Graft](https://github.com/trailhq/Graft): нативные инструменты `graft_ask/grep/callers/skeleton/map/check/blast`, карта репо в системном промпте, blast radius после write/edit, бейдж свежести |
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
 | [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41 t/s · ⌀ 0.8s` (EMA по ответам, на лету при стриминге; TTFT — время до первого токена; aborted/короткие ответы не считаются) |
+| [subagents](extensions/subagents/) | Асинхронные подагенты в tmux: спавн в панель (не блокирует основную сессию), live-виджет статусов (starting/active/waiting/stalled), steer-результат, resume/interrupt, agent-definitions (`.pi/agents/*.md`), `/spawn`; вне tmux — handoff (перезапуск pi внутри tmux с продолжением сессии) |
 
 ## Скиллы
 
@@ -53,6 +54,7 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 | ask-user-question | `extensions/ask-user-question/*` |
 | graft | `extensions/graft/*` |
 | sandbox | `extensions/sandbox/*` |
+| subagents | `extensions/subagents/*` |
 | gen-speed | `extensions/gen-speed/*` |
 
 Далее — пример для каждого (глобальные настройки `~/.pi/agent/settings.json`).
@@ -144,6 +146,24 @@ CLI ставится отдельно: `npm i -g @nanonets/graft` (без нег
 если уровень включён, но бэкенд недоступен. Windows — только контейнерный
 режим (см. `sandbox/README.md`).
 
+### Только subagents
+
+```json
+{
+	"packages": [
+		{
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
+			"extensions": ["extensions/subagents/*"]
+		}
+	]
+}
+```
+
+Даст инструменты `spawn_agent` / `agents_list` / `interrupt_agent` /
+`resume_agent`, команду `/spawn` и live-виджет подагентов. Требует pi внутри
+tmux (`tmux new -A -s pi 'pi'`); вне tmux при старте предложит handoff.
+Детали — в `extensions/subagents/README.md`.
+
 ### Только session-insights
 
 Скиллы из пакета ставятся вместе с ним (манифест `package.json` → `pi.skills`).
@@ -230,6 +250,14 @@ extensions/
     index.ts                  # per-command sandbox (bwrap / sandbox-exec)
   gen-speed/
     index.ts                  # бейдж скорости генерации токенов + TTFT в футере
+  subagents/
+    index.ts                  # родитель: инструменты, watch, виджет, steer, handoff
+    child.ts                  # дочернее: agent_done/agent_ping, снапшоты активности
+    tmux-backend.ts           # tmux-реализация MuxBackend (injectable runner)
+    session.ts                # детерминированные файлы сессий, seed (standalone/lineage/fork)
+    agents.ts                 # discovery agent-definitions + frontmatter
+    config.ts                 # конфиг: defaults < global < project < env
+    types.ts                  # MuxBackend, снапшоты, results
 sandbox/
   Dockerfile                  # pi-контур для недоверенного кода (см. sandbox/README.md)
   README.md

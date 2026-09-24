@@ -605,6 +605,59 @@ print(found)`,
 	});
 }
 
+// === 9. subagents ===
+{
+	// child.ts читает env при загрузке модуля → свежий jiti без кэша на каждый режим
+	const { createJiti: createJitiForChild } = await import("jiti");
+	const jitiChild = (p) => createJitiForChild(import.meta.url, { cache: false })(p);
+
+	const subagentsExt = jiti("../extensions/subagents/index.ts");
+	const pi = makePi();
+	pi.registerMessageRenderer = () => {};
+	subagentsExt.default(pi);
+
+	await check("subagents: 4 инструмента зарегистрированы", () => {
+		for (const name of ["spawn_agent", "agents_list", "interrupt_agent", "resume_agent"]) {
+			if (!pi.tools.find((t) => t.name === name)) throw new Error("нет " + name);
+		}
+	});
+	await check("subagents: /spawn и флаг --subagents-disabled", () => {
+		if (!pi.commands.some((c) => c.name === "spawn")) throw new Error("нет /spawn");
+		if (!pi.flags.some((f) => f.name === "subagents-disabled")) throw new Error("нет флага");
+	});
+	await check("subagents: spawn без session_start -> 'not ready'", async () => {
+		const tool = pi.tools.find((t) => t.name === "spawn_agent");
+		const res = await tool.execute("id", { task: "x" }, new AbortController().signal, () => {}, noUiCtx);
+		if (!String(res.content[0].text).includes("not ready")) throw new Error("не not-ready: " + res.content[0].text);
+	});
+	await check("subagents: child без child-env ничего не регистрирует", () => {
+		delete process.env.PI_SUBAGENTS_CHILD_ID;
+		const childExt = jitiChild("../extensions/subagents/child.ts");
+		const piC = makePi();
+		childExt.default(piC);
+		if (piC.tools.length !== 0) throw new Error("инструменты в parent-режиме: " + piC.tools.map((t) => t.name).join(","));
+	});
+	await check("subagents: child с child-env регистрирует agent_done/agent_ping", async () => {
+		// child.ts читает env при загрузке модуля, а jiti кэширует модуль в процессе
+		// → проверяем в отдельном node-процессе
+		const { spawnSync } = await import("node:child_process");
+		const script = [
+			"import { createJiti } from 'jiti';",
+			"import { join } from 'node:path';",
+			"process.env.PI_SUBAGENTS_CHILD_ID = 'smoke1';",
+			"const root = process.cwd();",
+			"const j = createJiti(join(root, 'package.json'), { cache: false });",
+			"const m = j(join(root, 'extensions/subagents/child.ts'));",
+			"const tools = [];",
+			"m.default({ on(){}, registerTool:(d)=>tools.push(d.name) });",
+			"if (!tools.includes('agent_done') || !tools.includes('agent_ping')) { console.error('missing: ' + tools.join(',')); process.exit(1); }",
+			"console.log('ok');",
+		].join("\n");
+		const r = spawnSync("node", ["--input-type=module", "-e", script], { cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8" });
+		if (r.status !== 0) throw new Error((r.stderr || r.stdout).slice(0, 300));
+	});
+}
+
 console.log(results.join("\n"));
 const failed = results.filter((r) => r.startsWith("FAIL"));
 process.exit(failed.length ? 1 : 0);
