@@ -145,9 +145,11 @@ export default function subagentsChild(pi: ExtensionAPI): void {
 		const errorMessage = stopReason === "error" ? summarizeLastAssistantError(messages) : undefined;
 		if (errorMessage) {
 			writeSidecar(ctx, { type: "error", exitCode: 1, errorMessage });
-		} else {
-			writeSidecar(ctx, { type: "done", exitCode: 0 });
+			ctx.shutdown();
+			return;
 		}
+
+		writeSidecar(ctx, { type: "done", exitCode: 0 });
 		dbg("agent_end:auto-exit", "sidecar written, shutdown requested");
 		ctx.shutdown();
 	});

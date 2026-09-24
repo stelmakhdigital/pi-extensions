@@ -7,7 +7,8 @@
  *   ~/.pi/agent/sessions/--<path>--/<timestamp>_<session-id>.jsonl
  * Header v3: {"type":"session","version":3,"id","timestamp","cwd"[,"parentSession"]}
  */
-import { writeFileSync } from "node:fs";
+import { existsSync, openSync, fstatSync, readSync, closeSync, writeFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { SessionMode } from "./types.ts";
@@ -138,4 +139,65 @@ export function lastAssistantText(lines: string[]): string | undefined {
 		if (texts) found = texts;
 	}
 	return found;
+}
+
+/** Cumulative token usage/cost accumulated from a child session file. */
+export interface ChildUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	total: number;
+	cost: number;
+}
+
+export const EMPTY_CHILD_USAGE: ChildUsage = { input: 0, output: 0, cacheRead: 0, total: 0, cost: 0 };
+
+/**
+ * Incrementally read assistant `usage` records from a pi session jsonl.
+ * Only the file tail after `fromOffset` is parsed; the returned offset is the
+ * last consumed newline (a partial trailing line is re-read next time).
+ */
+export function readChildUsage(file: string, fromOffset: number): { usage: ChildUsage; offset: number } {
+	const usage: ChildUsage = { ...EMPTY_CHILD_USAGE };
+	if (!existsSync(file)) return { usage, offset: fromOffset };
+	let offset = fromOffset;
+	let size = 0;
+	try {
+		const fd = openSync(file, "r");
+		try {
+			size = fstatSync(fd).size;
+			if (size < offset) offset = 0; // file recreated/truncated
+			const len = size - offset;
+			if (len <= 0) return { usage, offset };
+			const buf = Buffer.alloc(Math.min(len, 8 * 1024 * 1024));
+			const read = readSync(fd, buf, 0, buf.length, offset);
+			const text = buf.toString("utf8", 0, read);
+			const lastNewline = text.lastIndexOf("\n");
+			if (lastNewline < 0) return { usage, offset }; // partial line, wait for more
+			offset += lastNewline + 1;
+			for (const line of text.slice(0, lastNewline).split("\n")) {
+				if (!line || !line.includes("\"usage\"")) continue;
+				let entry: any;
+				try {
+					entry = JSON.parse(line);
+				} catch {
+					continue;
+				}
+				const u = entry?.type === "message" && entry.message?.role === "assistant" ? entry.message.usage : undefined;
+				if (!u || typeof u !== "object") continue;
+				usage.input += Number(u.input) || 0;
+				usage.output += Number(u.output) || 0;
+				usage.cacheRead += Number(u.cacheRead) || 0;
+				usage.total += Number(u.totalTokens) || 0;
+				usage.cost += Number(u.cost?.total) || 0;
+			}
+		}
+		finally {
+			closeSync(fd);
+		}
+	} catch {
+		// Unreadable file: keep the old offset, try again next tick.
+		return { usage: EMPTY_CHILD_USAGE, offset: fromOffset };
+	}
+	return { usage, offset };
 }

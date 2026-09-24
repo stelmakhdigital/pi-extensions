@@ -13,7 +13,7 @@
 | [graft](extensions/graft/) | Интеграция [Graft](https://github.com/trailhq/Graft): нативные инструменты `graft_ask/grep/callers/skeleton/map/check/blast`, карта репо в системном промпте, blast radius после write/edit, бейдж свежести |
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
 | [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41 t/s · ⌀ 0.8s` (EMA по ответам, на лету при стриминге; TTFT — время до первого токена; aborted/короткие ответы не считаются) |
-| [subagents](extensions/subagents/) | Асинхронные подагенты в tmux: спавн в панель (не блокирует основную сессию), live-виджет статусов (starting/active/waiting/stalled), steer-результат, resume/interrupt, agent-definitions (`.pi/agents/*.md`), `/spawn`; вне tmux — handoff (перезапуск pi внутри tmux с продолжением сессии) |
+| [subagents](extensions/subagents/) | Асинхронные подагенты в tmux: спавн в панель (не блокирует основную сессию), live-виджет статусов и токенов (starting/active/waiting/stalled), steer-результат, resume/interrupt, agent-definitions (`.pi/agents/*.md`) + 4 bundled-агента (planner/scout/worker/reviewer); команды `/spawn`, `/subagents [doctor|status]`, `/iterate [agent] <task>`, `/plan <task>` (planner→worker→reviewer); `spawning`/`deny-tools` в frontmatter; вне tmux — handoff (перезапуск pi внутри tmux с продолжением сессии) |
 
 ## Скиллы
 

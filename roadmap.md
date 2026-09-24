@@ -66,3 +66,21 @@
 - [ ] «Умный» shell-ready (capture-pane-маркер промпта вместо фиксированной задержки)
 - [ ] deny-tools / spawning frontmatter; detached-хост-сессия как альтернатива handoff
 - [ ] Другие бэкенды поверх MuxBackend
+
+## v2 (итерация от 2026-09-24, по явной команде пользователя)
+- [x] 1. Токены/стоимость ребёнка: инкрементальный сбор usage из jsonl (offset),
+      виджет + steer-карточка (tokens/cost)
+- [x] 2. `/subagents doctor` — self-check: tmux, TMUX_PANE, конфиг (источники+значения),
+      agent-definitions, сессия/артефакты, child-mode/guard-env; чек-отчёт сообщением
+- [x] 3. Умный shell-ready: waitForShellReady (capture-pane: последний непустой символ —
+      знак промпта, поллинг 125ms) с таймаутом (tmux.shellReadyMs = max-ожидание)
+- [x] 4. `/iterate [agent] <task>` — спавн с fork текущей сессии (контекст разговора ребёнку)
+- [x] 5. `/plan <task>` — фазовый workflow: спавн planner + steer-инструкция модели на
+      phases worker → reviewer → итог (окна именованы по фазам)
+- [x] 6. Bundled-агенты: extensions/subagents/agents/{planner,scout,worker,reviewer}.md
+      (приоритет: project > global > bundled)
+- [x] 7. frontmatter `spawning: true` (рекурсивный спавн: -e index.ts у child,
+      PI_SUBAGENTS_SPAWNING=1, spawn-тулзы в allowlist) и `deny-tools: a,b,c`
+      (--exclude-tools)
+- [x] Компиляция и тестирование (tsc strict, unit 32, smoke) + live-интеграция v2 в tmux: doctor, usage-виджет, /iterate (fork 19.3k ctx), spawning-цепочка parent→boss→grandchild, /plan (3 фазы, файл создан)
+- [ ] Разрешение на коммит (явная команда)

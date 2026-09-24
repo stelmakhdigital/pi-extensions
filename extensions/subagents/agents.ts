@@ -5,9 +5,15 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { AgentDefinition, SessionMode } from "./types.ts";
+
+/** Parent-side tools a child must never see unless the agent opts in via `spawning: true`. */
+export const PARENT_TOOLS = "spawn_agent,agents_list,interrupt_agent,resume_agent";
+
+export type AgentSource = "project" | "global" | "bundled";
 
 export function projectAgentsDir(cwd: string): string {
 	return join(cwd, CONFIG_DIR_NAME, "agents");
@@ -15,6 +21,11 @@ export function projectAgentsDir(cwd: string): string {
 
 export function globalAgentsDir(): string {
 	return join(homedir(), ".pi", "agent", "agents");
+}
+
+/** Bundled agents shipped with the extension (lowest priority). */
+export function bundledAgentsDir(): string {
+	return fileURLToPath(new URL("./agents", import.meta.url));
 }
 
 /** Minimal frontmatter parser: `key: value` lines between --- markers. */
@@ -45,7 +56,7 @@ function parseBoolean(value: string | undefined): boolean {
 	return value === "true" || value === "1";
 }
 
-export function parseAgentDefinition(content: string, fallbackName: string, source: "project" | "global", file: string): AgentDefinition {
+export function parseAgentDefinition(content: string, fallbackName: string, source: AgentSource, file: string): AgentDefinition {
 	const { data, body } = parseFrontmatter(content);
 	const name = data.name?.trim() || fallbackName;
 	return {
@@ -60,12 +71,14 @@ export function parseAgentDefinition(content: string, fallbackName: string, sour
 		autoExit: parseBoolean(data["auto-exit"]),
 		interactive: data.interactive === undefined ? !parseBoolean(data["auto-exit"]) : parseBoolean(data.interactive),
 		cwd: data.cwd?.trim() || undefined,
+		denyTools: data["deny-tools"]?.trim() || undefined,
+		spawning: parseBoolean(data.spawning),
 		source,
 		file,
 	};
 }
 
-function readDirAgents(dir: string, source: "project" | "global"): Map<string, AgentDefinition> {
+function readDirAgents(dir: string, source: AgentSource): Map<string, AgentDefinition> {
 	const out = new Map<string, AgentDefinition>();
 	if (!existsSync(dir)) return out;
 	let entries: string[] = [];
@@ -88,31 +101,44 @@ function readDirAgents(dir: string, source: "project" | "global"): Map<string, A
 	return out;
 }
 
-/** Project definitions shadow global ones with the same name. */
-export function discoverAgents(cwd: string, opts: { projectDir?: string; globalDir?: string } = {}): AgentDefinition[] {
+/** Project definitions shadow global, global shadows bundled. */
+export function discoverAgents(cwd: string, opts: { projectDir?: string; globalDir?: string; bundledDir?: string } = {}): AgentDefinition[] {
 	const projectDir = opts.projectDir ?? projectAgentsDir(cwd);
 	const globalDir = opts.globalDir ?? globalAgentsDir();
+	const bundledDir = opts.bundledDir ?? bundledAgentsDir();
 	const merged = new Map<string, AgentDefinition>();
+	for (const [name, def] of readDirAgents(bundledDir, "bundled")) merged.set(name, def);
 	for (const [name, def] of readDirAgents(globalDir, "global")) merged.set(name, def);
 	for (const [name, def] of readDirAgents(projectDir, "project")) merged.set(name, def);
 	return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function resolveAgent(cwd: string, name: string | undefined, opts?: { projectDir?: string; globalDir?: string }): AgentDefinition | undefined {
+export function resolveAgent(cwd: string, name: string | undefined, opts?: { projectDir?: string; globalDir?: string; bundledDir?: string }): AgentDefinition | undefined {
 	if (!name) return undefined;
 	return discoverAgents(cwd, opts).find((def) => def.name === name);
 }
 
 /**
  * Effective --tools allowlist for the child. Extension tools are covered by
- * --tools as well, so child tools must be listed explicitly.
+ * --tools as well, so child tools must be listed explicitly; spawning agents
+ * additionally get the parent-side tools back.
  */
-export function buildChildToolAllowlist(def: AgentDefinition | undefined, override?: string): string | undefined {
+export function buildChildToolAllowlist(
+	def: AgentDefinition | undefined,
+	override?: string,
+	opts: { spawning?: boolean } = {},
+): string | undefined {
 	const list = (override ?? def?.tools ?? "")
 		.split(",")
 		.map((t) => t.trim())
 		.filter(Boolean);
-	if (list.length === 0) return undefined;
+	if (list.length === 0) {
+		// No allowlist: nothing is restricted. Spawning is controlled by the
+		// --exclude-tools path, so do NOT synthesize a --tools list here —
+		// that would strip all native tools from a spawning child.
+		return undefined;
+	}
+	if (opts.spawning) list.push(...PARENT_TOOLS.split(","));
 	const withChildTools = [...new Set([...list, "agent_done", "agent_ping"])];
 	return withChildTools.join(",");
 }

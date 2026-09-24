@@ -18,7 +18,7 @@ steer-сообщением, resume и interrupt. Только tmux; бэкенд
 | Инструмент | Назначение | Параметры (typebox) |
 |---|---|---|
 | `spawn_agent` | Спавн подагента (async, мгновенный возврат) | `task` (req), `name?`, `agent?`, `fork?`, `interactive?`, `model?`, `thinking?`, `systemPrompt?`, `skills?`, `tools?`, `cwd?` |
-| `agents_list` | Определения агентов (`.pi/agents/*.md` + `~/.pi/agent/agents/*.md`) | — |
+| `agents_list` | Определения агентов (`.pi/agents/*.md` + `~/.pi/agent/agents/*.md` + bundled planner/scout/worker/reviewer) | — |
 | `interrupt_agent` | Отмена текущего хода (Escape в поверхность) | `id?` / `name?` (мин. один) |
 | `resume_agent` | Возобновление завершённой сессии подагента | `sessionPath` (req), `name?`, `message?`, `autoExit?` |
 
@@ -34,11 +34,17 @@ promptSnippet/guidelines: не опрашивать статус (polling зап
 
 Дочерний режим определяется env `PI_SUBAGENTS_CHILD_ID`. Родительское расширение в
 детях НЕ регистрирует ничего (ранний выход по тому же env) — защита от рекурсивного
-спавна и конфликта имён.
+спавна и конфликта имён. Исключение — opt-in `spawning: true` в определении агента:
+launch-скрипт грузит у ребёнка и `index.ts` (второй `-e`), ставит env
+`PI_SUBAGENTS_SPAWNING=1` и не исключает parent-тулзы — такой агент может спавнить
+внуков (steer-результаты внуков приходят в сессию агента, а не в корневой родитель).
 
-### Команда (пользователь)
+### Команды (пользователь)
 `/spawn [agent] <task...>` — ручной спавн; при пустых аргументах — интерактивный
 запрос (ui.input/select по agent-definitions).
+v2: `/iterate [agent] <task...>` — спавн с fork текущей сессии (ребёнок видит весь
+контекст разговора); `/plan <task...>` — фазовый workflow planner→worker→reviewer
+(см. раздел v2); `/subagents doctor` — self-check окружения (отчёт сообщением).
 
 ## 3. Архитектура
 
@@ -177,12 +183,14 @@ session_shutdown. Parent classifies: `starting` (нет снапшота), `acti
 ### Виджет
 `ctx.ui.setWidget("subagents", lines | undefined)`:
 ```
-╭─ Subagents ───────────────────── 2 running ─╮
-│ 00:23  Scout: Auth (scout)     active · bash │
-│ 01:45  Worker (worker)             waiting   │
-╰──────────────────────────────────────────────╯
+╭─ Subagents — 2 running ─────────────────────────────────╮
+│ 00:23  Scout: Auth (scout)  active · bash · 12.3k tok   │
+│ 01:45  Worker (worker)       waiting · 45.1k tok $0.01 │
+╰──────────────────────────────────────────────────────────╯
 ```
-Обновление на тике; `undefined` при пусто. Кэш ключить по ширине (правило pi-tui).
+Обновление на тике; `undefined` при пусто. v2: счётчик токенов/стоимости —
+инкрементальный parse usage-записей из jsonl сессии ребёнка (offset, только хвост),
+каждый тик; итог дублируется в steer-карточке (финальный read от 0).
 
 ## 4. Конфигурация
 
@@ -205,25 +213,62 @@ env. env-оверрайды: `PI_SUBAGENTS_DISABLED=1`, `PI_SUBAGENTS_HANDOFF=as
 ```
 - `tmux.handoff`: `"ask" | "auto" | "never"` — поведение при старте pi вне tmux.
 - `tmux.sessionName` / `sessionCommand` — имя сессии и команда нового pi при handoff
-  (дефолт `pi -c` — продолжить последнюю сессию cwd).
+  (дефолт `pi -c` — продолжить последнюю сессию cwd; в v2 handoff использует явный
+  `pi --session <файл текущей сессии>`, если файл существует).
 - `child.extensions` — `"none"` (дефолт, `--no-extensions` у ребёнка) / `"all"`.
-- shellReadyMs — фиксированная задержка до send-а launch-команды (детерминированно,
-  проверяемо; «умная» готовность — в v2).
+- `tmux.shellReadyMs` — v2: МАКСИМАЛЬНОЕ ожидание готовности shell перед send-ом
+  launch-команды (умный shell-ready: capture-pane-поллинг 125ms до маркера промпта —
+  последний непустой символ из `$ > ❯ # %`; по таймауту — send всё равно). 0 —
+  ждать не вообще.
 
-## 5. Agent-definitions (подмножество, v1)
+## 5. Agent-definitions
 
-`.pi/agents/*.md` (проект) > `~/.pi/agent/agents/*.md` (глобально). Тело файла —
-системный промпт/роль; frontmatter:
+`.pi/agents/*.md` (проект) > `~/.pi/agent/agents/*.md` (глобально) >
+`extensions/subagents/agents/*.md` (bundled: planner/scout/worker/reviewer). Тело
+файла — системный промпт/роль; frontmatter:
 `name, description, model, thinking, tools (allowlist), skills, session-mode
 (standalone|lineage|fork), auto-exit (bool), interactive (bool, по умолчанию
-¬auto-exit), cwd (rel/abs)`.
+¬auto-exit), cwd (rel/abs), deny-tools (список через запятую), spawning (bool)`.
 `auto-exit`: после нормального конца хода child сам пишет .exit и выходит;
 ручной ввод в панели отключает auto-exit (забирает управление). Первый
 task-промпт тоже приходит как input-событие, но до `agent_start` — поэтому он
 auto-exit НЕ отключает (guard `sawAgentStart`; без него auto-exit не работал
 никогда — баг, пойманный в интеграции).
-Детям всегда `--exclude-tools` родительские spawn/agents_list/interrupt/resume
-(рекурсия запрещена в v1).
+`deny-tools`: добавляется к `--exclude-tools` (для всех агентов, включая spawning).
+`spawning: true`: агенту разрешён рекурсивный спавн — у child грузится и parent-
+расширение, parent-тулзы не исключаются, env PI_SUBAGENTS_SPAWNING=1. Без флага
+детям всегда `--exclude-tools` родительские spawn/agents_list/interrupt/resume
+(рекурсия запрещена по умолчанию).
+
+## 5a. v2-добавления (2026-09-24)
+
+1. **Токены/стоимость** — см. раздел «Виджет»; в steer-details: `tokens {input,
+   output, total}` + `costUsd` (финальный read), в expanded-рендере — строка Tokens.
+2. **`/subagents doctor`** — self-check: tmux-бинарник/версия, в tmux ли pi
+   (TMUX_PANE), сервер (list-panes), pi CLI --version, disabled-флаг, конфиг
+   (источники + эффективные значения), agent-definitions (счёт по source),
+   родительский session-файл, child-mode/guard-env. Отчёт — custom-сообщение
+   `subagents.report` (display, без triggerTurn) + ui.notify со счётчиком проблем.
+   Чистая часть (`renderDoctorReport`) — unit-тестируема.
+3. **Умный shell-ready** — `waitForShellReady(backend, surface, timeoutMs, pollMs=125)`:
+   capture-pane(-6 строк) → последний непустой ряд; если заканчивается на `$ > ❯ # %` —
+   shell готов. По таймауту (timeoutMs = tmux.shellReadyMs) send всё равно (best-effort;
+   краш покрывается sentinel/crash-путями).
+4. **`/iterate [agent] <task...>`** — `spawnAgentInternal({fork: true, ...})`: ребёнок
+   стартует с копией ветви текущей сессии (полный контекст разговора). Без agent-definitions
+   — дефолтный ITERATE_PROMPT (системный промпт «работаешь на форке, примени задачу,
+   отчитайся»). Окно называется `iterate`.
+5. **`/plan <task...>`** — фазовый workflow: (1) расширение сразу спавнит planner
+   (bundled/planner или fallback-промпт) с задачей «Plan (do NOT implement)»; (2)
+   шлёт родителю steer-инструкцию (customType subagents.report, triggerTurn) — она
+   заставляет модель запускать фазы 2/3 (worker с планом) и 3/3 (reviewer) по мере
+   прихода steer-результатов, а затем давать финальную сводку. Окна именованы
+   `plan: planner/worker/reviewer`. Фазы исполняет МОДЕЛЬ (не код) — осознанный
+   выбор: цепочки async-результатов в коде расширения не выразимы без polling.
+6. **Bundled-агенты** — 4 файла в `extensions/subagents/agents/`: planner (read-only,
+   план ≤ 60 строк), scout (read-only разведка с file:line), worker (реализация плана,
+   тесты, без коммитов), reviewer (ревью diff, вердикт). Все: standalone + auto-exit.
+7. **spawning / deny-tools** — см. раздел 5.
 
 ## 6. Обработка ошибок
 - tmux/бэкенд недоступен → spawn возвращает error-текст с инструкцией (запустить
@@ -262,8 +307,6 @@ auto-exit НЕ отключает (guard `sawAgentStart`; без него auto-e
 - Параллельные spawn в один тик: детерминированные файлы исключают гонки;
   tmux-команды синхронные (execFileSync в runner) — порядок гарантирован.
 
-## 9. Вне v1 (бэклог)
-/iterate (форк текущей сессии), /plan (фазовый workflow + тайтлы окон), bundled-агенты,
-стоимость/токены в виджете (считать из usage записей jsonl), doctor-команда,
-«умный» shell-ready (capture-pane-маркер промпта), deny-tools frontmatter,
-spawning-флаг для рекурсии, detached-хост-сессия как альтернатива handoff.
+## 10. Вне v2 (бэклог)
+detached-хост-сессия как альтернатива handoff; другие бэкенды поверх MuxBackend;
+повторные stall-пинги; /plan-фаза «test». 

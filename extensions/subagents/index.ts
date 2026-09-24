@@ -14,7 +14,7 @@
  * nothing in child sessions (PI_SUBAGENTS_CHILD_ID guard) — recursive spawns
  * are impossible by construction.
  */
-import { spawn as spawnProcess } from "node:child_process";
+import { execFile, spawn as spawnProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -30,17 +30,42 @@ import {
 	RunningSubagent,
 	SessionMode,
 	SubagentResultDetails,
+	SurfaceRef,
 } from "./types.ts";
-import { isDisabled, loadConfig, persistHandoffPreference, SubagentsConfig } from "./config.ts";
+import { globalConfigPath, isDisabled, loadConfig, persistHandoffPreference, projectConfigPath, SubagentsConfig } from "./config.ts";
 import { createTmuxBackend } from "./tmux-backend.ts";
-import { buildChildToolAllowlist, discoverAgents, resolveAgent, resolveChildCwd, resolveSessionMode } from "./agents.ts";
-import { createChildSession, lastAssistantText, sessionsRootFor } from "./session.ts";
+import {
+	PARENT_TOOLS,
+	buildChildToolAllowlist,
+	discoverAgents,
+	resolveAgent,
+	resolveChildCwd,
+	resolveSessionMode,
+} from "./agents.ts";
+import { EMPTY_CHILD_USAGE, createChildSession, lastAssistantText, readChildUsage, sessionsRootFor } from "./session.ts";
 
 const CHILD_SCRIPT = fileURLToPath(new URL("./child.ts", import.meta.url));
+const PARENT_SCRIPT = fileURLToPath(new URL("./index.ts", import.meta.url));
 const WIDGET_KEY = "subagents";
 const RESULT_CUSTOM_TYPE = "subagents.result";
+const REPORT_CUSTOM_TYPE = "subagents.report";
 const HANDOFF_GUARD_ENV = "PI_SUBAGENTS_TMUX_HANDOFF";
 const EXIT_SENTINEL_RE = /__SUBAGENT_EXIT_(\d+)__/;
+
+/** Default system prompt for /iterate without an explicit agent definition. */
+const ITERATE_PROMPT =
+	"You are an iteration sub-agent running in a FORKED copy of the parent session: the full parent conversation is your context. " +
+	"Apply the task below on top of that context. Keep changes focused on the task, verify with tests when possible, " +
+	"and finish with a short report: what changed, what was verified, what was left undone (if anything).";
+
+const PHASE_FALLBACK_PROMPTS: Record<"planner" | "worker" | "reviewer", string> = {
+	planner:
+		"You are a planning sub-agent. Do not implement: explore the codebase read-only and finish with a concise plan (goal, ordered steps with file paths, risks, verification commands).",
+	worker:
+		"You are an implementation sub-agent. Execute the given plan precisely with minimal changes, run the relevant tests, do not commit; finish with a report of changes and verification.",
+	reviewer:
+		"You are a code review sub-agent. Review the recent changes (git diff) for correctness, edge cases and test coverage; run available checks; finish with a verdict, issues by severity and notes. Do not fix anything yourself.",
+};
 
 // ── module state (single pi process = one parent session at a time) ──
 
@@ -107,6 +132,60 @@ function formatClock(startTime: number): string {
 	return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function formatTokens(n: number): string {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+	return String(n);
+}
+
+function formatUsage(r: RunningSubagent): string | undefined {
+	const u = r.usage;
+	if (!u || (u.total === 0 && u.cost === 0)) return undefined;
+	const cost = u.cost > 0 ? ` $${u.cost < 0.01 ? u.cost.toFixed(4) : u.cost.toFixed(2)}` : "";
+	return ` · ${formatTokens(u.total)} tok${cost}`;
+}
+
+function execFileAsync(cmd: string, args: string[], timeoutMs = 3000): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
+	return new Promise((res) => {
+		execFile(cmd, args, { timeout: timeoutMs }, (err, stdout) => {
+			if (err) res({ ok: false, error: (err as Error).message.split("\n")[0] });
+			else res({ ok: true, stdout: (stdout as string).trim() });
+		});
+	});
+}
+
+/** Last non-empty line of a shell pane ending with a prompt marker. */
+const PROMPT_TAIL_RE = /[$>❯#%]\s*$/;
+
+/**
+ * Smart shell-ready: poll capture-pane until the pane's last non-empty line
+ * looks like a prompt (last char is one of $ > ❯ # %). Replaces a blind
+ * fixed delay; `timeoutMs` is the MAX wait — on timeout the caller proceeds
+ * anyway (launch is best-effort, the sentinel/crash path covers the rest).
+ * Returns true when a prompt marker was seen.
+ */
+export async function waitForShellReady(
+	backend: MuxBackend,
+	surface: SurfaceRef,
+	timeoutMs: number,
+	pollMs = 125,
+): Promise<boolean> {
+	if (timeoutMs <= 0) return false;
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		try {
+			const tail = await backend.captureTail(surface, 6);
+			const lines = tail.split("\n").map((l) => l.replace(/\s+$/, "")).filter((l) => l.length > 0);
+			const last = lines[lines.length - 1] ?? "";
+			if (last && PROMPT_TAIL_RE.test(last)) return true;
+		} catch {
+			// Pane not capturable yet: keep waiting.
+		}
+		if (Date.now() >= deadline) return false;
+		await sleep(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+	}
+}
+
 function readJsonSafe<T>(file: string): T | undefined {
 	try {
 		if (!existsSync(file)) return undefined;
@@ -162,15 +241,16 @@ function widgetLines(): string[] | undefined {
 	const list = [...running.values()].filter((r) => !r.finished);
 	if (list.length === 0) return undefined;
 	list.sort((a, b) => a.startTime - b.startTime);
-	const width = 52;
+	const width = 64;
 	const title = ` Subagents — ${list.length} running `;
 	const top = `╭─${title}${"─".repeat(Math.max(1, width - title.length - 1))}╮`;
 	const lines = [top];
 	for (const r of list) {
 		const label = `${r.name}${r.agent ? ` (${r.agent})` : ""}`;
 		const state = activityLabel(r);
+		const usage = formatUsage(r) ?? "";
 		const clock = formatClock(r.startTime);
-		const row = ` ${clock}  ${truncateToWidth(label, Math.max(8, width - 14 - state.length - 2))}  ${state}`;
+		const row = ` ${clock}  ${truncateToWidth(label, Math.max(8, width - 14 - state.length - usage.length - 2))}  ${state}${usage}`;
 		lines.push(truncateToWidth(row, width));
 	}
 	lines.push(`╰${"─".repeat(width - 2)}╯`);
@@ -208,6 +288,9 @@ async function finishSubagent(r: RunningSubagent, sidecar: ExitSidecar | { type:
 	const lines = readLinesSafe(r.sessionFile);
 	const summary = lastAssistantText(lines);
 	const errorMessage = sidecar.type === "error" ? sidecar.errorMessage : undefined;
+	// Final usage read (from offset 0) — covers the last turn written between
+	// the last watch tick and the exit sidecar.
+	const usage = readChildUsage(r.sessionFile, 0).usage;
 
 	let keepSurface = false;
 	if (status === "error" && config?.cleanup.keepOnError) keepSurface = true;
@@ -230,6 +313,8 @@ async function finishSubagent(r: RunningSubagent, sidecar: ExitSidecar | { type:
 		elapsedMs: Date.now() - r.startTime,
 		sessionFile: r.sessionFile,
 		...(summary ? { summary } : {}),
+		...(usage.total > 0 ? { tokens: { input: usage.input, output: usage.output, total: usage.total } } : {}),
+		...(usage.cost > 0 ? { costUsd: usage.cost } : {}),
 		...(status === "ping" ? { ping: { message: (sidecar as { message?: string }).message ?? "" } } : {}),
 		...(status === "error" ? { errorMessage: errorMessage ?? `Surface lost via ${via}; no completion sidecar was written.` } : {}),
 	};
@@ -275,6 +360,10 @@ export function classifyPhase(r: RunningSubagent, now: number, staleMs: number):
 	return wasBusy ? "active" : "waiting";
 }
 
+/**
+ * Stall notification policy: "first" (never notified yet), "reping" (stall
+ * persists and the reping interval elapsed), "none".
+ */
 async function watchTick(): Promise<void> {
 	tickCount += 1;
 	if (tickCount % 30 === 0) refreshConfig();
@@ -299,6 +388,22 @@ async function watchTick(): Promise<void> {
 		const snap = readSnapshot(r.activityFile, r.id);
 		if (snap) r.lastSnapshot = snap;
 
+		// Incremental token usage/cost from the child session file (tail only).
+		const usageDelta = readChildUsage(r.sessionFile, r.usage?.offset ?? 0);
+		if (usageDelta.usage.total > 0 || usageDelta.usage.cost > 0) {
+			const prev = r.usage ?? EMPTY_CHILD_USAGE;
+			r.usage = {
+				input: prev.input + usageDelta.usage.input,
+				output: prev.output + usageDelta.usage.output,
+				cacheRead: prev.cacheRead + usageDelta.usage.cacheRead,
+				total: prev.total + usageDelta.usage.total,
+				cost: prev.cost + usageDelta.usage.cost,
+				offset: usageDelta.offset,
+			};
+		} else if (r.usage) {
+			r.usage.offset = usageDelta.offset;
+		}
+
 		const sidecar = readExitSidecar(r.sessionFile);
 		if (sidecar) {
 			void finishSubagent(r, sidecar, "sidecar").catch(() => {});
@@ -312,15 +417,13 @@ async function watchTick(): Promise<void> {
 			continue;
 		}
 
-		const prevPhase = r.phase;
 		r.phase = classifyPhase(r, now, config.watchdog.snapshotStaleMs);
 
-		if (r.phase === "stalled" && prevPhase !== "stalled" && !r.stallPingSent && !r.interactive) {
+		if (r.phase === "stalled" && !r.stallPingSent && !r.interactive) {
 			r.stallPingSent = true;
 			latestCtx?.ui.notify(`subagents: ${r.name} looks stalled (no activity snapshot for ${Math.round(config.watchdog.snapshotStaleMs / 1000)}s)`, "warning");
 		}
 		if (r.phase !== "stalled" && r.stallPingSent) {
-			// Recovered: quiet (widget only), allow a fresh ping if it stalls again.
 			r.stallPingSent = false;
 		}
 
@@ -407,12 +510,21 @@ export function buildLaunchScript(opts: {
 	// (trust dialogs, interactive prompts) and are a recursion surface. Switch
 	// to "all" via config child.extensions when the sub-agent needs them.
 	if (opts.childExtensions !== "all") parts.push("--no-extensions");
+	// Opt-in recursive spawning: the child loads the parent extension back and
+	// keeps the spawning tools (guard env lets the extension register them).
+	const spawning = def?.spawning === true;
+	if (spawning) parts.push("-e", PARENT_SCRIPT);
 	if (model) parts.push("--model", model);
-	const allowlist = buildChildToolAllowlist(def, params.tools);
+	const allowlist = buildChildToolAllowlist(def, params.tools, { spawning });
 	if (allowlist) parts.push("--tools", allowlist);
-	// The child must never see parent-side spawning tools (defense in depth;
-	// the parent extension itself is inactive in children).
-	parts.push("--exclude-tools", "spawn_agent,agents_list,interrupt_agent,resume_agent");
+	// The child must never see parent-side spawning tools unless its agent
+	// definition opts in (defense in depth; deny-tools always applies).
+	const deny = (def?.denyTools ?? "")
+		.split(",")
+		.map((t) => t.trim())
+		.filter(Boolean);
+	const excluded = spawning ? deny : [...PARENT_TOOLS.split(","), ...deny];
+	if (excluded.length > 0) parts.push("--exclude-tools", excluded.join(","));
 	if (systemPromptFile) parts.push("--append-system-prompt", systemPromptFile);
 	parts.push("--");
 	for (const skill of skills) parts.push(`/skill:${skill}`);
@@ -425,6 +537,7 @@ export function buildLaunchScript(opts: {
 		`PI_SUBAGENTS_ACTIVITY_FILE=${quote(r.activityFile)}`,
 		`PI_SUBAGENTS_SESSION_FILE=${quote(r.sessionFile)}`,
 		`PI_SUBAGENTS_AUTO_EXIT=${autoExit ? "1" : "0"}`,
+		...(spawning ? ["PI_SUBAGENTS_SPAWNING=1"] : []),
 	].join(" ");
 
 	return [
@@ -560,7 +673,8 @@ export async function spawnAgentInternal(params: SpawnParams, pi: ExtensionAPI):
 	writeFileSync(r.launchScript, script, "utf8");
 
 	try {
-		await sleep(config.tmux.shellReadyMs);
+		// Smart shell-ready: wait for a prompt marker (max shellReadyMs), then send.
+		await waitForShellReady(ensureBackend(), surface, config.tmux.shellReadyMs);
 		await ensureBackend().sendCommand(surface, r.launchScript);
 	} catch (err) {
 		running.delete(id);
@@ -635,6 +749,100 @@ async function maybeHandoff(ctx: ExtensionContext): Promise<void> {
 	}
 }
 
+// ── /subagents doctor ──
+
+export interface DoctorCheck {
+	name: string;
+	ok: boolean;
+	warn?: boolean;
+	detail?: string;
+}
+
+export function renderDoctorReport(checks: DoctorCheck[]): string {
+	return checks
+		.map((c) => {
+			const mark = c.ok ? "✓" : c.warn ? "!" : "✗";
+			return `${mark} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`;
+		})
+		.join("\n");
+}
+
+export async function collectDoctor(opts: { cwd?: string } = {}): Promise<DoctorCheck[]> {
+	const checks: DoctorCheck[] = [];
+	const env = process.env;
+
+	const tmuxV = await execFileAsync("tmux", ["-V"]);
+	checks.push({ name: "tmux binary", ok: tmuxV.ok, detail: tmuxV.ok ? tmuxV.stdout : tmuxV.error });
+
+	const inTmux = !!env.TMUX;
+	checks.push({
+		name: "pi inside tmux",
+		ok: inTmux,
+		warn: !inTmux,
+		detail: inTmux ? `pane ${env.TMUX_PANE ?? "?"}` : "not in tmux — spawn will fail until handoff",
+	});
+	if (inTmux) {
+		const list = await execFileAsync("tmux", ["list-panes", "-s", "-F", "#{pane_id}"]);
+		checks.push({
+			name: "tmux server",
+			ok: list.ok,
+			detail: list.ok ? `${list.stdout.split("\n").filter(Boolean).length} panes` : list.error,
+		});
+	}
+
+	const piV = await execFileAsync("pi", ["--version"], 5000);
+	checks.push({ name: "pi CLI", ok: piV.ok, detail: piV.ok ? piV.stdout : "not found in PATH" });
+
+	const disabled = isDisabled(env);
+	checks.push({
+		name: "disabled flag",
+		ok: !disabled,
+		warn: disabled,
+		detail: disabled ? "PI_SUBAGENTS_DISABLED=1 or --subagents-disabled" : "enabled",
+	});
+
+	const ctx = latestCtx;
+	const cwd = opts.cwd ?? ctx?.cwd;
+	const config = cwd ? configRef ?? loadConfig({ cwd, projectTrusted: ctx?.isProjectTrusted() ?? false }) : undefined;
+	const sources = [globalConfigPath(), cwd ? projectConfigPath(cwd) : undefined].filter(
+		(p): p is string => typeof p === "string" && existsSync(p),
+	);
+	checks.push({
+		name: "config",
+		ok: !!config,
+		detail: config
+			? `${sources.length ? sources.join(" + ") : "defaults"} · maxConcurrent=${config.limits.maxConcurrent} · handoff=${config.tmux.handoff} · child.extensions=${config.child.extensions} · shellReadyMs=${config.tmux.shellReadyMs}`
+			: "not loaded yet",
+	});
+
+	const defs = cwd ? discoverAgents(cwd) : [];
+	const bySource = new Map<string, number>();
+	for (const d of defs) bySource.set(d.source, (bySource.get(d.source) ?? 0) + 1);
+	checks.push({
+		name: "agent definitions",
+		ok: defs.length > 0,
+		warn: defs.length === 0,
+		detail: [...bySource.entries()].map(([s, n]) => `${n} ${s}`).join(", ") || "none",
+	});
+
+	const sessionFile = ctx?.sessionManager.getSessionFile();
+	checks.push({ name: "parent session file", ok: !!sessionFile, detail: sessionFile ?? "not available" });
+
+	if (env.PI_SUBAGENTS_CHILD_ID) {
+		checks.push({
+			name: "child mode",
+			ok: true,
+			warn: true,
+			detail: `this pi IS a sub-agent (id ${env.PI_SUBAGENTS_CHILD_ID})${env.PI_SUBAGENTS_SPAWNING === "1" ? ", spawning allowed" : ""}`,
+		});
+	}
+	if (env[HANDOFF_GUARD_ENV]) {
+		checks.push({ name: "handoff guard", ok: true, detail: "PI_SUBAGENTS_TMUX_HANDOFF=1 (started by a handoff)" });
+	}
+
+	return checks;
+}
+
 // ── extension entrypoint ──
 
 let piRef: ExtensionAPI | undefined;
@@ -642,8 +850,10 @@ let piRef: ExtensionAPI | undefined;
 export default function subagentsExtension(pi: ExtensionAPI): void {
 	piRef = pi;
 
-	// Child sessions never get parent tools (recursion guard).
-	if (process.env.PI_SUBAGENTS_CHILD_ID) return;
+	// Child sessions never get parent tools (recursion guard) — unless their
+	// agent definition opted into recursive spawning (PI_SUBAGENTS_SPAWNING=1,
+	// set by the launch script for `spawning: true` agents).
+	if (process.env.PI_SUBAGENTS_CHILD_ID && process.env.PI_SUBAGENTS_SPAWNING !== "1") return;
 
 	pi.registerFlag("subagents-disabled", { description: "Disable the subagents extension for this run.", type: "boolean", default: false });
 
@@ -732,7 +942,7 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 		name: "agents_list",
 		label: "agents_list",
 		description:
-			"List available sub-agent definitions (project .pi/agents/*.md and global ~/.pi/agent/agents/*.md) with their defaults. Read-only discovery tool — call it before spawn_agent when you are unsure which agent fits.",
+			"List available sub-agent definitions (project .pi/agents/*.md, global ~/.pi/agent/agents/*.md, and bundled planner/scout/worker/reviewer) with their defaults. Read-only discovery tool — call it before spawn_agent when you are unsure which agent fits.",
 		parameters: Type.Object({}),
 		async execute() {
 			const ctx = latestCtx;
@@ -744,11 +954,12 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 				};
 			}
 			const lines = defs.map((d) => {
-				const bits = [d.name, d.source === "project" ? "project" : "global"];
+				const bits = [d.name, d.source];
 				if (d.model) bits.push(`model: ${d.model}`);
 				if (d.thinking) bits.push(`thinking: ${d.thinking}`);
 				if (d.sessionMode !== "standalone") bits.push(`session-mode: ${d.sessionMode}`);
 				if (d.autoExit) bits.push("auto-exit");
+				if (d.spawning) bits.push("spawning");
 				const desc = d.description ? ` — ${d.description}` : "";
 				return `- ${bits.join(" · ")}${desc}`;
 			});
@@ -875,7 +1086,7 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 			writeFileSync(r.launchScript, script, "utf8");
 
 			try {
-				await sleep(configRef?.tmux.shellReadyMs ?? 700);
+				await waitForShellReady(ensureBackend(), surface, configRef?.tmux.shellReadyMs ?? 700);
 				await ensureBackend().sendCommand(surface, r.launchScript);
 			} catch (err) {
 				running.delete(id);
@@ -935,6 +1146,110 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	pi.registerCommand("subagents", {
+		description: "Subagents utilities: /subagents doctor (environment self-check)",
+		async handler(args, ctx) {
+			const cmd = (args ?? "").trim().split(/\s+/)[0];
+			if (!cmd || cmd === "help") {
+				ctx.ui.notify("subagents: usage: /subagents doctor", "info");
+				return;
+			}
+			if (cmd !== "doctor") {
+				ctx.ui.notify(`subagents: unknown sub-command "${cmd}" (available: doctor)`, "error");
+				return;
+			}
+			const checks = await collectDoctor();
+			const failed = checks.filter((c) => !c.ok).length;
+			piRef?.sendMessage({
+				customType: REPORT_CUSTOM_TYPE,
+				content: `subagents doctor\n${renderDoctorReport(checks)}`,
+				display: true,
+			});
+			ctx.ui.notify(failed === 0 ? "subagents: doctor — all checks passed" : `subagents: doctor — ${failed} problem(s)`, failed === 0 ? "info" : "warning");
+		},
+	});
+
+	pi.registerCommand("iterate", {
+		description: "Spawn a sub-agent with a FORK of the current session (full conversation context): /iterate [agent] <task...>",
+		async handler(args, ctx) {
+			const trimmed = (args ?? "").trim();
+			if (!trimmed) {
+				ctx.ui.notify("subagents: usage: /iterate [agent] <task...>", "info");
+				return;
+			}
+			let agent: string | undefined;
+			let task = trimmed;
+			const firstSpace = trimmed.search(/\s/);
+			if (firstSpace > 0) {
+				const first = trimmed.slice(0, firstSpace).trim();
+				const rest = trimmed.slice(firstSpace + 1).trim();
+				if (first && rest && discoverAgents(ctx.cwd).some((d) => d.name === first)) {
+					agent = first;
+					task = rest;
+				}
+			}
+			const outcome = await spawnAgentInternal({ task, agent, fork: true, name: "iterate", systemPrompt: ITERATE_PROMPT }, pi);
+			if (outcome.ok) {
+				ctx.ui.notify(`subagents: iterate spawned "${outcome.name}" (pane ${outcome.surface}) — it sees the full conversation`, "info");
+			} else {
+				ctx.ui.notify(`subagents: ${outcome.error}`, "error");
+			}
+		},
+	});
+
+	pi.registerCommand("plan", {
+		description: "Phased sub-agent workflow (planner → worker → reviewer): /plan <task...>",
+		async handler(args, ctx) {
+			const task = (args ?? "").trim();
+			if (!task) {
+				ctx.ui.notify("subagents: usage: /plan <task...>", "info");
+				return;
+			}
+			const phase = (role: "planner" | "worker" | "reviewer") => ({
+				agent: resolveAgent(ctx.cwd, role) ? role : undefined,
+				hasDef: !!resolveAgent(ctx.cwd, role),
+			});
+			const p1 = phase("planner");
+			const outcome = await spawnAgentInternal(
+				{
+					task: `Plan (do NOT implement): ${task}`,
+					name: "plan: planner",
+					agent: p1.agent,
+					systemPrompt: p1.hasDef ? undefined : PHASE_FALLBACK_PROMPTS.planner,
+				},
+				pi,
+			);
+			if (!outcome.ok) {
+				ctx.ui.notify(`subagents: /plan failed at phase 1 (planner): ${outcome.error}`, "error");
+				return;
+			}
+			const p2 = phase("worker");
+			const p3 = phase("reviewer");
+			const instruction = [
+				"Subagents /plan — phased workflow started. Results of each phase arrive automatically as steer messages; do not poll.",
+				`Task: ${task}`,
+				`Phase 1/3 (planner) is running (pane ${outcome.surface}).`,
+				`When the planner result arrives, start phase 2/3 with spawn_agent:`,
+				`  name: "plan: worker"${p2.agent ? `\n  agent: "${p2.agent}"` : ""}`,
+				`  task: "Implement the plan below for the task: «${task}».\n\nPlan:\n<paste the planner's full summary verbatim here>"`,
+				`When the worker result arrives, start phase 3/3 with spawn_agent:`,
+				`  name: "plan: reviewer"${p3.agent ? `\n  agent: "${p3.agent}"` : ""}`,
+				`  task: "Review the changes made for the task: «${task}». Run the relevant tests if available; report the verdict and remaining risks."`,
+				"When the reviewer result arrives, give the user a final summary: what was planned, what was done, the review verdict, and remaining risks.",
+			].join("\n");
+			pi.sendMessage(
+				{
+					customType: REPORT_CUSTOM_TYPE,
+					content: instruction,
+					display: true,
+					details: { plan: true, task },
+				},
+				{ triggerTurn: true, deliverAs: "steer" },
+			);
+			ctx.ui.notify(`subagents: /plan started — planner running (pane ${outcome.surface})`, "info");
+		},
+	});
+
 	pi.registerMessageRenderer(RESULT_CUSTOM_TYPE, (message, { expanded }, theme) => {
 		const d = message.details as SubagentResultDetails | undefined;
 		if (!d) return new Text(typeof message.content === "string" ? message.content : "", 0, 0);
@@ -960,9 +1275,18 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 			lines.push(...(d.summary ?? d.errorMessage ?? "(no output)").split("\n").map((l) => theme.fg("text", l)));
 		}
 		lines.push("");
+		if (d.tokens) {
+			const cost = typeof d.costUsd === "number" && d.costUsd > 0 ? ` · $${d.costUsd < 0.01 ? d.costUsd.toFixed(4) : d.costUsd.toFixed(2)}` : "";
+			lines.push(theme.fg("dim", `Tokens:   ↑${formatTokens(d.tokens.input)} ↓${formatTokens(d.tokens.output)} (total ${formatTokens(d.tokens.total)})${cost}`));
+		}
 		lines.push(theme.fg("dim", `Session:  ${d.sessionFile}`));
 		lines.push(theme.fg("dim", `Resume:   pi --resume ${d.sessionFile}`));
 		return new Text(lines.join("\n"), 0, 0);
+	});
+
+	pi.registerMessageRenderer(REPORT_CUSTOM_TYPE, (message, _env, theme) => {
+		const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+		return new Text(theme.fg("dim", text), 0, 0);
 	});
 }
 

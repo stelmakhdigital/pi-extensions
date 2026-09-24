@@ -2,7 +2,7 @@
  * Unit tests for the subagents extension.
  * Run: node test/subagents.test.mjs
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, unlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, unlinkSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,7 @@ const agents = jiti("../extensions/subagents/agents.ts");
 const session = jiti("../extensions/subagents/session.ts");
 const { createTmuxBackend } = jiti("../extensions/subagents/tmux-backend.ts");
 const ext = jiti("../extensions/subagents/index.ts");
-const { buildLaunchScript, classifyPhase } = ext;
+const { buildLaunchScript, classifyPhase, waitForShellReady, renderDoctorReport } = ext;
 
 const results = [];
 async function check(name, fn) {
@@ -401,6 +401,140 @@ await check("watchdog: starting/active/waiting/stalled", () => {
 	assert(classifyPhase(r, now, 30_000) === "stalled", "устаревший busy -> stalled");
 	r.lastSnapshot = snap({ ts: now - 60_000 });
 	assert(classifyPhase(r, now, 30_000) === "waiting", "устаревший idle -> waiting (не ложный stall)");
+});
+
+// ── v2: agents — spawning / deny-tools / bundled ──
+
+await check("agents: spawning и deny-tools из frontmatter", () => {
+	const def = agents.parseAgentDefinition(
+		"---\nname: boss\nspawning: true\ndeny-tools: edit, write\n---\nbody\n",
+		"boss",
+		"project",
+		"/x",
+	);
+	assert(def.spawning === true, "spawning: true");
+	assert(def.denyTools === "edit, write", "deny-tools: " + def.denyTools);
+	const off = agents.parseAgentDefinition("---\nname: plain\n---\nb\n", "plain", "project", "/x");
+	assert(off.spawning === false && off.denyTools === undefined, "по умолчанию выключено");
+});
+
+await check("agents: bundled-агенты (реальный каталог) и приоритет project > bundled", () => {
+	const defs = agents.discoverAgents(tmp, { projectDir: join(tmp, "nope1"), globalDir: join(tmp, "nope2"), bundledDir: agents.bundledAgentsDir() });
+	for (const n of ["planner", "scout", "worker", "reviewer"]) {
+		const d = defs.find((x) => x.name === n);
+		assert(d, `bundled ${n} есть`);
+		assert(d.source === "bundled", `source: ${d?.source}`);
+	}
+	const projectDir = join(tmp, "agents-bundled-project");
+	mkdirSync(projectDir, { recursive: true });
+	writeFileSync(join(projectDir, "worker.md"), "---\nname: worker\n---\nproject worker\n");
+	const defs2 = agents.discoverAgents(tmp, { projectDir, globalDir: join(tmp, "nope2"), bundledDir: agents.bundledAgentsDir() });
+	const worker = defs2.find((x) => x.name === "worker");
+	assert(worker.source === "project" && worker.body.includes("project worker"), "project теньюет bundled");
+});
+
+await check("agents: buildChildToolAllowlist со spawning добавляет parent-тулзы", () => {
+	const def = agents.parseAgentDefinition("---\nname: s2\ntools: read, bash\n---\nb\n", "s2", "project", "/x");
+	const withSpawn = agents.buildChildToolAllowlist(def, undefined, { spawning: true });
+	assert(withSpawn.includes("spawn_agent") && withSpawn.includes("resume_agent"), "parent-тулзы: " + withSpawn);
+	assert(withSpawn.includes("agent_done"), "child-тулзы");
+	assert(!agents.PARENT_TOOLS.includes("agent_done"), "PARENT_TOOLS не содержит child-тулзы");
+});
+
+// ── v2: launch script — spawning / deny-tools ──
+
+await check("launch script: spawning=true — parent-ext у child, без exclude spawn-тулз, guard env", () => {
+	const def = agents.parseAgentDefinition(
+		"---\nname: boss\nspawning: true\ndeny-tools: edit\n---\nbody\n",
+		"boss",
+		"project",
+		"/x",
+	);
+	const script = buildLaunchScript({
+		r: makeRunning(),
+		def,
+		params: { task: "x" },
+		childCwd: "/p",
+		model: undefined,
+		childSessionFile: "/s.jsonl",
+		autoExit: true,
+	});
+	assert((script.match(/-e /g) || []).length === 2, "-e child + -e parent: " + (script.match(/-e /g) || []).length);
+	assert(script.includes("PI_SUBAGENTS_SPAWNING=1"), "guard env");
+	assert(script.includes("--exclude-tools edit"), "deny-tools в exclude: " + script);
+	assert(!script.includes("spawn_agent,agents_list"), "parent-тулзы НЕ исключены");
+});
+
+await check("launch script: spawning + allowlist включает spawn-тулзы; deny-tools без spawning суммируется", () => {
+	const def = agents.parseAgentDefinition(
+		"---\nname: boss2\nspawning: true\ntools: read, bash\n---\nb\n",
+		"boss2",
+		"project",
+		"/x",
+	);
+	const script = buildLaunchScript({ r: makeRunning(), def, params: { task: "x" }, childCwd: "/p", model: undefined, childSessionFile: "/s.jsonl", autoExit: true });
+	assert(script.includes("--tools read,bash,spawn_agent,agents_list,interrupt_agent,resume_agent,agent_done,agent_ping"), "allowlist: " + script);
+
+	const denyOnly = agents.parseAgentDefinition("---\nname: d\ndeny-tools: edit\n---\nb\n", "d", "project", "/x");
+	const s2 = buildLaunchScript({ r: makeRunning(), def: denyOnly, params: { task: "x" }, childCwd: "/p", model: undefined, childSessionFile: "/s.jsonl", autoExit: true });
+	assert(s2.includes("--exclude-tools spawn_agent,agents_list,interrupt_agent,resume_agent,edit"), "parent+deny: " + s2);
+	assert((s2.match(/-e /g) || []).length === 1, "без spawning — только -e child: " + (s2.match(/-e /g) || []).length);
+});
+
+// ── v2: readChildUsage (инкрементальный сбор токенов/стоимости) ──
+
+await check("session: readChildUsage — суммирование usage и инкрементальный offset", () => {
+	const f = join(tmp, "usage.jsonl");
+	writeFileSync(
+		f,
+		JSON.stringify({ type: "message", message: { role: "assistant", usage: { input: 100, output: 20, cacheRead: 5, totalTokens: 125, cost: { total: 0.01 } } } }) + "\n",
+	);
+	const r1 = session.readChildUsage(f, 0);
+	assert(r1.usage.total === 125 && r1.usage.input === 100 && Math.abs(r1.usage.cost - 0.01) < 1e-9, "первый read");
+	assert(r1.offset > 0, "offset сместился");
+	const r2 = session.readChildUsage(f, r1.offset);
+	assert(r2.usage.total === 0, "повтор без изменений — пусто");
+	appendFileSync(
+		f,
+		JSON.stringify({ type: "message", message: { role: "assistant", usage: { input: 30, output: 7, totalTokens: 37, cost: { total: 0.002 } } } }) + "\n",
+	);
+	const r3 = session.readChildUsage(f, r2.offset);
+	assert(r3.usage.total === 37 && Math.abs(r3.usage.cost - 0.002) < 1e-9, "дельта: " + JSON.stringify(r3.usage));
+	// Частичная строка не читается до конца записи.
+	appendFileSync(f, '{"type":"message","message":{"role":"assistant","usage":{"input":1');
+	const r4 = session.readChildUsage(f, r3.offset);
+	assert(r4.usage.total === 0, "partial line не учитывается");
+	appendFileSync(f, ',"totalTokens":1}}}\n');
+	const r5 = session.readChildUsage(f, r4.offset);
+	assert(r5.usage.total === 1, "partial line дочитан");
+});
+
+// ── v2: smart shell-ready ──
+
+await check("waitForShellReady: маркер промпта / таймаут / 0=skip", async () => {
+	const seq = ["boot banner", "arkalaust@AORUS:~$"];
+	let i = 0;
+	const be = { captureTail: async () => seq[Math.min(i++, seq.length - 1)] + "\n" };
+	const t0 = Date.now();
+	const ok = await waitForShellReady(be, { kind: "pane", target: "%1" }, 5000, 20);
+	assert(ok === true, "промпт найден");
+	assert(Date.now() - t0 < 4000, "не дожидался полного таймаута");
+	const busy = { captureTail: async () => "still working...\n" };
+	assert((await waitForShellReady(busy, { kind: "pane", target: "%1" }, 200, 20)) === false, "таймаут -> false");
+	assert((await waitForShellReady(be, { kind: "pane", target: "%1" }, 0, 20)) === false, "0 -> skip");
+});
+
+// ── v2: doctor report ──
+
+await check("doctor: renderDoctorReport — маркировки и детали", () => {
+	const rep = renderDoctorReport([
+		{ name: "tmux binary", ok: true, detail: "tmux 3.6" },
+		{ name: "pi inside tmux", ok: false, warn: true, detail: "not in tmux" },
+		{ name: "broken" },
+	]);
+	assert(rep.includes("✓ tmux binary — tmux 3.6"), rep);
+	assert(rep.includes("! pi inside tmux — not in tmux"), rep);
+	assert(rep.includes("✗ broken"), rep);
 });
 
 // ── cleanup ──

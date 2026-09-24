@@ -72,6 +72,8 @@ export interface RunningSubagent {
 	lastSnapshot?: ActivitySnapshot;
 	stallPingSent: boolean;
 	finished: boolean;
+	/** Cumulative child token usage, read incrementally from the session jsonl. */
+	usage?: { input: number; output: number; cacheRead: number; total: number; cost: number; offset: number };
 }
 
 export type ResultStatus = "done" | "ping" | "error";
@@ -86,11 +88,13 @@ export interface SubagentResultDetails {
 	elapsedMs: number;
 	sessionFile: string;
 	summary?: string;
+	tokens?: { input: number; output: number; total: number };
+	costUsd?: number;
 	ping?: { message: string };
 	errorMessage?: string;
 }
 
-/** Frontmatter subset supported in v1 for `.pi/agents/*.md` definitions. */
+/** Frontmatter subset supported for `.pi/agents/*.md` definitions. */
 export interface AgentDefinition {
 	name: string;
 	description?: string;
@@ -103,7 +107,11 @@ export interface AgentDefinition {
 	autoExit: boolean;
 	interactive: boolean;
 	cwd?: string;
-	source: "project" | "global";
+	/** Comma-separated tools to exclude from the child (--exclude-tools). */
+	denyTools?: string;
+	/** Allow this agent to spawn sub-agents itself (recursive spawning, opt-in). */
+	spawning?: boolean;
+	source: "project" | "global" | "bundled";
 	file: string;
 }
 

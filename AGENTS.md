@@ -16,6 +16,13 @@ interrupt_agent/resume_agent); стратегия запуска pane → detach
 инструмента + виджет + agent-definitions + команда /spawn.
 Дизайн v1 (API/форматы проверены по pi 0.87.0) — в **SPEC-subagents.md**.
 
+**v2 (завершено 2026-09-24, live-проверено в tmux; коммит по команде пользователя):**
+tokens/cost ребёнка (виджет + steer-details), `/subagents doctor`, умный shell-ready
+(`tmux.shellReadyMs`), `/iterate [agent] <task>` (fork текущей сессии), `/plan <task>`
+(planner→worker→reviewer, фазы исполняет модель по steer-инструкции), 4 bundled-агента
+(`extensions/subagents/agents/`: planner/scout/worker/reviewer), `spawning: true` и
+`deny-tools` в agent frontmatter. SPEC §5a, README расширения — чек-лист 8–13.
+
 ## Структура
 - `extensions/<name>/index.ts` — расширение (default-export функция от `ExtensionAPI`),
   `README.md` — документация, `package.json` → `pi.extensions[]` — регистрация в пакете.

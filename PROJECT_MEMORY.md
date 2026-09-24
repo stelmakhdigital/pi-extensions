@@ -123,34 +123,50 @@
 
 ## СТАТУС (по итогам сессии — продолжить отсюда)
 
-**Реализация v1 завершена и проверена, включая ручной tmux-интеграционный чек-лист (2026-09-24).**
-Состав: `extensions/subagents/*` (8 файлов), `test/subagents.test.mjs` (unit 24),
-`test/smoke.test.mjs` (секция 9), package.json, README (корневой + расширения).
-Тесты: tsc --strict --noUnusedLocals — 0 ошибок; unit 24/24; smoke 52/52;
-headless-интеграция реальным `pi -p` + ручной tmux-чек-лист: все 7 пунктов пройдены
-(spawn→виджет→steer-карточка, interrupt, resume, maxConcurrent=2, handoff, disabled).
+**v1 завершён и проверен (включая ручной tmux-чек-лист); v2-итерация (пункты 1–7) реализована
+и live-проверена в tmux (2026-09-24).** Коммит v2 — не сделан (ждёт явной команды).
 
-Интеграционные баги, пойманные в чек-листе и исправленные:
-1. Path-дубль в seed-файле ребёнка: `getSessionDir()` возвращает per-cwd подкаталог,
-   а не корень sessions → `sessionsRootFor()` (session.ts) + регрессионный unit-тест.
-2. Auto-exit child не работал: первый task-промпт приходит как input-событие и отключал
-   auto-exit → guard `sawAgentStart` (child.ts).
-3. TOCTOU-гонка лимита: параллельные спавны проходили проверку по устаревшему счётчику
-   (check и running.set разделены await) → синхронное резервирование слота до первого
-   await (spawn и resume; resume теперь тоже учитывается лимитом).
-4. Handoff: `tmux new-session` без `-d` не создавал сессию (клиент пытался перехватить
-   терминал старого pi) → флаг `-d`; продолжение — явный `pi --session <файл>`, а не
-   «последняя в cwd».
-5. Ребёнок блокировался глобальными расширениями (trust-диалоги) → детерминированное
-   окружение child: `--no-extensions` по умолчанию (конфиг `child.extensions` none/all).
+Состав: `extensions/subagents/*` (8 ts + 4 bundled-агента в `agents/`),
+`test/subagents.test.mjs` (unit 32), `test/smoke.test.mjs` (секция 9), package.json,
+README (корневой + расширения). Тесты: tsc --strict --noUnusedLocals — 0 ошибок;
+unit 32/32; smoke 52/52.
+
+### v2 (2026-09-24) — что добавлено
+1. **Токены/стоимость ребёнка**: `readChildUsage` (session.ts) — инкрементальный parse
+   usage-записей из jsonl (offset, только хвост, partial-line-безопасно); в виджете
+   (`· 19.3k tok [· $x]`), в steer-details (`tokens`/`costUsd`) и expanded-рендере.
+2. **`/subagents doctor`** — collectDoctor (async) + renderDoctorReport (чистая, unit):
+   tmux/версия, в tmux ли pi, сервер, pi CLI, disabled, конфиг (источники+значения),
+   агент-definitions по source, session-файл, child-mode/guard-env.
+3. **Умный shell-ready**: `waitForShellReady` (capture-pane 125ms до маркера промпта
+   `$ > ❯ # %`); `tmux.shellReadyMs` теперь = max-ожидание, 0 = не ждать.
+4. **`/iterate [agent] <task>`** — fork текущей сессии (+ITERATE_PROMPT без agent-def);
+   без auto-exit по умолчанию — интерактивный режим (пользователь ведёт панель).
+5. **`/plan <task>`** — spawn planner + steer-инструкция модели на фазы worker/reviewer
+   (окна `plan: <фаза>`); фазы исполняет модель по steer-результатам.
+6. **Bundled-агенты** `extensions/subagents/agents/`: planner, scout, worker, reviewer
+   (приоритет project > global > bundled; agents_list показывает source).
+7. **`spawning: true` / `deny-tools`**: у spawning-агента child грузит и index.ts
+   (второй -e), env PI_SUBAGENTS_SPAWNING=1, parent-тулзы не исключаются (guard в
+   extension: child-mode пропускает только при SPAWNING=1); deny-tools — append к
+   --exclude-tools. Рекурсия проверена live: parent → boss → grandchild, карточка босса
+   со словом внука.
+
+Live-интеграция v2 (tmux 3.6, локальная LLM): doctor — все чек-и зелёные; виджет
+с токенами; /iterate (ребёнок увидел 19.3k ctx); spawning-цепочка (малая модель босса
+нервозно звала agent_done без текста — родитель сам резюмил его, расширение работало
+корректно); /plan — три фазы дошли, hello.txt создан, вердикт ревьюера получен.
+
+### Из v1 (напоминание): пойманные интеграционные баги
+1. Path-дубль seed-файла → `sessionsRootFor()`. 2. Auto-exit отключался первым промптом
+→ `sawAgentStart`. 3. TOCTOU лимита → синхронное резервирование слота. 4. Handoff без `-d`
+не создавал сессию → `-d` + явный `--session <file>`. 5. Глобальные расширения блокировали
+ребёнка → `--no-extensions` по умолчанию (`child.extensions`).
 
 Осталось:
-1. Коммит — только по явной команде; тогда: удалить пакет `git:github.com/HazAT/pi-interactive-subagents`
-   из ~/.pi/agent/settings.json (решение пользователя, этап 4 roadmap) и отметить этап 4
-   в roadmap.md.
-2. v2 (бэклог): /iterate, /plan, bundled-агенты, стоимость/токены в виджете, doctor,
-   «умный» shell-ready, detached-хост-сессия, другие MuxBackend.
+1. Коммит v2 — только по явной команде.
+2. v3 (бэклог, roadmap §«Вне v2»): detached-хост-сессия, другие MuxBackend, повторные
+   stall-пинги, /plan-фаза «test».
 
-Замечания для отладки: артефакты запуска — в `<sessionDir>/artifacts/<childId>/`
-(launch-скрипты, systemprompt, activity-снапшоты); sidecar — `<childSession>.exit`;
-`PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог обработанных событий child-расширения.
+Замечания для отладки: артефакты запуска — в `<sessionDir>/artifacts/<childId>/`;
+sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог событий.
