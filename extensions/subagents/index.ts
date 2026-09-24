@@ -269,14 +269,17 @@ function updateWidget(): void {
 
 // ── completion handling ──
 
-function resultText(status: ResultStatus, name: string, summary?: string, ping?: { message: string }, errorMessage?: string, sessionFile?: string): string {
+export function resultText(status: ResultStatus, name: string, summary?: string, ping?: { message: string }, errorMessage?: string, sessionFile?: string): string {
 	if (status === "ping") {
 		return `Sub-agent "${name}" needs help: ${ping?.message ?? ""}\nSession: ${sessionFile ?? "(unknown)"} — respond with resume_agent (sessionPath + message).`;
 	}
 	if (status === "error") {
 		return `Sub-agent "${name}" FAILED: ${errorMessage ?? "unknown error"}. Session: ${sessionFile ?? "(unknown)"}`;
 	}
-	return `Sub-agent "${name}" finished (done).\nSummary:\n${summary ?? "(no output)"}\nSession: ${sessionFile ?? "(unknown)"}`;
+	if (!summary) {
+		return `Sub-agent "${name}" finished, but did not write a final answer (empty summary). If an answer is needed — resume_agent (sessionPath + message asking for a final report).\nSession: ${sessionFile ?? "(unknown)"}`;
+	}
+	return `Sub-agent "${name}" finished (done).\nSummary:\n${summary}\nSession: ${sessionFile ?? "(unknown)"}`;
 }
 
 async function finishSubagent(r: RunningSubagent, sidecar: ExitSidecar | { type: "error"; exitCode: number; errorMessage?: string }, via: "sidecar" | "crash" | "sentinel"): Promise<void> {
@@ -313,6 +316,7 @@ async function finishSubagent(r: RunningSubagent, sidecar: ExitSidecar | { type:
 		elapsedMs: Date.now() - r.startTime,
 		sessionFile: r.sessionFile,
 		...(summary ? { summary } : {}),
+		...(status === "done" && !summary ? { noSummary: true } : {}),
 		...(usage.total > 0 ? { tokens: { input: usage.input, output: usage.output, total: usage.total } } : {}),
 		...(usage.cost > 0 ? { costUsd: usage.cost } : {}),
 		...(status === "ping" ? { ping: { message: (sidecar as { message?: string }).message ?? "" } } : {}),
@@ -320,7 +324,7 @@ async function finishSubagent(r: RunningSubagent, sidecar: ExitSidecar | { type:
 	};
 
 	latestCtx?.ui.notify(
-		status === "done" ? `subagents: ${r.name} finished` : status === "ping" ? `subagents: ${r.name} pings the parent` : `subagents: ${r.name} failed`,
+		status === "done" ? `subagents: ${r.name} finished${summary ? "" : " (no final answer)"}` : status === "ping" ? `subagents: ${r.name} pings the parent` : `subagents: ${r.name} failed`,
 		status === "done" ? "info" : "warning",
 	);
 
@@ -364,6 +368,19 @@ export function classifyPhase(r: RunningSubagent, now: number, staleMs: number):
  * Stall notification policy: "first" (never notified yet), "reping" (stall
  * persists and the reping interval elapsed), "none".
  */
+export function nextStallAction(
+	r: { stallPingSent: boolean; lastStallPingTs?: number },
+	now: number,
+	config: { watchdog: { stallRepingTicks?: number }; watch: { intervalMs: number } },
+): "first" | "reping" | "none" {
+	if (!r.stallPingSent) return "first";
+	const repingTicks = config.watchdog.stallRepingTicks ?? 0;
+	if (repingTicks <= 0) return "none";
+	// lastStallPingTs missing (legacy/edge): treat the stall as long enough for a reping.
+	if (now - (r.lastStallPingTs ?? 0) >= repingTicks * config.watch.intervalMs) return "reping";
+	return "none";
+}
+
 async function watchTick(): Promise<void> {
 	tickCount += 1;
 	if (tickCount % 30 === 0) refreshConfig();
@@ -419,12 +436,27 @@ async function watchTick(): Promise<void> {
 
 		r.phase = classifyPhase(r, now, config.watchdog.snapshotStaleMs);
 
-		if (r.phase === "stalled" && !r.stallPingSent && !r.interactive) {
-			r.stallPingSent = true;
-			latestCtx?.ui.notify(`subagents: ${r.name} looks stalled (no activity snapshot for ${Math.round(config.watchdog.snapshotStaleMs / 1000)}s)`, "warning");
+		if (r.phase === "stalled" && !r.interactive) {
+			const stallAction = nextStallAction(r, now, config);
+			if (process.env.PI_SUBAGENTS_DEBUG_LOG) {
+				try {
+					writeFileSync(process.env.PI_SUBAGENTS_DEBUG_LOG, `[parent] ${new Date().toISOString()} ${r.name} action=${stallAction} lastPing=${r.lastStallPingTs} repingTicks=${config.watchdog.stallRepingTicks} intervalMs=${config.watch.intervalMs}\n`, { flag: "a" });
+				} catch {}
+			}
+			if (stallAction === "first") {
+				r.stallPingSent = true;
+				r.lastStallPingTs = now;
+				latestCtx?.ui.notify(`subagents: ${r.name} looks stalled (no activity snapshot for ${Math.round(config.watchdog.snapshotStaleMs / 1000)}s)`, "warning");
+			} else if (stallAction === "reping") {
+				r.lastStallPingTs = now;
+				const stallSec = Math.round((now - (r.lastSnapshot?.ts ?? now)) / 1000);
+				latestCtx?.ui.notify(`subagents: ${r.name} still stalled (no snapshot for ${stallSec}s)`, "warning");
+			}
 		}
 		if (r.phase !== "stalled" && r.stallPingSent) {
+			// Recovered: quiet (widget only), allow a fresh ping if it stalls again.
 			r.stallPingSent = false;
+			r.lastStallPingTs = undefined;
 		}
 
 		// Stale-but-alive panes: check the terminal sentinel occasionally (crash fallback).
@@ -1198,7 +1230,7 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("plan", {
-		description: "Phased sub-agent workflow (planner → worker → reviewer): /plan <task...>",
+		description: "Phased sub-agent workflow (planner → worker → reviewer → test): /plan <task...>",
 		async handler(args, ctx) {
 			const task = (args ?? "").trim();
 			if (!task) {
@@ -1225,17 +1257,21 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 			}
 			const p2 = phase("worker");
 			const p3 = phase("reviewer");
+			const p4 = phase("worker");
 			const instruction = [
 				"Subagents /plan — phased workflow started. Results of each phase arrive automatically as steer messages; do not poll.",
 				`Task: ${task}`,
-				`Phase 1/3 (planner) is running (pane ${outcome.surface}).`,
-				`When the planner result arrives, start phase 2/3 with spawn_agent:`,
+				`Phase 1/4 (planner) is running (pane ${outcome.surface}).`,
+				`When the planner result arrives, start phase 2/4 with spawn_agent:`,
 				`  name: "plan: worker"${p2.agent ? `\n  agent: "${p2.agent}"` : ""}`,
 				`  task: "Implement the plan below for the task: «${task}».\n\nPlan:\n<paste the planner's full summary verbatim here>"`,
-				`When the worker result arrives, start phase 3/3 with spawn_agent:`,
+				`When the worker result arrives, start phase 3/4 with spawn_agent:`,
 				`  name: "plan: reviewer"${p3.agent ? `\n  agent: "${p3.agent}"` : ""}`,
 				`  task: "Review the changes made for the task: «${task}». Run the relevant tests if available; report the verdict and remaining risks."`,
-				"When the reviewer result arrives, give the user a final summary: what was planned, what was done, the review verdict, and remaining risks.",
+				`When the reviewer result arrives, start phase 4/4 (test) with spawn_agent:`,
+				`  name: "plan: test"${p4.agent ? `\n  agent: "${p4.agent}"` : ""}`,
+				`  task: "Run the project's test suite and build (for the changes made for the task: «${task}»). If there are failures caused by these changes — fix them and re-run. If the project has no tests — say so and run a quick smoke check. Report results."`,
+				"When the test phase result arrives, give the user a final summary: what was planned, what was done, the review verdict, test results, and remaining risks.",
 			].join("\n");
 			pi.sendMessage(
 				{
@@ -1264,13 +1300,16 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 			theme.fg("muted", ` · ${formatElapsedMs(d.elapsedMs)} · exit ${d.exitCode}`);
 
 		if (!expanded) {
-			const firstLine = (d.status === "ping" ? d.ping?.message : d.summary ?? d.errorMessage)?.split("\n")[0]?.slice(0, 140);
+			const firstLine = (d.status === "ping" ? d.ping?.message : d.summary ?? (d.noSummary ? "(no final answer — resume_agent to ask for a report)" : d.errorMessage))?.split("\n")[0]?.slice(0, 140);
 			return new Text(`${title}${firstLine ? `\n${theme.fg("text", firstLine)}` : ""}\n${theme.fg("dim", "Ctrl+O to expand")}`, 0, 0);
 		}
 
 		const lines: string[] = [title, ""];
 		if (d.status === "ping") {
 			lines.push(theme.fg("warning", `Needs help: ${d.ping?.message ?? ""}`));
+		} else if (d.status === "done" && d.noSummary) {
+			lines.push(theme.fg("warning", "No final answer: the sub-agent finished without writing a text report."));
+			lines.push(theme.fg("dim", "Use resume_agent (sessionPath + message) to ask it for a final report."));
 		} else {
 			lines.push(...(d.summary ?? d.errorMessage ?? "(no output)").split("\n").map((l) => theme.fg("text", l)));
 		}

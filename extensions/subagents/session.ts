@@ -132,7 +132,12 @@ export function lastAssistantText(lines: string[]): string | undefined {
 		const message = entry.message;
 		if (message?.role !== "assistant") continue;
 		const texts = (message.content ?? [])
-			.filter((block: any) => block?.type === "text" && typeof block.text === "string")
+			.filter((block: any) => {
+				if (block?.type !== "text" || typeof block.text !== "string") return false;
+				// pi writes "  (no response)" when the assistant produced no text.
+				const t = block.text.trim();
+				return t !== "" && t !== "(no response)";
+			})
 			.map((block: any) => block.text)
 			.join("\n")
 			.trim();

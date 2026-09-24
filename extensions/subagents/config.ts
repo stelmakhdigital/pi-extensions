@@ -19,7 +19,7 @@ export interface SubagentsConfig {
 	tmux: TmuxConfig;
 	limits: { maxConcurrent: number };
 	watch: { intervalMs: number };
-	watchdog: { snapshotStaleMs: number };
+	watchdog: { snapshotStaleMs: number; stallRepingTicks: number };
 	widget: { enabled: boolean };
 	cleanup: { killSurfaceOnExit: boolean; keepOnError: boolean };
 	/** Child environment: "none" (deterministic, recommended) or "all" (user's global extensions). */
@@ -30,7 +30,7 @@ export const DEFAULT_CONFIG: SubagentsConfig = {
 	tmux: { handoff: "ask", sessionName: "pi", sessionCommand: "pi -c", shellReadyMs: 700 },
 	limits: { maxConcurrent: 6 },
 	watch: { intervalMs: 1000 },
-	watchdog: { snapshotStaleMs: 30_000 },
+	watchdog: { snapshotStaleMs: 30_000, stallRepingTicks: 30 },
 	widget: { enabled: true },
 	cleanup: { killSurfaceOnExit: true, keepOnError: true },
 	child: { extensions: "none" },
@@ -105,6 +105,11 @@ export function loadConfig(opts: LoadConfigOptions): SubagentsConfig {
 	}
 	if (env.PI_SUBAGENTS_STALL_MS) {
 		config.watchdog.snapshotStaleMs = toPositiveInt(Number(env.PI_SUBAGENTS_STALL_MS), config.watchdog.snapshotStaleMs);
+	}
+	if (env.PI_SUBAGENTS_STALL_REPING_TICKS) {
+		const n = Number(env.PI_SUBAGENTS_STALL_REPING_TICKS);
+		// 0 is a valid value (disable reping), so parse directly.
+		if (Number.isFinite(n) && n >= 0) config.watchdog.stallRepingTicks = Math.floor(n);
 	}
 	if (env.PI_SUBAGENTS_SHELL_READY_MS) {
 		config.tmux.shellReadyMs = toPositiveInt(Number(env.PI_SUBAGENTS_SHELL_READY_MS), config.tmux.shellReadyMs);

@@ -71,6 +71,8 @@ export interface RunningSubagent {
 	phase: SubagentPhase;
 	lastSnapshot?: ActivitySnapshot;
 	stallPingSent: boolean;
+	/** Timestamp of the last stall notification (for reping). */
+	lastStallPingTs?: number;
 	finished: boolean;
 	/** Cumulative child token usage, read incrementally from the session jsonl. */
 	usage?: { input: number; output: number; cacheRead: number; total: number; cost: number; offset: number };
@@ -88,6 +90,8 @@ export interface SubagentResultDetails {
 	elapsedMs: number;
 	sessionFile: string;
 	summary?: string;
+	/** done but the child wrote no final text answer (use resume_agent to ask for a report). */
+	noSummary?: boolean;
 	tokens?: { input: number; output: number; total: number };
 	costUsd?: number;
 	ping?: { message: string };

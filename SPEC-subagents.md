@@ -205,7 +205,7 @@ env. env-оверрайды: `PI_SUBAGENTS_DISABLED=1`, `PI_SUBAGENTS_HANDOFF=as
   "tmux":   { "handoff": "ask", "sessionName": "pi", "sessionCommand": "pi -c", "shellReadyMs": 700 },
   "limits": { "maxConcurrent": 6 },
   "watch":  { "intervalMs": 1000 },
-  "watchdog": { "snapshotStaleMs": 30000 },
+  "watchdog": { "snapshotStaleMs": 30000, "stallRepingTicks": 30 },
   "widget": { "enabled": true },
   "cleanup": { "killSurfaceOnExit": true, "keepOnError": true },
   "child": { "extensions": "none" }
@@ -261,7 +261,7 @@ auto-exit НЕ отключает (guard `sawAgentStart`; без него auto-e
 5. **`/plan <task...>`** — фазовый workflow: (1) расширение сразу спавнит planner
    (bundled/planner или fallback-промпт) с задачей «Plan (do NOT implement)»; (2)
    шлёт родителю steer-инструкцию (customType subagents.report, triggerTurn) — она
-   заставляет модель запускать фазы 2/3 (worker с планом) и 3/3 (reviewer) по мере
+   заставляет модель запускать фазы 2/4 (worker с планом), 3/4 (reviewer) и 4/4 (test — прогон тестов/сборки, v3) по мере
    прихода steer-результатов, а затем давать финальную сводку. Окна именованы
    `plan: planner/worker/reviewer`. Фазы исполняет МОДЕЛЬ (не код) — осознанный
    выбор: цепочки async-результатов в коде расширения не выразимы без polling.
@@ -269,6 +269,24 @@ auto-exit НЕ отключает (guard `sawAgentStart`; без него auto-e
    план ≤ 60 строк), scout (read-only разведка с file:line), worker (реализация плана,
    тесты, без коммитов), reviewer (ревью diff, вердикт). Все: standalone + auto-exit.
 7. **spawning / deny-tools** — см. раздел 5.
+
+## 5b. v3 (2026-09-24)
+
+1. **Детектор «без ответа» (child.ts)**: на пути auto-exit (`stopReason === "stop"`),
+   если у последнего assistant-сообщения хода нет текстового блока — вместо пустой
+   done-карточки пишется sidecar `ping` с инструкцией родителю (resume + спросить
+   отчёт). Один раз на процесс (`noAnswerPingSent`). Явный `agent_done`/`agent_ping`
+   помечают `sidecarWritten` — agent_end их результат не перезаписывает.
+   Пейсхолдер pi: если ассистент не написал текст, pi сохраняет текстовый блок
+   `"  (no response)"` — он НЕ считается ответом (фильтр в `lastAssistantHasText`
+   и `lastAssistantText`; проверено live: без фильтра детектор не срабатывал).
+2. **Явная пометка «без финального ответа»**: done без summary → details.noSummary,
+   resultText и карточка (compact/expanded) говорят прямо «нет финального ответа —
+   resume_agent», notify «finished (no final answer)».
+3. **Повторные stall-пинги**: `watchdog.stallRepingTicks` (дефолт 30; 0 = один раз);
+   env `PI_SUBAGENTS_STALL_REPING_TICKS`. Чистая логика — `nextStallAction()` (unit).
+4. **/plan: 4-я фаза `test`** (окно `plan: test`): прогон тест-сьюта/сборки после
+   ревью, фикс сломанных тестов, отчёт.
 
 ## 6. Обработка ошибок
 - tmux/бэкенд недоступен → spawn возвращает error-текст с инструкцией (запустить

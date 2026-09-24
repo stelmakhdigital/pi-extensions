@@ -123,13 +123,31 @@
 
 ## СТАТУС (по итогам сессии — продолжить отсюда)
 
-**v1 завершён и проверен (включая ручной tmux-чек-лист); v2-итерация (пункты 1–7) реализована
-и live-проверена в tmux (2026-09-24).** Коммит v2 — не сделан (ждёт явной команды).
+**v1, v2 (1–7) и v3 завершены и live-проверены в tmux (2026-09-24). Коммиты — не сделаны,
+ждут явной команды (v2+v3 одним коммитом или двумя — по выбору пользователя).**
 
-Состав: `extensions/subagents/*` (8 ts + 4 bundled-агента в `agents/`),
-`test/subagents.test.mjs` (unit 32), `test/smoke.test.mjs` (секция 9), package.json,
-README (корневой + расширения). Тесты: tsc --strict --noUnusedLocals — 0 ошибок;
-unit 32/32; smoke 52/52.
+Состав: `extensions/subagents/*` (8 ts + 4 bundled-агента), `test/subagents.test.mjs` (unit 36),
+`test/smoke.test.mjs` (секция 9), package.json, README (корневой + расширения).
+Тесты: tsc --strict --noUnusedLocals — 0 ошибок; unit 36/36; smoke 52/52.
+
+### v3 (2026-09-24) — что добавлено
+1. **Детектор «без ответа» (child.ts)**: auto-exit при `stopReason === "stop"` и без
+   assistant-текста в последнем сообщении → sidecar ping с инструкцией родителю
+   (один раз на процесс). `sidecarWritten` — явный agent_done/agent_ping не
+   перезаписывается. Пейсхолдер pi `"  (no response)"` фильтруется
+   (`lastAssistantHasText` + `lastAssistantText`) — без этого детектор не срабатывал
+   (найден live: модель «без ответа» оставляет блок `(no response)`).
+2. **noSummary-карточка**: done без summary → details.noSummary, явный текст
+   «did not write a final answer… resume_agent» (resultText + compact/expanded + notify).
+3. **Stall-репинг**: `watchdog.stallRepingTicks` (дефолт 30; 0 = один раз), env
+   `PI_SUBAGENTS_STALL_REPING_TICKS`; чистая логика `nextStallAction()` (unit).
+4. **/plan: 4-я фаза `test`** (окно plan: test): прогон тестов/сборки после ревью.
+
+Live-интеграция v3: авто-пинг (⇠ nocase2 ping с нашим текстом); явный agent_done
+без текста → noSummary-карточка, родитель сам резюмил и получил ответ; явный
+agent_ping (своим текстом) → ping-карточка; stall-репинг (SIGSTOP-ребёнок:
+«looks stalled (5s)» → «still stalled (no snapshot for 171s)», тик 5s из test-конфига);
+/plan — 4 фазы до «plan: test», файл создан.
 
 ### v2 (2026-09-24) — что добавлено
 1. **Токены/стоимость ребёнка**: `readChildUsage` (session.ts) — инкрементальный parse
@@ -164,9 +182,8 @@ Live-интеграция v2 (tmux 3.6, локальная LLM): doctor — вс
 ребёнка → `--no-extensions` по умолчанию (`child.extensions`).
 
 Осталось:
-1. Коммит v2 — только по явной команде.
-2. v3 (бэклог, roadmap §«Вне v2»): detached-хост-сессия, другие MuxBackend, повторные
-   stall-пинги, /plan-фаза «test».
+1. Коммит v2+v3 — только по явной команде (один коммит или два — по выбору).
+2. Дальнейший бэклог (roadmap §«Вне v2»): detached-хост-сессия, другие MuxBackend.
 
 Замечания для отладки: артефакты запуска — в `<sessionDir>/artifacts/<childId>/`;
 sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог событий.

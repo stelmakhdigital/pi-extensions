@@ -51,6 +51,27 @@ function summarizeLastAssistantError(messages: Array<Record<string, any>>): stri
 	return undefined;
 }
 
+/** True when the last assistant message in `messages` carries a non-empty text block. */
+export function lastAssistantHasText(messages: Array<Record<string, any>>): boolean {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg?.role !== "assistant") continue;
+		const content = msg.content;
+		if (Array.isArray(content)) {
+			// pi writes a "  (no response)" text block when the assistant produced
+			// no text at all — treat that placeholder as "no answer".
+			return content.some((b: any) => {
+				if (b?.type !== "text" || typeof b.text !== "string") return false;
+				const t = b.text.trim();
+				return t !== "" && t !== "(no response)";
+			});
+		}
+		// No content (or non-array): treat as "no text".
+		return false;
+	}
+	return false;
+}
+
 /** Temporary integration debug: append handled event names to a file. */
 const DEBUG_LOG = process.env.PI_SUBAGENTS_DEBUG_LOG ?? "";
 function dbg(label: string, extra = ""): void {
@@ -65,6 +86,8 @@ export default function subagentsChild(pi: ExtensionAPI): void {
 
 	let autoExitEnabled = AUTO_EXIT;
 	let sawAgentStart = false;
+	let noAnswerPingSent = false; // at most one "finished without an answer" ping per process
+	let sidecarWritten = false; // agent_done/agent_ping already wrote the sidecar
 	let seq = 0;
 	let lastWrite = 0;
 
@@ -140,11 +163,31 @@ export default function subagentsChild(pi: ExtensionAPI): void {
 		dbg("agent_end", `autoExitEnabled=${autoExitEnabled} stopReason=${stopReason} messages=${messages.length}`);
 
 		if (!autoExitEnabled) return;
+		if (sidecarWritten) return; // explicit agent_done/agent_ping owns the outcome
 		if (stopReason === "aborted") return; // User interrupted: stay open.
 
 		const errorMessage = stopReason === "error" ? summarizeLastAssistantError(messages) : undefined;
 		if (errorMessage) {
 			writeSidecar(ctx, { type: "error", exitCode: 1, errorMessage });
+			ctx.shutdown();
+			return;
+		}
+
+		// "Finished without an answer" detector: an autonomous agent whose final
+		// turn produced no assistant text would otherwise close with an empty
+		// result card. Ping the parent once instead (it resumes with "write the
+		// report"). An explicit agent_done is NOT pinged — that is deliberate.
+		if (stopReason === "stop" && !lastAssistantHasText(messages) && !noAnswerPingSent) {
+			noAnswerPingSent = true;
+			writeSidecar(ctx, {
+				type: "ping",
+				exitCode: 0,
+				message:
+					"The agent's final turn ended without a text answer (its last assistant message has no text). " +
+					"Resume this session with resume_agent and ask it to write a final report for the task; " +
+					"if the task was actually completed, ask only for the report.",
+			});
+			dbg("agent_end:no-answer", "ping sidecar written, shutdown requested");
 			ctx.shutdown();
 			return;
 		}
@@ -210,6 +253,7 @@ export default function subagentsChild(pi: ExtensionAPI): void {
 			"Mark this sub-agent task as complete. The session exits immediately and the parent agent receives your final summary (your last assistant message). Call it only when the task is fully done.",
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			sidecarWritten = true;
 			writeSidecar(ctx, { type: "done", exitCode: 0 });
 			ctx.shutdown();
 			return { content: [{ type: "text", text: "Marked done; session is closing." }], details: { status: "done" } };
@@ -225,6 +269,7 @@ export default function subagentsChild(pi: ExtensionAPI): void {
 			message: Type.String({ description: "What you need help with (decision, missing info, conflict)." }),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			sidecarWritten = true;
 			writeSidecar(ctx, { type: "ping", exitCode: 0, message: params.message });
 			ctx.shutdown();
 			return { content: [{ type: "text", text: "Ping sent to the parent; session is closing." }], details: { status: "ping" } };

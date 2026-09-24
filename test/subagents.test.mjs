@@ -14,7 +14,8 @@ const agents = jiti("../extensions/subagents/agents.ts");
 const session = jiti("../extensions/subagents/session.ts");
 const { createTmuxBackend } = jiti("../extensions/subagents/tmux-backend.ts");
 const ext = jiti("../extensions/subagents/index.ts");
-const { buildLaunchScript, classifyPhase, waitForShellReady, renderDoctorReport } = ext;
+const child = jiti("../extensions/subagents/child.ts");
+const { buildLaunchScript, classifyPhase, waitForShellReady, renderDoctorReport, resultText, nextStallAction } = ext;
 
 const results = [];
 async function check(name, fn) {
@@ -222,6 +223,10 @@ await check("session: lastAssistantText", () => {
 		"not-json",
 	];
 	assert(session.lastAssistantText(lines) === "final answer", "последний текст");
+	const placeholder = [
+		JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "thinking", thinking: "t" }, { type: "text", text: "  (no response)" }] } }),
+	];
+	assert(session.lastAssistantText(placeholder) === undefined, "плейсхолдер (no response) не считается ответом");
 });
 
 // ── tmux backend ──
@@ -535,6 +540,50 @@ await check("doctor: renderDoctorReport — маркировки и детали
 	assert(rep.includes("✓ tmux binary — tmux 3.6"), rep);
 	assert(rep.includes("! pi inside tmux — not in tmux"), rep);
 	assert(rep.includes("✗ broken"), rep);
+});
+
+await check("config: stallRepingTicks — default 30, env (включая 0)", () => {
+	assert(DEFAULT_CONFIG.watchdog.stallRepingTicks === 30, "default: " + DEFAULT_CONFIG.watchdog.stallRepingTicks);
+	let c = loadConfig({ cwd: tmp, env: { ...emptyEnv, PI_SUBAGENTS_STALL_REPING_TICKS: "0" }, globalFile: join(tmp, "nope-g.json"), projectFile: join(tmp, "nope-p.json") });
+	assert(c.watchdog.stallRepingTicks === 0, "env 0 -> 0 (режим «один раз»): " + c.watchdog.stallRepingTicks);
+	c = loadConfig({ cwd: tmp, env: { ...emptyEnv, PI_SUBAGENTS_STALL_REPING_TICKS: "7" }, globalFile: join(tmp, "nope-g.json"), projectFile: join(tmp, "nope-p.json") });
+	assert(c.watchdog.stallRepingTicks === 7, "env 7 -> 7");
+});
+
+// ── v3: no-answer detector + resultText + stall reping ──
+
+await check("child: lastAssistantHasText — текст/только-мысли/пусто", () => {
+	assert(child.lastAssistantHasText([{ role: "assistant", content: [{ type: "thinking", thinking: "t" }] }]) === false, "только thinking -> false");
+	assert(child.lastAssistantHasText([{ role: "assistant", content: [{ type: "thinking", thinking: "t" }, { type: "text", text: "hi" }] }]) === true, "есть текст");
+	assert(child.lastAssistantHasText([{ role: "assistant", content: [{ type: "text", text: "   " }] }]) === false, "белые символы -> false");
+	assert(child.lastAssistantHasText([{ role: "assistant", content: [{ type: "thinking", thinking: "t" }, { type: "text", text: "  (no response)" }] }]) === false, "pi-плейсхолдер (no response) -> false");
+	assert(child.lastAssistantHasText([{ role: "user", content: "q" }, { role: "assistant" }]) === false, "без content -> false");
+	assert(child.lastAssistantHasText([]) === false, "пусто");
+	assert(child.lastAssistantHasText([{ role: "assistant", content: [{ type: "text", text: "old" }] }, { role: "user", content: "x" }]) === true, "последний assistant в списке");
+});
+
+await check("resultText: done без summary — явная пометка, ping/error без изменений", () => {
+	const noAns = resultText("done", "x", undefined, undefined, undefined, "/s.jsonl");
+	assert(noAns.includes("did not write a final answer"), noAns);
+	assert(noAns.includes("resume_agent"), "подсказка resume");
+	const ok = resultText("done", "x", "all good", undefined, undefined, "/s.jsonl");
+	assert(ok.includes("all good") && ok.includes("finished (done)"), ok);
+	const ping = resultText("ping", "x", undefined, { message: "help me" }, undefined, "/s.jsonl");
+	assert(ping.includes("needs help: help me"), ping);
+	const err = resultText("error", "x", undefined, undefined, "boom", "/s.jsonl");
+	assert(err.includes("FAILED: boom"), err);
+});
+
+await check("nextStallAction: first / reping по интервалу / 0=один раз", () => {
+	const cfg = { watchdog: { stallRepingTicks: 10 }, watch: { intervalMs: 1000 } };
+	const now = 1_000_000;
+	assert(nextStallAction({ stallPingSent: false }, now, cfg) === "first", "первый");
+	const r = { stallPingSent: true, lastStallPingTs: now };
+	assert(nextStallAction(r, now + 9_000, cfg) === "none", "до интервала — none");
+	assert(nextStallAction(r, now + 10_000, cfg) === "reping", "интервал прошёл — reping");
+	const once = { watchdog: { stallRepingTicks: 0 }, watch: { intervalMs: 1000 } };
+	assert(nextStallAction({ stallPingSent: true, lastStallPingTs: now }, now + 999_999, once) === "none", "0 = один раз");
+	assert(nextStallAction({ stallPingSent: true }, now + 999_999, cfg) === "reping", "нет lastStallPingTs — репинг");
 });
 
 // ── cleanup ──

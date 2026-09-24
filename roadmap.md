@@ -84,3 +84,14 @@
       (--exclude-tools)
 - [x] Компиляция и тестирование (tsc strict, unit 32, smoke) + live-интеграция v2 в tmux: doctor, usage-виджет, /iterate (fork 19.3k ctx), spawning-цепочка parent→boss→grandchild, /plan (3 фазы, файл создан)
 - [ ] Разрешение на коммит (явная команда)
+
+## v3 (итерация от 2026-09-24, по явной команде пользователя)
+- [x] 1. Детектор «без ответа» (child.ts): auto-exit автономного агента без assistant-текста
+      в последнем ходе → ping вместо пустой done-карточки (один раз на процесс;
+      явный agent_done не трогаем)
+- [x] 2. Явная пометка в карточке: done без summary → «завершился без финального ответа»
+      + подсказка resume_agent (resultText + renderer + notify)
+- [x] 3. Повторные stall-пинги: watchdog.stallRepingTicks (дефолт 30, 0 = один раз)
+- [x] 4. /plan: 4-я фаза `test` (прогон тестов/сборки после ревью; окно plan: test)
+- [x] Компиляция и тестирование (tsc strict, unit 36, smoke) + live-интеграция v3 в tmux: авто-пинг «без ответа» (⇠ nocase2 ping), явная agent_done → noSummary-карточка, явный agent_ping, stall-репинг (SIGSTOP-ребёнок: first → still stalled … 171s), /plan 4 фазы (plan: test, v3.txt создан). Пойман и отфильтрован pi-плейсхолдер «(no response)»
+- [ ] Разрешение на коммит v3 (явная команда)
