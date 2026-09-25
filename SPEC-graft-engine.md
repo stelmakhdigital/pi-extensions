@@ -273,3 +273,24 @@ summary без crux); crux валидируется дословно по исх
 586s, 3 упавших JSON-ответа перепопало вторым проходом за 6s (итог: 0 ошибок,
 286 символов с валидным crux). Qwen3-ответы приходят с полем `reasoning` — на парсинг
 не влияет (читается `choices[0].message.content`).
+
+### 2o. v2.5 (пост-A–E: глубина all, tokens-saved, скилл)
+- `callers`: `depth?: number | "all"` (query.ts мапит "all" → Infinity; CLI `--depth all`;
+  схема тула Union[1..10, "all"]; MCP anyOf). Лэйбл результата — «глубина: all».
+- savings (engine/graft/src/savings.ts): оценка сэкономленных токенов retrieval-вывода
+  против чтения покрытых файлов целиком. Формула: `(bytes(покрытые) − len(вывод)) / 4`,
+  bytes — из fingerprint.json (`files[path].size`, пишет `build`), fallback `statSync`;
+  файл, которого нет на диске, не считается (0). **Порог: строка только при ≥100 tok**
+  (крошечные файлы экономии не дают — указатель стоит как исходник).
+- Строка `[graft] tokens saved ≈ N` (en-US thousands) — первой в `ask`/`grep`/
+  `skeleton`/`callers`; `map`/`blast`/`check` не считают (ориентация/review, не retrieval).
+  Покрытые файлы: ask — пути топ-нод; grep — файлы с хитами; skeleton — 1 файл;
+  callers — файлы зависимых символов.
+- Сессия (расширение): `globalThis.__graftSavings = {tokens, calls}` — каждый
+  retrieval-тул парсит строку regex'ом и накопит; бейдж: `graft: synced · N% deep ·
+  ≈N tok saved` (fmtTok: ≥100k → «Nk»). Guideline (promptSnippet ask): в конце ответа —
+  «🌱 graft сэкономил ~N токенов в этом turn (M вызовов)»; без graft-тулов — не писать.
+- Скилл `skills/graft/SKILL.md` (в `pi.skills[]`): таблица «задача → тул», порядок
+  map→ask→skeleton→read(span), правила экономики (не резать выводы head/tail, не гадать
+  номера строк по старому графу, scope в монорепо, когда графа не хватает), отчёт
+  об экономии, CLI/MCP-поверхность.

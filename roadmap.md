@@ -144,3 +144,10 @@
       viz --serve (live-reload + /api/graph), ask --json, blast --format/--no-owners/
       --name/--export-viz, init/uninstall (AGENTS.md + .mcp.json, идемпотентно);
       unit 29/29; **программа A–E завершена**
+- [x] v2.5 (2026-09-25, пост-A–E, 3 пункта):
+      1) `callers --depth all` — полное замыкание (query.ts/CLI/тул/MCP: depth?: number|"all"),
+      2) «tokens saved»: savings.ts (файлы из fingerprint, chars/4, порог 100 tok) →
+         строка `[graft] tokens saved ≈ N` в ask/grep/skeleton/callers; сессионный
+         накопитель в бейдже (`· ≈N tok saved`); guideline «🌱 graft сэкономил ~N» в конце
+         ответа, 3) скилл skills/graft (scenario-таблица, правила экономики, отчёт
+         об экономии, CLI/MCP) в pi.skills[]; unit 31/31

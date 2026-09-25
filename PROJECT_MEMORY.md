@@ -408,4 +408,39 @@ D языки+монорепо, E CLI/init). tmux НЕДОСТУПЕН (unknown f
 - Граф репо после: 35 файлов / 500 узлов / 489 рёбер; lsp-status: 659 ts + 282 js + 14 py
   кандидатов (серверы не установлены — install-подсказки).
 - **Программа A–E завершена. Коммит — по команде пользователя.**
+- Коммиты (запушены 2026-09-25): d199b2b (feat, A–E v2.0–v2.4), e406dd7 (docs: spec 2h–2n, roadmap, memory, README-рестайл).
+  Хвост ветки graft: 9c83435 (v1.6) → d199b2b → e406dd7.
 
+
+### v2.5 (пост-A–E, 3 пункта) ГОТОВО, test 31/31 (2026-09-25)
+Пункты 1–3 из gap-анализа Claude-оверлея (SKILL, tokens-saved, callers all):
+1. **`callers --depth all`**: Queries["callers"] depth?: number|"all" → Infinity в
+   query.ts; CLI `--depth all` (строка, не NaN); схема тула Type.Union([1..10, "all"]);
+   MCP anyOf number/const "all". Head-лэйбл показывает "all".
+2. **tokens-saved**: engine/graft/src/savings.ts — makeSavings(root): размеры файлов
+   из fingerprint.json (files[path].size, записывается build'ом), fallback statSync;
+   saved = (bytes_covered − out.length)/4; **порог: строка только при ≥100 tok**
+   (на крошечных файлах указатель стоит как исходник). Строка `[graft] tokens saved ≈ N`
+   (en-US thousands) первым делом в ask/grep/skeleton/callers; map/blast/check не
+   считают. Расширение: `globalThis.__graftSavings = {tokens, calls}` — парсит строку
+   regex'ом `\[graft\] tokens saved ≈ ([\d,]+)` в 4 retrieval-тулах; бейдж получает
+   `· ≈N tok saved` (fmtTok: ≥100k → "Nk"); promptSnippet ask дополнен guideline
+   «🌱 graft сэкономил ~N токенов в этом turn (M вызовов)».
+3. **skills/graft/SKILL.md**: scenario-таблица тулов, порядок map→ask→skeleton→read,
+   правила экономики (не читать файл целиком, не резать выводы, старый граф, LSP,
+   monorepo-scope), отчёт об экономии в конце ответа, когда графа не хватает, CLI/MCP.
+   pi.skills[] += "skills/graft".
+
+Баги/уроки:
+- **Вложенные кавычки в tool-схеме**: `description: "... "all" — ..."` (двойные внутри
+  двойных) ломает синтаксис TS; smoke при этом **давит весь jiti-bundle в stdout** —
+  message ParseError тонет (tmp-скрипт с createJiti + e.message — диагностика).
+- **Тест-фикстура savings**: файл из 60 коротких экспортов НЕ даёт строку — skeleton
+  почти равен файлу по размеру (saved < 0). Корректная фикстура: ОДИН символ с телом
+  ~3KB (гигантский комментарий). Поведение «тишина на малом» — по design, не баг.
+- TS-аннотации (`: string`) в .mjs-фикстурах тестов → SyntaxError; jiti не трансформирует
+  сам тест-файл.
+
+Живые числа (репо pi-extensions): ask makeQueries ≈ 5,060; grep makeQueries ≈ 24,775;
+skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 узлов / 495 рёбер.
+Коммит — по команде пользователя.
