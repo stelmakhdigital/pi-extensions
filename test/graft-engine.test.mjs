@@ -636,6 +636,19 @@ await check("refresh: fingerprint + ensureFresh (дрейф → rebuild; чис�
 	await engine.build(root, { autoDeep: false });
 });
 
+await check("CLI: graft stats — usage mix (без графа, --json)", () => {
+	const binP = fileURLToPath(new URL("../engine/graft/bin/graft.mjs", import.meta.url));
+	const st = mkdtempSync(join(tmpdir(), "grft-stats-"));
+	writeFileSync(st + "/demo.json", JSON.stringify({ calls: 12, tokens: 43000, graftTurns: 10, reportedTurns: 8, sourceReads: 30, sourceTokens: 51000, ts: Date.now() }));
+	const run = (args) => execFileSync(process.execPath, [binP, ...args], { env: { ...process.env, GRFT_STATE_DIR: st } }).toString();
+	const out = run(["stats"]);
+	assert(out.includes("usage mix: 29% граф / 71% прямой source-read"), "mix: " + out);
+	assert(out.includes("прямые source-reads: 30"), "read-строка: " + out);
+	const j = JSON.parse(run(["stats", "--json"]));
+	assert(j.session === "demo" && j.graphSharePct === 29 && j.sourceReads === 30 && j.graftCalls === 12, "json: " + JSON.stringify(j));
+	rmSync(st, { recursive: true, force: true });
+});
+
 await check("CLI: check → exit 1 при дрейфе (CI-сигнал)", () => {
 	const binPath = fileURLToPath(new URL("../engine/graft/bin/graft.mjs", import.meta.url));
 	const codeOf = () => {

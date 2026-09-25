@@ -140,6 +140,61 @@ switch (cmd) {
 		console.log(engine.makeQueries(root).skeleton(file));
 		break;
 	}
+	case "stats": {
+		// Метрики сессий (без графа и сети): сколько ходов шло через граф,
+		// а сколько модель читала source напрямую (тул read).
+		const { readdirSync, readFileSync } = await import("node:fs");
+		const { homedir } = await import("node:os");
+		const dir = process.env.GRFT_STATE_DIR?.trim() || resolve(homedir(), ".local", "state", "pi-graft", "metrics");
+		let files = [];
+		try {
+			files = readdirSync(dir)
+				.filter((f) => f.endsWith(".json"))
+				.flatMap((f) => {
+					try {
+						return [{ sid: f.slice(0, -5), ...JSON.parse(readFileSync(resolve(dir, f), "utf8")) }];
+					} catch {
+						return [];
+					}
+				});
+		} catch { /* каталог ещё не создан */ }
+		if (!files.length) {
+			console.log("graft stats: метрик нет (появятся после первых graft-вызовов/source-reads; dir: " + dir + ")");
+			break;
+		}
+		files.sort((x, y) => (y.ts ?? 0) - (x.ts ?? 0));
+		const m = files[0];
+		const calls = m.calls ?? 0;
+		const sr = m.sourceReads ?? 0;
+		const share = calls + sr > 0 ? Math.round((calls / (calls + sr)) * 100) : 0;
+		if (optFlag("--json")) {
+			console.log(
+				JSON.stringify(
+					{
+						session: m.sid,
+						ts: m.ts,
+						graftCalls: calls,
+						tokensSaved: m.tokens ?? 0,
+						sourceReads: sr,
+						sourceTokensRead: m.sourceTokens ?? 0,
+						graphSharePct: share,
+						graftTurns: m.graftTurns ?? 0,
+						reportedTurns: m.reportedTurns ?? 0,
+					},
+					null,
+					1,
+				),
+			);
+			break;
+		}
+		const tok = (n) => "≈" + Math.round(n).toLocaleString("ru-RU");
+		console.log(`graft stats (сессия ${m.sid}, активность ${new Date(m.ts ?? 0).toISOString().slice(0, 16).replace("T", " ")}):`);
+		console.log(`  graft-вызовы: ${calls} · сэкономлено ${tok(m.tokens ?? 0)} tok`);
+		console.log(`  прямые source-reads: ${sr} (прочитано ${tok(m.sourceTokens ?? 0)} tok)`);
+		console.log(`  usage mix: ${share}% граф / ${100 - share}% прямой source-read`);
+		if (m.graftTurns) console.log(`  🌱-отчёт: ${m.reportedTurns ?? 0}/${m.graftTurns} graft-ходов`);
+		break;
+	}
 	case "check": {
 		const status = await engine.checkStatus(root);
 		if (optFlag("--json")) {

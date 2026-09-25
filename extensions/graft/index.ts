@@ -150,7 +150,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 	/** Сессионные метрики на диске (~/.local/state/pi-graft/metrics/<sid>.json, override: GRFT_STATE_DIR). */
 	const metricsDir = (): string => process.env.GRFT_STATE_DIR?.trim() || join(homedir(), ".local", "state", "pi-graft", "metrics");
 	const metricsPath = (sid: string): string => join(metricsDir(), `${sid}.json`);
-	interface MetricsFile { calls: number; tokens: number; graftTurns: number; reportedTurns: number; ts: number }
+	interface MetricsFile { calls: number; tokens: number; graftTurns: number; reportedTurns: number; sourceReads: number; sourceTokens: number; ts: number }
 	const readMetrics = (ctx: ExtensionContext): MetricsFile | null => {
 		try {
 			const sid = (ctx.sessionManager as { getSessionId?: () => string } | undefined)?.getSessionId?.();
@@ -160,17 +160,19 @@ export default function graftExtension(pi: ExtensionAPI) {
 			return null;
 		}
 	};
-	const trackMetrics = (ctx: ExtensionContext, patch: { calls?: number; tokens?: number; graftTurns?: number; reportedTurns?: number }): void => {
+	const trackMetrics = (ctx: ExtensionContext, patch: { calls?: number; tokens?: number; graftTurns?: number; reportedTurns?: number; sourceReads?: number; sourceTokens?: number }): void => {
 		try {
 			const sid = (ctx.sessionManager as { getSessionId?: () => string } | undefined)?.getSessionId?.();
 			if (!sid) return;
 			const p = metricsPath(sid);
-			let m: MetricsFile = { calls: 0, tokens: 0, graftTurns: 0, reportedTurns: 0, ts: Date.now() };
+			let m: MetricsFile = { calls: 0, tokens: 0, graftTurns: 0, reportedTurns: 0, sourceReads: 0, sourceTokens: 0, ts: Date.now() };
 			try { m = { ...m, ...(JSON.parse(readFileSync(p, "utf8")) as MetricsFile) }; } catch { /* новая сессия */ }
 			m.calls += patch.calls ?? 0;
 			m.tokens += patch.tokens ?? 0;
 			m.graftTurns += patch.graftTurns ?? 0;
 			m.reportedTurns += patch.reportedTurns ?? 0;
+			m.sourceReads += patch.sourceReads ?? 0;
+			m.sourceTokens += patch.sourceTokens ?? 0;
 			m.ts = Date.now();
 			mkdirSync(dirname(p), { recursive: true });
 			writeFileSync(p, JSON.stringify(m));
@@ -222,6 +224,13 @@ export default function graftExtension(pi: ExtensionAPI) {
 		const turns = files.reduce((s2, m) => s2 + (m.graftTurns ?? 0), 0);
 		const reported = files.reduce((s2, m) => s2 + (m.reportedTurns ?? 0), 0);
 		if (turns > 0) lines.push(`  🌱-отчёт в ответе: ${reported} из ${turns} graft-ходов`);
+		const callsAll = files.reduce((s2, m) => s2 + (m.calls ?? 0), 0);
+		const sr = files.reduce((s2, m) => s2 + (m.sourceReads ?? 0), 0);
+		const st = files.reduce((s2, m) => s2 + (m.sourceTokens ?? 0), 0);
+		if (sr > 0 && callsAll + sr > 0) {
+			const share = Math.round((callsAll / (callsAll + sr)) * 100);
+			lines.push(`  Usage mix: ${share}% граф / ${100 - share}% прямой source-read (${sr} read, ≈${fmtTok(st)} tok прочитано)`);
+		}
 		if (files.length === 0) lines.push("  (метрики ещё не записаны — появятся после первых graft-вызовов)");
 	};
 
@@ -548,8 +557,19 @@ export default function graftExtension(pi: ExtensionAPI) {
 
 	pi.on("tool_result", async (event, ctx) => {
 		if (event.isError) return;
-		if (event.toolName !== "write" && event.toolName !== "edit") return;
 		if (!enabled(ctx)) return;
+		// Usage mix: прямой source-read (тул read) — доля «граф vs прямой source».
+		// Читы самих артефактов графа (graft/*) — НЕ source, не считаем.
+		if (event.toolName === "read") {
+			const rp = event.input?.path;
+			const rpNorm = typeof rp === "string" ? rp.replace(/\\/g, "/") : "";
+			if (rpNorm && !(rpNorm.includes("/graft/") || rpNorm.startsWith("graft/"))) {
+				const textLen = (event.content ?? []).reduce((sum: number, c) => (c && c.type === "text" && typeof c.text === "string" ? sum + c.text.length : sum), 0);
+				trackMetrics(ctx, { sourceReads: 1, sourceTokens: Math.ceil(textLen / 4) });
+			}
+			return;
+		}
+		if (event.toolName !== "write" && event.toolName !== "edit") return;
 		if (pi.getFlag("--graft-blast") === false) return;
 		const path = event.input?.path;
 		if (typeof path !== "string" || path.length === 0) return;

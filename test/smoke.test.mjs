@@ -266,6 +266,25 @@ const ctxGraph = { ...noUiCtx, cwd: fixture };
 		const text = res.content[0].text;
 		if (!text.includes("scope") && !text.includes("не найдено")) throw new Error("scope-ответ: " + text.slice(0, 200));
 	});
+	await check("graft usage mix: read-счётчик в метриках (graft/* не считается)", async () => {
+		const { mkdtempSync: mk4 } = await import("node:fs");
+		const { tmpdir: tmpd4 } = await import("node:os");
+		const state = mk4(tmpd4 + "/pi-graft-mix-");
+		const prev = process.env.GRFT_STATE_DIR;
+		process.env.GRFT_STATE_DIR = state;
+		const ctxMix = { ...ctxGraph, sessionManager: { getSessionId: () => "mix-sid" } };
+		try {
+			await pi.handlers.tool_result({ isError: false, toolName: "read", input: { path: "src/a.ts" }, content: [{ type: "text", text: "x".repeat(1600) }] }, ctxMix);
+			await pi.handlers.tool_result({ isError: false, toolName: "read", input: { path: "graft/cards/a.ts.md" }, content: [{ type: "text", text: "y".repeat(1600) }] }, ctxMix);
+			await pi.handlers.tool_result({ isError: false, toolName: "read", input: { path: "/repo/graft/prose/x.md" }, content: [{ type: "text", text: "z".repeat(1600) }] }, ctxMix);
+			const m = JSON.parse((await import("node:fs")).readFileSync(state + "/mix-sid.json", "utf8"));
+			if (m.sourceReads !== 1) throw new Error("sourceReads=1 (только src/a.ts): " + JSON.stringify(m));
+			if (m.sourceTokens !== 400) throw new Error("sourceTokens=400: " + JSON.stringify(m));
+		} finally {
+			if (prev === undefined) delete process.env.GRFT_STATE_DIR;
+			else process.env.GRFT_STATE_DIR = prev;
+		}
+	});
 	await check("graft: graft_callers находит зависимых", async () => {
 		const tool = pi.tools.find((t) => t.name === "graft_callers");
 		const res = await tool.execute("id", { symbol: "auth" }, new AbortController().signal, () => {}, ctxGraph);
@@ -358,7 +377,7 @@ const ctxGraph = { ...noUiCtx, cwd: fixture };
 		const state = mkdtempSync(tmpd + "/pi-graft-stats-");
 		const now = Date.now();
 		const D = 86_400_000;
-		wf3(state + "/t0.json", JSON.stringify({ calls: 5, tokens: 1000, ts: now }));
+		wf3(state + "/t0.json", JSON.stringify({ calls: 5, tokens: 1000, sourceReads: 30, sourceTokens: 5000, ts: now }));
 		wf3(state + "/t6.json", JSON.stringify({ calls: 10, tokens: 5000, ts: now - 6 * D }));
 		wf3(state + "/t40.json", JSON.stringify({ calls: 50, tokens: 90000, ts: now - 40 * D }));
 		wf3(state + "/bad.json", "{не json");
@@ -378,6 +397,7 @@ const ctxGraph = { ...noUiCtx, cwd: fixture };
 		if (!week || week[1] !== "15" || week[2] !== "6,000") throw new Error("неверные 7 дней: " + (week ? week.join(" ") : notified.slice(0, 300)));
 		const total = notified.match(/Всего: (\d+) вызов[а-я]*, ≈([\d,]+) токенов/);
 		if (!total || total[1] !== "65" || total[2] !== "96,000") throw new Error("неверный итог: " + (total ? total.join(" ") : notified.slice(0, 300)));
+		if (!notified.includes("Usage mix: 68% граф / 32% прямой source-read")) throw new Error("нет usage mix: " + notified.slice(0, 400));
 	});
 
 	await check("graft push: coverage-гейт — слабые хиты дают нудж один раз, дальше тишина", async () => {
