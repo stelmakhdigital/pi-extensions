@@ -29,6 +29,9 @@ export async function getLanguage(lang: Lang): Promise<Language> {
 		c: "c",
 		cpp: "cpp",
 		sh: "bash",
+		java: "java",
+		csharp: "c_sharp",
+		kotlin: "kotlin",
 	};
 	const grammar = GRAMMAR[lang];
 		l = await Language.load(getWasmPath(grammar as "typescript"));

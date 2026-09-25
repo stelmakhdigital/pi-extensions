@@ -26,6 +26,10 @@ const LANG_BY_EXT: Record<string, Lang> = {
 	".hh": "cpp",
 	".sh": "sh",
 	".bash": "sh",
+	".java": "java",
+	".cs": "csharp",
+	".kt": "kotlin",
+	".kts": "kotlin",
 };
 
 const SKIP_RE = /(^|\/)(node_modules|\.git|dist|build|out|\.memory|__pycache__|artifacts)(\/|$)/;

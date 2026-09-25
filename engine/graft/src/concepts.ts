@@ -85,16 +85,39 @@ ${input}`,
 	}
 
 	if (!topics) {
-		// Fallback без LLM: темы по верхним каталогам.
+		// Fallback без LLM: темы по верхним каталогам; корень — по языковой семье;
+		// мелкие группы (<2 файлов) — в «прочее».
 		const byDir = new Map<string, string[]>();
 		for (const p of paths) {
 			const dir = p.includes("/") ? p.split("/")[0] : "(root)";
 			byDir.set(dir, [...(byDir.get(dir) ?? []), p]);
 		}
-		topics = [...byDir.entries()]
-			.sort((a, b) => b[1].length - a[1].length)
-			.map(([dir, fs]) => ({ name: dir, summary: `Каталог «${dir}»: ${fs.length} файлов.`, files: fs }));
-		onProgress?.(`темы (fallback по каталогам): ${topics.length}`);
+		const langFamily = (p: string): string => {
+			const ext = p.slice(p.lastIndexOf(".") + 1).toLowerCase();
+			if (["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"].includes(ext)) return "ts-js";
+			if (ext === "py") return "python";
+			if (["go", "rs", "c", "h", "cpp", "cc", "sh", "bash", "java", "cs", "kt"].includes(ext)) return ext;
+			return "other";
+		};
+		const groups = new Map<string, string[]>();
+		for (const [dir, fs] of byDir) {
+			if (dir === "(root)" && fs.length >= 3) {
+				const byLang = new Map<string, string[]>();
+				for (const p of fs) {
+					const fam = langFamily(p);
+					byLang.set(fam, [...(byLang.get(fam) ?? []), p]);
+				}
+				for (const [fam, fl] of byLang)
+					groups.set(`root/${fam}`, [...(groups.get(`root/${fam}`) ?? []), ...fl]);
+			} else {
+				groups.set(dir, [...(groups.get(dir) ?? []), ...fs]);
+			}
+		}
+		const main = [...groups.entries()].filter(([, fs]) => fs.length >= 2).sort((a, b) => b[1].length - a[1].length);
+		const misc = [...groups.entries()].filter(([, fs]) => fs.length < 2).flatMap(([, fs]) => fs);
+		topics = main.map(([name, fs]) => ({ name, summary: `${name}: ${fs.length} файлов.`, files: fs }));
+		if (misc.length) topics.push({ name: "прочее", summary: `Разрозненные файлы: ${misc.length}.`, files: misc });
+		onProgress?.(`темы (fallback без LLM): ${topics.length}`);
 	}
 
 	deep.concepts = { hash, topics };

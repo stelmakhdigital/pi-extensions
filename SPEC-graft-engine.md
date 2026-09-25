@@ -51,6 +51,19 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
   7 инструментов (graft_ask/grep/callers/skeleton/map/check/blast); корень = env `GRFT_MCP_ROOT`
   или cwd; без внешних зависимостей (jiti + движок).
 - **Типы (interface/type_alias)** теперь в deep-проходе (были function/method/class).
+
+### 2c. v1.2 (2026-09-24, бэклог-итерация)
+- **Type inference v1 (возвратные типы)**: явные аннотации TS/JS (`function f(): Foo`,
+  `const f = (): Foo =>`) → `const x = f(); x.m()` резолвится в `Foo.m`
+  (`extract.fnReturns` + `build.resolveVia`). Только явные типы, классы в-файле/импорты;
+  full inference (возвратные выражения) — вне.
+- **Языки +3: Java, C#, Kotlin** (`extractOther.ts`): классы, qualified-методы
+  (enclosing class), именованные вызовы (`method_invocation` / `invocation_expression` /
+  `call_expression`); callee — первая именованная нода (this/obj идут первыми).
+  Резолв базовых имён (helper) → qualified-методы того же файла (short-name fallback).
+- **Concepts-fallback без LLM** улучшен: корень — по языковой семье (root/ts-js, root/py,
+  root/java, …), каталоги — темы; группы <2 файлов → «прочее».
+- Языки движка теперь: ts/tsx/js/mjs/cjs/py (двухпроходные) + go/rust/c/cpp/sh/java/csharp/kotlin.
 - `parse/` — загрузка web-tree-sitter + wasm (deps: `web-tree-sitter`, `tree-sitter-wasm`);
   парсинг → дерево; кэш парсинга в памяти на сессию.
 - `symbols.ts` — узлы: функции/классы/методы/типы/константы-экспорты, span, signature,
@@ -113,7 +126,8 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
 - Удалить упоминания @nanonets/graft (доки, README) после миграции.
 
 ## Вне v1 (бэклог)
-- (v1.1 выполнено: другие языки, MCP, viz, concept-ноды, deep в ask/map, member-цепочки, watch)
+- (v1.1/v1.2 выполнено: другие языки ×8, MCP, viz, concept-ноды, deep в ask/map, member-цепочки, watch, return-типы, concepts-fallback)
+- Полная типизация (возвратные выражения, дженерики), авто-refresh deep, другие языки (ruby/php/swift — грамматики есть)
   (сверх per-file/per-symbol), авто-refresh по watch, scorecard качества.
 
 ## 5b. Конфигурация deep (как запускать)

@@ -48,6 +48,9 @@ mkfile("src/util.ts", `export function helper(s: string): string { return s.toUp
 export const helper2 = (s: string) => s.trim();
 export function boost(s: string): string { return helper(s) + "x"; }
 export interface Task { id: string; done: boolean; }
+export class Pair { a = "x"; get(): string { return this.a; } }
+export function mkPair(): Pair { return new Pair(); }
+export function usePair(): string { const p = mkPair(); return p.get(); }
 `);
 mkfile("main.mjs", `import { start, Engine } from "./src/app.js";
 export function go() { return start(); }
@@ -81,13 +84,28 @@ mkfile("run.sh", `#!/usr/bin/env bash
 greet() { echo hi; }
 main() { greet; echo done; }
 `);
+mkfile("svc.java", `public class Service {
+  public String getName() { return name; }
+  public void run() { this.helper(); }
+  private void helper() {}
+}`);
+mkfile("svc.cs", `public class Service {
+  public string GetName() => name;
+  public void Run() { Helper(); }
+  private void Helper() { }
+}`);
+mkfile("svc.kt", `class Service {
+  fun getName(): String = name
+  fun run() { helper() }
+  private fun helper() { }
+}`);
 execFileSync("git", ["add", "-A"], { cwd: root });
 execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: root });
 
 // ── build ──
 const report = await engine.build(root);
 await check("build: базовые счётчики", () => {
-	assert(report.files === 7, `files=${report.files}`);
+	assert(report.files === 10, `files=${report.files}`);
 	assert(report.nodes > 10, `nodes=${report.nodes}`);
 	assert(report.edges >= 5, `edges=${report.edges}`);
 });
@@ -124,7 +142,17 @@ await check("edges: импорты + references + calls", () => {
 	assert(edge("tool.rs#make", "tool.rs#add"), "rust make→add");
 	assert(node("run.sh#greet")?.kind === "function", "sh function");
 	assert(edge("run.sh#main", "run.sh#greet"), "sh main→greet");
-});
+		// java/csharp/kotlin
+		assert(node("svc.java#Service")?.kind === "class", "java class");
+		assert(node("svc.java#Service.run")?.kind === "method", "java qualified method");
+		assert(edge("svc.java#Service.run", "svc.java#Service.helper"), "java run→helper");
+		assert(node("svc.cs#Service.Run")?.kind === "method", "csharp method");
+		assert(edge("svc.cs#Service.Run", "svc.cs#Service.Helper"), "csharp Run→Helper");
+		assert(node("svc.kt#Service.run")?.kind === "function", "kotlin fun");
+		assert(edge("svc.kt#Service.run", "svc.kt#Service.helper"), "kotlin run→helper");
+		// type inference: f(): Pair → p.get() = Pair.get
+		assert(edge("src/util.ts#usePair", "src/util.ts#Pair.get"), "fnReturns: usePair→Pair.get");
+	});
 
 const q = engine.makeQueries(root);
 
@@ -148,7 +176,7 @@ await check("callers in/out/depth", () => {
 
 await check("map", () => {
 	const out = q.map();
-	assert(out.startsWith("repo map — 7 files"), out);
+	assert(out.startsWith("repo map — 10 files"), out);
 	assert(out.includes("hubs (in-degree):"), out);
 	assert(out.includes("run_task"), out);
 });
@@ -241,7 +269,28 @@ await check("concepts: LLM-темы + полное покрытие файлов
 	const deep = JSON.parse(readFileSync(join(root, "graft", ".engine", "deep.json"), "utf8"));
 	assert(deep.concepts?.topics?.length, "темы есть");
 	const covered = new Set(deep.concepts.topics.flatMap((tp) => tp.files));
-	for (const f of ["src/app.ts", "src/util.ts", "main.mjs", "pytool.py", "app.go", "tool.rs", "run.sh"]) assert(covered.has(f), "файл в теме: " + f);
+	for (const f of ["src/app.ts", "src/util.ts", "main.mjs", "pytool.py", "app.go", "tool.rs", "run.sh", "svc.java", "svc.cs", "svc.kt"]) assert(covered.has(f), "файл в теме: " + f);
+});
+
+await check("concepts: fallback без LLM (каталог + язык для root + прочее)", async () => {
+	const { mkdtempSync: mk2, writeFileSync: wf2, mkdirSync: md2 } = await import("node:fs");
+	const root2 = mk2("/tmp/graft-fb-");
+	md2(root2 + "/src");
+	wf2(root2 + "/a.ts", "export function a() { return 1; }\n");
+	wf2(root2 + "/b.ts", "export function b() { return 2; }\n");
+	wf2(root2 + "/c.go", "package c\n");
+	wf2(root2 + "/src/x.ts", "export function x() { return 3; }\n");
+	wf2(root2 + "/src/y.ts", "export function y() { return 4; }\n");
+	wf2(root2 + "/lonely.py", "def lonely():\n    return 1\n");
+	execFileSync("git", ["init", "-q", "."], { cwd: root2 });
+	execFileSync("git", ["add", "-A"], { cwd: root2 });
+	await engine.build(root2);
+	const topics = await engine.conceptsBuild(root2, engine.readGraph(root2), { baseUrl: "", model: "" });
+	const covered = new Set(topics.flatMap((tp) => tp.files));
+	for (const f of ["a.ts", "c.go", "src/x.ts", "lonely.py"]) assert(covered.has(f), "файл в теме: " + f);
+	assert(topics.some((tp) => tp.name === "root/ts-js"), "root: языковая семья ts-js: " + topics.map((tp) => tp.name).join(","));
+	assert(topics.some((tp) => tp.name === "src"), "каталог src");
+	assert(topics.some((tp) => tp.name === "прочее" && tp.files.includes("lonely.py")), "мелкие — прочее");
 });
 
 await check("ask/map: deep-вывод (summary, crux, темы, file-summaries)", () => {

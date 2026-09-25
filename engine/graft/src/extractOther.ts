@@ -16,6 +16,20 @@ const lastIdent = (n: TsNode): string | null => {
 	return out;
 };
 
+const nameChild = (n: TsNode, types: string[]): string | null => {
+	for (const c of n.namedChildren) if (types.includes(c.type)) return c.text;
+	return null;
+};
+
+/** Квалифицированное имя метода: enclosing class (java/csharp/kotlin). */
+const enclosingClassName = (n: TsNode): string | null => {
+	for (let p = n.parent; p; p = p.parent) {
+		if (p.type === "class_declaration") return nameChild(p, ["identifier", "type_identifier", "simple_identifier"]);
+		if (p.type === "object_declaration") return nameChild(p, ["identifier", "type_identifier"]);
+	}
+	return null;
+};
+
 interface SymbolRule {
 	node: string;
 	kind: GraphNode["kind"];
@@ -133,6 +147,57 @@ const RULES: Record<string, LangRules> = {
 		callee: (fn) => (fn.type === "identifier" || fn.type === "word" || fn.type === "command_name" ? fn.text : null),
 		callNode: "command",
 	},
+	java: {
+		symbols: [
+			{ node: "class_declaration", kind: "class", name: (n) => nameChild(n, ["identifier", "type_identifier"]) },
+			{
+				node: "method_declaration",
+				kind: "method",
+				name: (n) => nameChild(n, ["identifier"]),
+				qualified: (n) => {
+					const nm = nameChild(n, ["identifier"]);
+					const cls = enclosingClassName(n);
+					return cls && nm ? `${cls}.${nm}` : null;
+				},
+			},
+		],
+		callee: (fn) => (fn.type === "identifier" ? fn.text : null),
+		callNode: "method_invocation",
+	},
+	csharp: {
+		symbols: [
+			{ node: "class_declaration", kind: "class", name: (n) => nameChild(n, ["identifier", "type_identifier"]) },
+			{
+				node: "method_declaration",
+				kind: "method",
+				name: (n) => nameChild(n, ["identifier"]),
+				qualified: (n) => {
+					const nm = nameChild(n, ["identifier"]);
+					const cls = enclosingClassName(n);
+					return cls && nm ? `${cls}.${nm}` : null;
+				},
+			},
+		],
+		callee: (fn) => (fn.type === "identifier" ? fn.text : null),
+		callNode: "invocation_expression",
+	},
+	kotlin: {
+		symbols: [
+			{ node: "class_declaration", kind: "class", name: (n) => nameChild(n, ["type_identifier", "identifier", "simple_identifier"]) },
+			{
+				node: "function_declaration",
+				kind: "function",
+				name: (n) => nameChild(n, ["simple_identifier", "identifier"]),
+				qualified: (n) => {
+					const nm = nameChild(n, ["simple_identifier", "identifier"]);
+					const cls = enclosingClassName(n);
+					return cls && nm ? `${cls}.${nm}` : null;
+				},
+			},
+		],
+		callee: (fn) => (fn.type === "simple_identifier" || fn.type === "identifier" ? fn.text : null),
+		callNode: "call_expression",
+	},
 };
 
 export async function extractOther(file: RepoFile, tree: Tree, lang: string): Promise<ExtractedFile> {
@@ -185,7 +250,11 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 		}
 		const callType = rules.callNode ?? "call_expression";
 		if (node.type === callType) {
-			const fn = rules.callNode ? node.namedChildren[0] : (node.childForFieldName?.("function") as TsNode | undefined);
+			// callee — первая "именованная" нода (this/obj могут идти первыми: this.m(), o.m())
+			const CALLEE_TYPES = ["identifier", "simple_identifier", "command_name", "word", "type_identifier"];
+			const fn = rules.callNode
+				? (node.namedChildren.find((c) => CALLEE_TYPES.includes(c.type)) ?? node.namedChildren[0])
+				: (node.childForFieldName?.("function") as TsNode | undefined);
 			if (fn) {
 				const callee = rules.callee(fn);
 				if (callee) callSites.push({ callee, caller });
@@ -198,8 +267,15 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 	const byName = new Map<string, GraphNode>();
 	for (const n of nodes) if (n.kind !== "file" && !byName.has(n.name)) byName.set(n.name, n);
 	// Квалификация: "T.m" → по методу m (для Go selector-вызовов).
+	// Базовое имя (helper) → qualified-метод того же файла (T.helper), если plain-имени нет.
+	const qualifiedByShort = new Map<string, GraphNode>();
+	for (const n of nodes) {
+		if (n.kind === "file" || !n.name.includes(".")) continue;
+		const short = n.name.slice(n.name.lastIndexOf(".") + 1);
+		if (!qualifiedByShort.has(short)) qualifiedByShort.set(short, n);
+	}
 	for (const cs of callSites) {
-		const t = byName.get(cs.callee);
+		const t = byName.get(cs.callee) ?? qualifiedByShort.get(cs.callee);
 		if (!t) continue;
 		const source = cs.caller ? cs.caller.id : file.path;
 		if (source === t.id) continue;
@@ -214,6 +290,7 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 		imports: [],
 		exports: new Map([...byName.entries()].filter(([, n]) => n.kind !== "file")),
 		vars: new Map<string, PendingVia>(),
+		fnReturns: new Map<string, string>(), // у rule-языков явных return-типов нет
 		pending: [] as PendingMemberCall[],
 	};
 }

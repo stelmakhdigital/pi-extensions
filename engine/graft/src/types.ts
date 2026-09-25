@@ -1,6 +1,6 @@
 /** Типы движка graft-engine. */
 
-export type Lang = "ts" | "tsx" | "js" | "py" | "go" | "rust" | "c" | "cpp" | "sh";
+export type Lang = "ts" | "tsx" | "js" | "py" | "go" | "rust" | "c" | "cpp" | "sh" | "java" | "csharp" | "kotlin";
 
 export interface RepoFile {
 	/** Путь относительно корня репо (posix). */

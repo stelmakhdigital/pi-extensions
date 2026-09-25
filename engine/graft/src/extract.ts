@@ -42,8 +42,21 @@ export interface ExtractedFile {
 	exports: Map<string, GraphNode>;
 	/** Локальные переменные → предполагаемый тип (new X / X() / ident-цепь). */
 	vars: Map<string, PendingVia>;
+	/** Локальные функции/стрелки → явный тип возвращаемого значения (для f().m()). */
+	fnReturns: Map<string, string>;
 	/** Нерезолвленные member-вызовы (obj.m()) — резолвятся в build.ts по глобальным индексам. */
 	pending: PendingMemberCall[];
+}
+
+/** Явный возвратный тип: первый type_identifier/identifier (Foo, Foo<T> → Foo). */
+function returnTypeOf(rt: TsNode, depth = 0): string | null {
+	if (depth > 3) return null;
+	for (const c of rt.namedChildren) {
+		if (c.type === "type_identifier" || c.type === "identifier") return c.text;
+		const r = returnTypeOf(c, depth + 1);
+		if (r) return r;
+	}
+	return null;
 }
 
 function nameChild(node: TsNode, types: string[]): string | null {
@@ -72,6 +85,7 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 	const imports: FileImport[] = [];
 	const callSites: CallSite[] = [];
 	const vars = new Map<string, PendingVia>();
+	const fnReturns = new Map<string, string>();
 	const pending: PendingMemberCall[] = [];
 	const lineCount = file.content.split("\n").length;
 
@@ -157,7 +171,14 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 			}
 			case "function_declaration": {
 				const name = nameChild(node, ["identifier"]);
-				if (name) nextCaller = addSymbol(node, name, "function", isExportedAncestor(node));
+				if (name) {
+					nextCaller = addSymbol(node, name, "function", isExportedAncestor(node));
+					const rt = node.childForFieldName?.("return_type");
+					if (rt) {
+						const t = returnTypeOf(rt);
+						if (t) fnReturns.set(name, t);
+					}
+				}
 				break;
 			}
 			case "method_definition": {
@@ -179,6 +200,11 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 				const value = node.childForFieldName?.("value");
 				if (name && value && (value.type === "arrow_function" || value.type === "function_expression")) {
 					nextCaller = addSymbol(node, name, "function", isExportedAncestor(node));
+					const rt = value.childForFieldName?.("return_type");
+					if (rt) {
+						const t = returnTypeOf(rt);
+						if (t) fnReturns.set(name, t);
+					}
 				}
 				// Тип-подсказка для member-вызовов: const x = new Foo(...) / Foo(...) / y
 				if (name && typeof name === "string" && value) {
@@ -281,7 +307,7 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 		}
 	}
 
-	return { file, nodes, edges, imports, exports: collectExports(nodes), vars, pending };
+	return { file, nodes, edges, imports, exports: collectExports(nodes), vars, fnReturns, pending };
 }
 
 /** Левый идентификатор цепочки member_expression (a.b.c → a). */
@@ -317,6 +343,7 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 	const vars = new Map<string, PendingVia>();
 	const pending: PendingMemberCall[] = [];
 	const lineCount = file.content.split("\n").length;
+	const fnReturns = new Map<string, string>(); // Python: явных return-типов нет
 
 	nodes.push({
 		id: file.path,
@@ -458,12 +485,12 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 		}
 	}
 
-	return { file, nodes, edges, imports, exports: collectExports(nodes), vars, pending };
+	return { file, nodes, edges, imports, exports: collectExports(nodes), vars, fnReturns, pending };
 }
 
 // ---------- Обёртка ----------
 
-const OTHER_LANGS = new Set(["go", "rust", "c", "cpp", "sh"]);
+const OTHER_LANGS = new Set(["go", "rust", "c", "cpp", "sh", "java", "csharp", "kotlin"]);
 
 export async function extractFile(file: RepoFile): Promise<ExtractedFile> {
 	const tree = await parseSource(file.lang, file.content);

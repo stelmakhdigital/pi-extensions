@@ -52,7 +52,24 @@ export async function buildGraph(root: string): Promise<Graph> {
 	const resolveVia = (via: { kind: string; name: string }, ex: (typeof extracted)[number], seen: Set<string>): string | null => {
 		if (seen.has(via.name)) return null;
 		seen.add(via.name);
-		if (via.kind === "new" || via.kind === "call") return via.name;
+		if (via.kind === "new") return via.name;
+		if (via.kind === "call") {
+			// возвратный тип функции (явная аннотация): const x = f(); x.m() → Foo.m
+			const ret = ex.fnReturns.get(via.name);
+			if (ret) {
+				if (ex.nodes.some((n) => n.kind === "class" && n.name === ret)) return ret;
+				for (const imp of ex.imports) {
+					if (!imp.names.includes(ret)) continue;
+					const tf =
+						ex.file.lang === "py"
+							? resolvePyImport(ex.file.path, imp.specifier, knownPaths)
+							: resolveImport(ex.file.path, imp.specifier, knownPaths);
+					const sym = extracted.find((x) => x.file.path === tf)?.exports.get(ret);
+					if (sym?.kind === "class") return ret;
+				}
+			}
+			return null;
+		}
 		const v2 = ex.vars.get(via.name);
 		if (v2) return resolveVia(v2, ex, seen);
 		// import: локальное имя → класс в целевом файле
