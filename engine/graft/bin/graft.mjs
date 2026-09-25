@@ -48,7 +48,7 @@ const root = resolve(process.cwd(), optVal("--dir") ?? ".");
 
 switch (cmd) {
 	case "build": {
-		const withDeep = optFlag("--deep") || optFlag("--deep-llm");
+		const withDeep = optFlag("--deep") || optFlag("--deep-llm") || rest.includes("deep");
 		console.log(`graft build: ${root}${withDeep ? " (+deep LLM)" : ""}`);
 		const t0 = Date.now();
 		const rep = await engine.build(root, {

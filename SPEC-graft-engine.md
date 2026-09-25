@@ -97,3 +97,31 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
 ## Вне v1 (бэклог)
 - Другие языки (grammaries подкидываются), MCP-сервер, viz, LLM-«концепт-ноды»-группировка
   (сверх per-file/per-symbol), авто-refresh по watch, scorecard качества.
+
+## 5b. Конфигурация deep (как запускать)
+
+Конфиг — ТОЛЬКО env (явный; без `GRFT_LLM_BASE_URL`/`GRFT_LLM_MODEL` deep отказывается
+запускаться с понятной ошибкой; дефолтных эндпоинтов в коде нет):
+
+| env | значение |
+|---|---|
+| `GRFT_LLM_BASE_URL` | корень openai-chat-совместимого API (запрос уходит на `$BASE_URL/chat/completions`; обычно `http://<host>:8000/v1`) |
+| `GRFT_LLM_MODEL` | имя модели (как в `/v1/models`) |
+| `GRFT_LLM_API_KEY` | опц.; отправляется как `Authorization: Bearer <key>` (локальные vLLM часто принимают любой) |
+
+Запуск:
+- В pi: `GRFT_LLM_BASE_URL=... GRFT_LLM_MODEL=... pi` (или env в shell) → `/graft build deep` (или `/graft build` — только структура).
+- Консоль: `GRFT_LLM_BASE_URL=... GRFT_LLM_MODEL=... node engine/graft/bin/graft.mjs build deep .` (или `--deep`).
+
+Параметры прохода (зашиты): температура 0.2; таймаут запроса 90s, 2 попытки; файл —
+первые 6000 символов + список символов, summary ≤40 слов одним предложением; символ
+(function/method/class) — тело ≤4000 символов, ответ строго JSON
+`{"summary": ≤30 слов, "crux": [1-3 строки КОДА ДОСЛОВНО]}` (строки крупнее 4000 —
+summary без crux); crux валидируется дословно по исходнику (до 3 строк).
+Кэш — по bodyHash: повторный проход пересчитывает только изменившееся/упавшее
+(упавшие легко перепопытать: `build deep` ещё раз — инкрементально).
+
+Проверенный прогон (2026-09-24): cat-vllm `qwen3.8-27b-dflash2`, 28 файлов + 303 символа,
+586s, 3 упавших JSON-ответа перепопало вторым проходом за 6s (итог: 0 ошибок,
+286 символов с валидным crux). Qwen3-ответы приходят с полем `reasoning` — на парсинг
+не влияет (читается `choices[0].message.content`).
