@@ -17,6 +17,9 @@
  * Активно только в репозиториях с построенным графом (graft/.engine/graph.json).
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { Type } from "typebox";
 import {
 	blastFileText,
@@ -27,6 +30,7 @@ import {
 	ensureFresh,
 	findGraphRoot,
 	makeQueries,
+	readGraph,
 	type DeepConfig,
 } from "../../engine/graft/src/index.js";
 
@@ -81,6 +85,9 @@ export default function graftExtension(pi: ExtensionAPI) {
 
 	let mapCache: { text: string; at: number } | null = null;
 	const MAP_TTL_MS = 120_000;
+	let freshCache: { at: number; st: Awaited<ReturnType<typeof checkStatus>> } | null = null;
+	const FRESH_TTL_MS = 30_000;
+	let bgSyncRunning = false;
 
 	function enabled(ctx: ExtensionContext): boolean {
 		if (pi.getFlag("--graft") === false) return false;
@@ -126,14 +133,47 @@ export default function graftExtension(pi: ExtensionAPI) {
 	/** Сессионный накопитель «tokens saved» (строка [graft] tokens saved ≈ в выводах тулов). */
 	interface SavingsSession { tokens: number; calls: number }
 	const savingsSession: SavingsSession = (globalThis as Record<string, unknown>).__graftSavings ??= { tokens: 0, calls: 0 };
-	const recordSavings = (out: string): void => {
+	const recordSavings = (out: string, ctx?: ExtensionContext): void => {
 		const m = /\[graft\] tokens saved ≈ ([\d,]+)/.exec(out);
 		if (m) {
 			savingsSession.tokens += parseInt(m[1].replace(/,/g, ""), 10);
 			savingsSession.calls++;
+			if (ctx) trackMetrics(ctx, { tokens: parseInt(m[1].replace(/,/g, ""), 10) });
 		}
 	};
 	const fmtTok = (n: number): string => (Math.round(n / 1000) >= 100 ? `${Math.round(n / 1000)}k` : n.toLocaleString("en-US"));
+	/** Сессионные метрики на диске (~/.local/state/pi-graft/metrics/<sid>.json, override: GRFT_STATE_DIR). */
+	const metricsDir = (): string => process.env.GRFT_STATE_DIR?.trim() || join(homedir(), ".local", "state", "pi-graft", "metrics");
+	const metricsPath = (sid: string): string => join(metricsDir(), `${sid}.json`);
+	interface MetricsFile { calls: number; tokens: number; ts: number }
+	const readMetrics = (ctx: ExtensionContext): MetricsFile | null => {
+		try {
+			const sid = (ctx.sessionManager as { getSessionId?: () => string } | undefined)?.getSessionId?.();
+			if (!sid) return null;
+			return JSON.parse(readFileSync(metricsPath(sid), "utf8")) as MetricsFile;
+		} catch {
+			return null;
+		}
+	};
+	const trackMetrics = (ctx: ExtensionContext, patch: { calls?: number; tokens?: number }): void => {
+		try {
+			const sid = (ctx.sessionManager as { getSessionId?: () => string } | undefined)?.getSessionId?.();
+			if (!sid) return;
+			const p = metricsPath(sid);
+			let m: MetricsFile = { calls: 0, tokens: 0, ts: Date.now() };
+			try { m = { ...m, ...(JSON.parse(readFileSync(p, "utf8")) as MetricsFile) }; } catch { /* новая сессия */ }
+			m.calls += patch.calls ?? 0;
+			m.tokens += patch.tokens ?? 0;
+			m.ts = Date.now();
+			mkdirSync(dirname(p), { recursive: true });
+			writeFileSync(p, JSON.stringify(m));
+		} catch {
+			// тихо
+		}
+	};
+	const GRAFT_TOOL_NAMES = new Set(["graft_ask", "graft_grep", "graft_callers", "graft_skeleton", "graft_map", "graft_check", "graft_blast"]);
+	/** Compliance: был ли graft-тул в ходе сессии с экономией, но без «🌱» в ответе. */
+	let complianceReminder = false;
 
 	/** «syncing…» на время тихой пересборки (сбрасывается в refreshBadge). */
 	function setSyncingBadge(ctx: ExtensionContext): void {
@@ -157,10 +197,11 @@ export default function graftExtension(pi: ExtensionAPI) {
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
+			trackMetrics(ctx, { calls: 1 });
 			try {
 				await ensureFresh(root);
 				let out = makeQueries(root).ask(params.query);
-				recordSavings(out);
+				recordSavings(out, ctx);
 				if (params.scope) {
 					const prefix = params.scope.endsWith("/") ? params.scope : `${params.scope}/`;
 					out = out.split("\n").filter((l) => !l.includes(prefix) || l.includes("graft ask")).join("\n");
@@ -187,10 +228,11 @@ export default function graftExtension(pi: ExtensionAPI) {
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
+			trackMetrics(ctx, { calls: 1 });
 			try {
 				await ensureFresh(root);
 				const out = makeQueries(root).grep(params.pattern, { scope: params.scope, fixed: params.fixed, ignoreCase: params.ignoreCase });
-				recordSavings(out);
+				recordSavings(out, ctx);
 				return toolResult(cap(out, maxOut()), { cmd: `graft grep ${params.pattern}` });
 			} catch (e) {
 				return toolResult(`graft grep: ${(e as Error).message}`, { error: "query" });
@@ -212,10 +254,11 @@ export default function graftExtension(pi: ExtensionAPI) {
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
+			trackMetrics(ctx, { calls: 1 });
 			try {
 				await ensureFresh(root);
 				const out = makeQueries(root).callers(params.symbol, { direction: params.direction, depth: params.depth });
-				recordSavings(out);
+				recordSavings(out, ctx);
 				return toolResult(cap(out, maxOut()), { cmd: `graft callers ${params.symbol}` });
 			} catch (e) {
 				return toolResult(`graft callers: ${(e as Error).message}`, { error: "query" });
@@ -235,10 +278,11 @@ export default function graftExtension(pi: ExtensionAPI) {
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
+			trackMetrics(ctx, { calls: 1 });
 			try {
 				await ensureFresh(root);
 				const out = makeQueries(root).skeleton(params.file);
-				recordSavings(out);
+				recordSavings(out, ctx);
 				return toolResult(cap(out, maxOut()), { cmd: `graft skeleton ${params.file}` });
 			} catch (e) {
 				return toolResult(`graft skeleton: ${(e as Error).message}`, { error: "query" });
@@ -258,6 +302,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
+			trackMetrics(ctx, { calls: 1 });
 			try {
 				await ensureFresh(root);
 				const out = makeQueries(root).map({ maxDirs: params.maxDirs });
@@ -279,6 +324,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 		async execute(_id, _params, _signal, _onUpdate, ctx) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
+			trackMetrics(ctx, { calls: 1 });
 			try {
 				const { text, json } = await makeQueries(root).check();
 				void refreshBadge(ctx, root);
@@ -301,6 +347,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
+			trackMetrics(ctx, { calls: 1 });
 			try {
 				await ensureFresh(root);
 				const out = await makeQueries(root).blast(params.base);
@@ -310,6 +357,39 @@ export default function graftExtension(pi: ExtensionAPI) {
 			}
 		},
 	});
+
+	/** Push: топ-хиты графа под промпт (askJson) + scope-хинт + сессионный dedup (retract:
+	 *  старые пакеты не повторять — только новые id; пусто → пакет не инжектится). */
+	const pushHits = async (root: string, prompt: string, words: string[]): Promise<string | null> => {
+		await ensureFresh(root);
+		let scopes: Record<string, string[]> = {};
+		try {
+			scopes = readGraph(root).meta.scopes ?? {};
+		} catch {
+			/* графа ещё нет */
+		}
+		const scopeKey =
+			Object.keys(scopes).find((k) => prompt.includes(k)) ??
+			Object.keys(scopes).find((k) => {
+				const tail = k.split("/").pop()?.toLowerCase();
+				return tail ? words.some((w) => w.toLowerCase() === tail) : false;
+			}) ??
+			null;
+		const scopeFiles = scopeKey ? new Set(scopes[scopeKey]) : null;
+		const results = makeQueries(root).askJson(prompt).results;
+		const inScope = scopeFiles ? results.filter((r) => scopeFiles.has(r.path)) : results;
+		const seen: Set<string> = ((globalThis as Record<string, unknown>).__graftPushSeen as Set<string> | undefined) ?? new Set<string>();
+		(globalThis as Record<string, unknown>).__graftPushSeen = seen;
+		const idOf = (r: { path: string; name: string; start: number }): string => `${r.path}#${r.name}@L${r.start}`;
+		const fresh = inScope.filter((r) => !seen.has(idOf(r)));
+		if (fresh.length === 0) return null;
+		for (const r of fresh) {
+			seen.add(idOf(r));
+			if (seen.size > 400) seen.clear();
+		}
+		const lines = fresh.slice(0, 6).map((r) => `  ${r.score}  ${r.name}  ${r.path}:L${r.start}-L${r.end}  ${r.snippet}`);
+		return `## Top-хиты графа под текущий промпт${scopeKey ? ` (scope: ${scopeKey})` : ""}\n${lines.join("\n")}`;
+	};
 
 	// ---------- Хуки ----------
 
@@ -340,18 +420,38 @@ export default function graftExtension(pi: ExtensionAPI) {
 			parts.push(mapCache.text);
 		}
 		if (wantPush) {
-			try {
-				const out = makeQueries(root).ask(event.prompt);
-				parts.push(`## Top-хиты графа под текущий промпт\n${cap(out, 4000)}`);
-			} catch {
-				// тихо
+			// Релевантность-гейт: короткие/не-кодовые промпты не шлём в граф.
+			const words = event.prompt.match(/[a-zA-Zа-яё][a-zA-Zа-яё-]{3,}/g) ?? [];
+			if (event.prompt.trim().length >= 15 && words.length > 0) {
+				try {
+					const out = await pushHits(root, event.prompt, words);
+					if (out) parts.push(cap(out, 4000));
+				} catch {
+					// тихо
+				}
 			}
 		}
 		if (parts.length > 0) {
-			event.systemPromptOptions.sections["graft"] =
+			const head: string[] = [
 				`Нижележащий локальный граф кодовой базы (graft/) — собственный движок pi-graft-engine (engine/graft). Используй его ПЕРЕД grep/чтениями файлов. ` +
-				`Для уточнения есть инструменты graft_ask/graft_grep/graft_callers/graft_skeleton.\n\n` +
-				parts.join("\n\n");
+				`Для уточнения есть инструменты graft_ask/graft_grep/graft_callers/graft_skeleton.`,
+			];
+			try {
+				if (!freshCache || Date.now() - freshCache.at > FRESH_TTL_MS) {
+					freshCache = { at: Date.now(), st: await checkStatus(root) };
+				}
+				const st = freshCache.st;
+				if (st.text !== "нет графа") {
+					head.push(st.ok ? "Свежесть: граф синхронен." : `Свежесть: ⚠ дрейф (stale ${st.stale}${st.added ? `, new ${st.added}` : ""}) — проверь /graft check, при необходимости /graft build.`);
+				}
+			} catch {
+				// тихо
+			}
+			if (complianceReminder) {
+				head.push("Напоминание: в прошлом ходе были graft-тулы со строками [graft] tokens saved, но отчёт об экономии отсутствует — заверши ответ строкой вида 🌱 graft saved ~N tokens (M calls).");
+				complianceReminder = false;
+			}
+			event.systemPromptOptions.sections["graft"] = head.join("\n\n") + "\n\n" + parts.join("\n\n");
 		}
 	});
 
@@ -377,6 +477,41 @@ export default function graftExtension(pi: ExtensionAPI) {
 		}
 		return note ? { content: [...event.content, { type: "text", text: note }] } : undefined;
 	});
+	// Compliance: в ходе были graft-тулы с экономией, а в ответе нет «🌱» → напомнить в след. секции.
+	pi.on("turn_end", async (event, _ctx) => {
+		try {
+			const trs = (event.toolResults ?? []) as Array<{ toolName?: string; content?: Array<{ type?: string; text?: string }> }>;
+			let savingsInTurn = 0;
+			for (const tr of trs) {
+				if (!tr.toolName || !GRAFT_TOOL_NAMES.has(tr.toolName)) continue;
+				const text = (tr.content ?? []).map((c) => (c.type === "text" ? c.text ?? "" : "")).join(" ");
+				const m = /\[graft\] tokens saved ≈ ([\d,]+)/.exec(text);
+				if (m) savingsInTurn += parseInt(m[1].replace(/,/g, ""), 10);
+			}
+			if (savingsInTurn === 0) return;
+			const msg = event.message as { content?: Array<{ type?: string; text?: string }> } | undefined;
+			const reply = (msg?.content ?? []).map((c) => (c.type === "text" ? c.text ?? "" : "")).join(" ");
+			if (!/🌱/.test(reply)) complianceReminder = true;
+		} catch {
+			// тихо
+		}
+	});
+
+	// Фоновый синхронизатор: после завершения хода — тихий ensureFresh + бейдж (guard одного rebuild).
+	pi.on("agent_end", async (_event, ctx) => {
+		if (!enabled(ctx)) return;
+		const root = rootOf(ctx);
+		if (!root || pi.getFlag("--graft-auto-rebuild") === false || bgSyncRunning) return;
+		bgSyncRunning = true;
+		void ensureFresh(root)
+			.then(() => refreshBadge(ctx, root))
+			.catch(() => {
+				// тихо
+			})
+			.finally(() => {
+				bgSyncRunning = false;
+			});
+	});
 
 	// ---------- Команда /graft ----------
 
@@ -396,7 +531,9 @@ export default function graftExtension(pi: ExtensionAPI) {
 			} else {
 				parts.push("Граф: не найден (запусти `/graft build` в корне репо)");
 			}
-			parts.push(`Флаги: map=${pi.getFlag("--graft-map") !== false} push=${pi.getFlag("--graft-push") === true} blast=${pi.getFlag("--graft-blast") !== false}`);
+			parts.push(`Флаги: map=${pi.getFlag("--graft-map") !== false} push=${pi.getFlag("--graft-push") === true} blast=${pi.getFlag("--graft-blast") === true}`);
+			const m = readMetrics(ctx);
+			if (m) parts.push(`Сессия: ${m.calls} вызовов graft-тулов, ≈${fmtTok(m.tokens)} токенов сэкономлено (метрика на диске, ~/.local/state/pi-graft).`);
 
 			const arg = args.trim();
 			if (arg.startsWith("build")) {

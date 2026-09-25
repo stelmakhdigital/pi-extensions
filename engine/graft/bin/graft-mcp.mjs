@@ -122,7 +122,14 @@ process.stdin.on("data", (chunk) => {
 					protocolVersion: params?.protocolVersion ?? "2024-11-05",
 					capabilities: { tools: {} },
 					serverInfo: { name: "pi-graft-engine-mcp", version: "1.0.0" },
-					instructions: "Локальный кодовый граф (pi-graft-engine). Корень: " + root(),
+					instructions:
+						"Локальный кодовый граф (pi-graft-engine), корень: " + root() + ". " +
+						"Детерминированные запросы БЕЗ LLM: используй ПЕРЕД grep/чтениями файлов. " +
+						"ask — «как это работает / где живёт» (file:line + сниппеты); grep — исчерпывающие все вхождения; " +
+						"callers — кто зависит от символа (direction in/out, depth число или all — полное замыкание); " +
+						"skeleton — все сигнатуры файла (~10x дешевле чтения); map — ориентация в репо; check — свежесть; blast — blast radius git-diffa. " +
+						"Выдачи retrieval (ask/grep/skeleton/callers) открываются строкой [graft] tokens saved ≈ N — суммируй их и в конце ответа отчитайся: 🌱 graft saved ~N tokens (M calls). " +
+						"Не обрезай выходы head/tail — сузь запрос (scope, depth).",
 				},
 			});
 		}

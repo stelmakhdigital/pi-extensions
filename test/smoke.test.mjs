@@ -265,6 +265,89 @@ const ctxGraph = { ...noUiCtx, cwd: fixture };
 		const texts = res.content.map((c) => c.text).join("\n");
 		if (!texts.includes("blast radius")) throw new Error("нет blast: " + texts.slice(0, 300));
 	});
+	// v2.6: push-гейт/dedup, compliance, метрики, MCP instructions
+	const makePiFlags = (overrides) => {
+		const base = makePi();
+		base.getFlag = (name) => {
+			const f = base.flags.find((x) => x.name === name.replace(/^--/, ""));
+			return overrides[name] ?? (f ? f.default : false);
+		};
+		return base;
+	};
+	const ctxGraft = jiti("../extensions/graft/index.ts");
+	const piPush = makePiFlags({ "--graft-push": true });
+	ctxGraft.default(piPush);
+
+	await check("graft push: гейт релевантности (короткий промпт → без пакета)", async () => {
+		const sections = {};
+		await piPush.handlers.before_agent_start({ prompt: "ок", systemPromptOptions: { sections } }, ctxGraph);
+		if (sections.graft && sections.graft.includes("Top-хиты")) throw new Error("пакет на короткий промпт: " + sections.graft.slice(0, 200));
+	});
+
+	await check("graft push: дедуп по сессии (второй раз — только новые id)", async () => {
+		const sections1 = {};
+		await piPush.handlers.before_agent_start({ prompt: "fix the auth bug in handler", systemPromptOptions: { sections: sections1 } }, ctxGraph);
+		if (!sections1.graft || !sections1.graft.includes("Top-хиты графа")) throw new Error("нет пакета: " + JSON.stringify(sections1.graft ?? null).slice(0, 200));
+		const sections2 = {};
+		await piPush.handlers.before_agent_start({ prompt: "fix the auth bug in handler", systemPromptOptions: { sections: sections2 } }, ctxGraph);
+		if (sections2.graft && sections2.graft.includes("Top-хиты графа")) throw new Error("повторный пакет: " + sections2.graft.slice(0, 200));
+	});
+
+	await check("graft compliance: turn_end без 🌱 → напоминание в след. секции", async () => {
+		await pi.handlers.turn_end(
+			{
+				turnIndex: 0,
+				message: { content: [{ type: "text", text: "готово, без эмодзи" }] },
+				toolResults: [{ toolName: "graft_ask", content: [{ type: "text", text: "[graft] tokens saved ≈ 500\ngraft ask: ..." }] }],
+			},
+			ctxGraph,
+		);
+		const s1 = {};
+		await pi.handlers.before_agent_start({ prompt: "продолжи работу над кодом проекта", systemPromptOptions: { sections: s1 } }, ctxGraph);
+		if (!s1.graft || !s1.graft.includes("Напоминание")) throw new Error("нет напоминания: " + JSON.stringify(s1.graft ?? null).slice(0, 300));
+		const s2 = {};
+		await pi.handlers.before_agent_start({ prompt: "ещё один промпт для проверки кэша", systemPromptOptions: { sections: s2 } }, ctxGraph);
+		if (s2.graft && s2.graft.includes("Напоминание")) throw new Error("напоминание не разовое: " + s2.graft.slice(0, 300));
+	});
+
+	await check("graft метрики: вызов тула пишет ~/.local/state (GRFT_STATE_DIR)", async () => {
+		const { mkdtempSync, readFileSync: rf, existsSync: ex } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const state = mkdtempSync(tmpdir() + "/pi-graft-state-");
+		const prev = process.env.GRFT_STATE_DIR;
+		process.env.GRFT_STATE_DIR = state;
+		try {
+			const tool = pi.tools.find((t) => t.name === "graft_ask");
+			await tool.execute("id", { query: "auth symbol" }, new AbortController().signal, () => {}, { ...ctxGraph, sessionManager: { getSessionId: () => "smoke-sid" } });
+			const f = state + "/smoke-sid.json";
+			if (!ex(f)) throw new Error("нет файла метрик: " + f);
+			const m = JSON.parse(rf(f, "utf8"));
+			if (m.calls < 1 || typeof m.tokens !== "number") throw new Error("плохие метрики: " + JSON.stringify(m));
+		} finally {
+			if (prev === undefined) delete process.env.GRFT_STATE_DIR;
+			else process.env.GRFT_STATE_DIR = prev;
+		}
+	});
+
+	await check("graft mcp: initialize отдаёт instructions с экономикой", async () => {
+		const { spawn } = await import("node:child_process");
+		const bin = new URL("../engine/graft/bin/graft-mcp.mjs", import.meta.url).pathname;
+		const p = spawn(process.execPath, [bin], { env: { ...process.env, GRFT_MCP_ROOT: fixture } });
+		let buf = "";
+		await new Promise((res) => {
+			p.stdout.on("data", (d) => { buf += d.toString(); if (buf.includes("\n")) res(); });
+			setTimeout(res, 5000);
+		});
+		p.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) + "\n");
+		await new Promise((res) => {
+			p.stdout.on("data", (d) => { buf += d.toString(); if (buf.includes("instructions")) res(); });
+			setTimeout(res, 5000);
+		});
+		p.kill();
+		const line = buf.split("\n").find((l) => l.includes("instructions"));
+		if (!line) throw new Error("нет instructions: " + buf.slice(0, 200));
+		if (!line.includes("tokens saved")) throw new Error("instructions без экономики: " + line.slice(0, 200));
+	});
 }
 
 
