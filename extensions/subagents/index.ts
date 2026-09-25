@@ -406,6 +406,20 @@ export function shouldCheckSentinel(
 	return now - r.lastSnapshot.ts > config.watchdog.snapshotStaleMs * 2;
 }
 
+/**
+ * Old `running` entry for a session being resumed: same sessionFile, not finished, id != newId.
+ * The `.exit` sidecar is shared per sessionFile and consumed by the first reader, so only the
+ * resumed entry may stay live for that file.
+ */
+export function findStaleResumedEntry(
+	entries: Iterable<{ id: string; sessionFile: string; finished: boolean }>,
+	sessionFile: string,
+	newId: string,
+): { id: string; sessionFile: string; finished: boolean } | undefined {
+	for (const e of entries) if (e.sessionFile === sessionFile && e.id !== newId && !e.finished) return e;
+	return undefined;
+}
+
 async function watchTick(): Promise<void> {
 	tickCount += 1;
 	if (tickCount % 30 === 0) refreshConfig();
@@ -1118,6 +1132,16 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 				stallPingSent: false,
 				finished: false,
 			};
+
+			// Replace the old unfinished entry for the same sessionFile (e.g. the interrupted
+			// original interactive one): the `.exit` sidecar is shared per sessionFile and consumed
+			// by the first reader, so it must not win the finished race against the resumed entry.
+			// Its pane is intentionally left alive (may be a still-useful interactive pane).
+			const stale = findStaleResumedEntry(running.values(), sessionPath, id);
+			if (stale) {
+				running.delete(stale.id);
+				updateWidget();
+			}
 
 			// Reserve the concurrency slot before the first await (see spawn path).
 			running.set(id, r);

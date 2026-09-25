@@ -604,6 +604,20 @@ await check("watchdog: shouldCheckSentinel — умер до первого сн
 	assert(shouldCheckSentinel({ lastSnapshot: { ts: now - 45_000 }, startTime: 0 }, now, cfg) === false, "stale < 2x -> false");
 });
 
+await check("resume: findStaleResumedEntry — та же sessionFile, не finished, id !== newId", () => {
+	const findStaleResumedEntry = ext.findStaleResumedEntry;
+	const entries = [
+		{ id: "old", sessionFile: "/s.jsonl", finished: false },
+		{ id: "fin", sessionFile: "/s.jsonl", finished: true },
+		{ id: "other", sessionFile: "/s2.jsonl", finished: false },
+	];
+	assert(findStaleResumedEntry(entries, "/s.jsonl", "new")?.id === "old", "находит старую запись с тем же sessionFile");
+	assert(findStaleResumedEntry(entries, "/s3.jsonl", "new") === undefined, "другой sessionFile — не находит");
+	assert(findStaleResumedEntry([{ id: "fin", sessionFile: "/s.jsonl", finished: true }], "/s.jsonl", "new") === undefined, "finished — не находит");
+	assert(findStaleResumedEntry([{ id: "new", sessionFile: "/s.jsonl", finished: false }], "/s.jsonl", "new") === undefined, "id совпадает — не находит");
+	assert(findStaleResumedEntry([], "/s.jsonl", "new") === undefined, "пусто — undefined");
+});
+
 // ── widget ──
 
 await check("widget: рамка — все строки одной ширины (любой count)", () => {
