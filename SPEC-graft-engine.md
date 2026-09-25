@@ -318,3 +318,19 @@ summary без crux); crux валидируется дословно по исх
 вызовы и ≈токены. Невалидные файлы пропускаются. В обычный `/graft` добавляется строка
 «Сводка за 7 дней» (только при наличии данных). Без дополнительного состояния —
 агрегация on-the-fly.
+
+### 2r. v2.8 (coverage-гейт push + compliance-tally)
+- `askJson` возвращает `coverage`/`coverageStrong` — лексическая доля ключевых слов
+  запроса (unique, ≥4 симв., оба алфавита) в name+signature (strong) / +path (broad)
+  топ-хита. Детерминированно, $0.
+- Push-гейт: 0 хитов → тишина; `strong < 0.3 && broad < 0.5` → одноразовый нудж
+  «граф не дал сильного совпадения — начни с graft_ask»; иначе — указатели (dedup).
+- Compliance-tally: `turn_end` при экономии в ходе инкрементирует в метриках
+  `graftTurns` (+`reportedTurns`, если в ответе «🌱»); `/graft stats` печатает
+  «🌱-отчёт в ответе: X из Y graft-ходов».
+
+### 2s. v2.9 (lean push-инжекция, always-on)
+Push-пакет = топ-3 указателя `path:Lstart-Lend  name`, без скоров и сниппетов
+(свежая full-price инъекция не везёт код; retrieval с кодом — `graft_ask`).
+`--graft-push` включён по умолчанию (parity: их push always-on после init);
+гейты не меняются: длина/слова → coverage (0.3/0.5) → nudge (1 раз) → dedup.

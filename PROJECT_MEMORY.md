@@ -481,3 +481,30 @@ skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 уз
   только если calls>0. Описания команды расширено.
 - Урок: smoke-стаб registerCommand сохраняет {name, def} — вызов через
   `pi.commands.find(...).def.handler`, не `.handler`.
+
+### v2.8 (coverage-гейт push + compliance-доля) ГОТОВО, smoke 60 / unit 32 (2026-09-25)
+- **Их подход проверен по исходникам** (2026-09-25): у референса (a) Stop-hook ТОЛЬКО
+  считает compliance (graftTurns/reportedTurns) — форс-повтора НЕТ; (b) гейт push —
+  лексический (coverage/coverageStrong из ask, пороги STRONG_FLOOR=0.1 / HIGH_FLOOR=0.5
+  у них), LLM в hook'ах нет («никогда не трогают сеть»). Наши пороги 0.3/0.5 строже —
+  осознанно (наш strong считается только по имени/сигнатуре, у них сложнее).
+- coverageScore(query, ...texts): ключевые слова — `[a-zA-Zа-яё][...]{3,}` (мин. 4
+  символа, unique, lowercase); доля найденных includes'ом. strong = name+signature,
+  broad = +path. askJson возвращает оба поля по топ-хиту.
+- Push: 0 хитов → null (тишина); strong<0.3 && broad<0.5 → нудж (1 раз на сессию,
+  globalThis.__graftPushNudged); иначе — указатели через dedup.
+- Tally: MetricsFile += graftTurns/reportedTurns; turn_end пишет при savingsInTurn>0;
+  stats-строка только при turns>0. Старые файлы метрик без полей — ?? 0.
+- Тест-фикстура «weak»: слово из сниппета (toUpperCase), отсутствующее в именах/путях —
+  даёт хиты с coverage 0. Промпт без хитов в малом фикстур-репо → 0 результатов,
+  не «слабые» (нудж не сработает).
+
+### v2.9 (lean-injection: топ-3 указатели, push by default) (2026-09-25)
+- Почему без сниппетов: push-пакет меняется каждый промпт → fresh full-price токены
+  (в их комментариях это обоснование отказа от inline-кода; наш map/секция стабильны
+  120s → prefix-cache, там сниппеты не нужны тоже). Топ-3 (у них -n 3).
+- Дефолт --graft-push: true. Риск оценён: askJson + ensureFresh in-process (мс),
+  гейты (длина/слова → coverage/nudge → dedup) отсекают некодовый шум; без хитов —
+  тишина (в маленьком/чистом репе пакет почти никогда не appears).
+- Урок (опять): smoke-стаб registerFlag/registerCommand сохраняют {name, def} —
+  значения в `f.def.default` / `cmd.def.handler`.
