@@ -229,4 +229,4 @@ SPEC: SPEC-graft-engine.md. Этапы: roadmap.md §graft-engine.
   graft/ репо пересобран новым движком (28 файлов/394 узла/355 рёбер).
 - Тесты: test/graft-engine.test.mjs (15/15, deep — с фейк-LLM http-сервером); smoke §graft —
   фикстура собирается своим bin; tsc strict чистый.
-- Осталось: live-check в pi (pi update + реальная сессия) + коммит — по явной команде.
+- [x] Live-check в pi (2026-09-24): pi update --extensions (ef48083, npm-зависимости встали) → `pi -p` в репо: LLM вызвал graft_map, ответ «28 файлов · 366 узлов» (366 = 394 узла минус 28 file-нод). Коммит ef48083, pushed.
