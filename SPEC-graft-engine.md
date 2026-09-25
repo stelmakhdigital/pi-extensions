@@ -147,6 +147,70 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
   - кэш: только символы/файлы с изменившимся bodyHash (инкрементально);
   - лимиты: таймаут/запрос, retry 1, прогресс в stdout (для CLI-прогона /graft build deep).
 
+### 2h. v2.0 (2026-09-25, программа A: автоматизация)
+- **refresh.ts**: fingerprint `graft/.engine/fingerprint.json` (size+mtime, ~мс);
+  `driftReport()` — added/removed/changed; `ensureFresh()` — тихая пересборка при дрейфе
+  (вызывается в каждом query-инструменте: расширение/MCP/CLI; env `GRFT_NO_REFRESH=1` —
+  отключить). Без TTL-кэша (кэш глотал дрейф — баг v2.0, исправлено).
+- **Auto-rebuild после правок кода**: расширение — хук `tool_result` (write/edit) →
+  `enableAutoRebuild(build)` (дебаунс 4с, coalescing); флаг `--graft-auto-rebuild`;
+  badge «syncing…» → «graft: synced · N% deep» / «⚠ N stale · N% deep» (deepCoverage()).
+- **check exit-code**: дрейф → `process.exitCode = 1` (CI-friendly); `check --json` то же.
+- `scan.ts`: единый `isIndexablePath()` для скана и fingerprint.
+
+### 2i. v2.1 (монорепо-скупы, D10)
+- `detectScopes(paths)` — подпроекты по маркерам (package.json, pyproject.toml,
+  Cargo.toml, go.mod, pom.xml, build.gradle*); `Graph.meta.scopes` (имя → файлы).
+- ask: scope-fusion — глобальный топ-6 + топ-3 по каждому затронутому скупу, метка
+  `[scope]`; map: блок `scopes:`; grep: фильтр по именованному скупу.
+
+### 2j. v2.2 (+7 языков, D9)
+- R, Elixir, Solidity, OCaml, Zig, Clojure, Nix (итого 25 расширений/семейств).
+- extractOther-правила: R (name = LHS `<-`), Elixir (def/defmodule через call-ноды),
+  OCaml (value_name в let_binding, вложенные), Zig (callee — plain identifier),
+  Clojure (head = sym_lit, fn.type), Nix (binding в attrset; top-level в этом wasm-бUILDe
+  ломается — ERROR-ноды, учитывается только attrset).
+
+### 2k. v2.3 (full-fidelity B6)
+- Go/Java/Kotlin/PHP/Swift — полные правила: member-вызовы obj.m() → pending
+  (ident), type-hints локальных переменных (varAssigns), конструкторы new T/&T{}.
+- `build.ts`: globalMethods теперь включает kind "method" И "function"
+  (Kotlin/Swift-методы — kind function).
+- extractOther возвращает реальные vars+pending (были пустыми).
+
+### 2l. B5 (LSP-синхронизация)
+- **Кандидаты**: сборка пишет `graft/.engine/unresolved.json` — нерешённые member-вызовы
+  (метод не найден статически: наследование, duck-typing, динамика) с file/line/col/caller.
+- **lsp.ts**: stdio LSP-клиент (JSON-RPC 2.0, Content-Length-фрейминг): initialize →
+  initialized → didOpen (на файл) → textDocument/definition на позицию имени метода →
+  target node (по строке) → рёбра `confidence: "lsp"` (merge в graph.json, дедуп).
+- Серверы (LSP_SERVERS, опциональны): ts/js→typescript-language-server,
+  py→pyright-langserver, go→gopls, rust→rust-analyzer, c/cpp→clangd. Без бинаря —
+  честный отчёт + инструкция установки.
+- CLI: `lsp-status` (какие серверы есть/нет, сколько кандидатов), `lsp-sync` (прогон).
+- Живая проверка: pyright — `b.inherited()` (Box(Base), Base в др. файле) →
+  edge `use → Base` (lsp). Статический путь при этом уже резолвит прямые методы.
+
+### 2m. C7/C8 (концепты, карточки, viz)
+- **C7 Notes**: в карточках блок между маркерами
+  `<!-- graft:notes:begin -->…<!-- graft:notes:end -->` — сохраняется при регенерации
+  writeCards (read → rm → rewrite + Notes).
+- **C7 concept-links**: типизованные связи между темами (детерминированные, по рёбрам
+  графа): файл→тема (part_of уже в topics.files), тема→тема «uses» — счётчик рёбер между
+  файлами тем (топ-20). deep.concepts.links; вывод в map (deep).
+- **C8 viz serve**: `graft viz --serve [порт]` — HTTP: `/` (viz.html + live-reload:
+  fetch /api/graph каждые 5с, по изменению — reload), `/api/graph` (текущий graph.json).
+  Без флага — как раньше (writeViz → graft/viz.html).
+
+### 2n. E11/E12 (CLI UX, init/uninstall)
+- `ask --json` (askScore/askJson: результаты с полями).
+- `blast`: `--format text|json|markdown`, `--no-owners` (owner — git log -1 на файл),
+  `--name` (LLM-имена зон, нужен LLM-конфиг), `--export-viz <dir>` (writeBlastViz —
+  сабграф зон + зависимостей в dir/index.html).
+- `init` / `uninstall` (wiring.ts): секция AGENTS.md между маркерами graft:begin/end
+  (идемпотентная; dry-run) + mcpServers.graft в .mcp.json (merge, удаляем только graft).
+  graft/ не трогает. uninstall без -y — dry-run.
+
 ## CLI (утилита для рук) — `engine/graft/bin/graft.mjs`
 `build [--deep] [dir]`, `map`, `ask`, `grep`, `callers`, `skeleton`, `check [--json]`,
 `blast`. Тонкая обёртка над API (человеческий вывод). Не обязателен для расширения.

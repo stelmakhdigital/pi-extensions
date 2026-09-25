@@ -130,3 +130,17 @@
 - [x] v1.6 (2026-09-24, бэклог 5, финал): дженерики (Promise<T> → T; Foo<T> → Foo),
       типизированные локальные (const x: Foo, параметры f(o: Foo)), await-unwrap;
       unit 21/21 (+generics/typed); **бэклог графта закрыт**
+- [x] v2.0 (2026-09-25, A): авто-refresh (fingerprint + ensureFresh во всех query-путих,
+      тихий rebuild при дрейфе), auto-rebuild после write/edit (debounce 4c),
+      бейдж synced/stale + % deep, check → exit 1 при дрейфе; unit 23/23
+- [x] v2.1 (2026-09-25, D10): monorepo-scope (маркеры сабпроектов, ask scope-fusion,
+      map scopes, grep named-scope); unit 24/24
+- [x] v2.2 (2026-09-25, D9): +7 языков (R/Elixir/Solidity/OCaml/Zig/Clojure/Nix);
+      unit 25/25
+- [x] v2.3 (2026-09-25, B6): full-fidelity go/java/kotlin/php/swift (member-вызовы,
+      type-hints; globalMethods +kind function); unit 25/25
+- [x] v2.4 (2026-09-25, B5/C7/C8/E11/E12): LSP-синхронизация (unresolved.json +
+      lsp-status/lsp-sync, рёбра confidence "lsp"), Notes в карточках + concept-links,
+      viz --serve (live-reload + /api/graph), ask --json, blast --format/--no-owners/
+      --name/--export-viz, init/uninstall (AGENTS.md + .mcp.json, идемпотентно);
+      unit 29/29; **программа A–E завершена**

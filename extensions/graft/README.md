@@ -1,19 +1,18 @@
 # graft (расширение pi)
 
-Глубокая интеграция [Graft](https://github.com/trailhq/Graft) (`@nanonets/graft`)
-в pi: кодовый граф репо как источник контекста для агента — нативные инструменты
-вместо шелла, автоматическая синхронизация, blast radius после правок.
+Локальный кодовый граф репо как источник контекста для агента: собственный движок
+(`engine/graft/`, web-tree-sitter + wasm, без внешних CLI и LLM по умолчанию) и
+тонкое расширение, которое встраивает его в pi — нативные инструменты вместо шелла,
+авто-синхронизация, blast radius после правок.
 
 ## Требования
 
-- CLI: `npm i -g @nanonets/graft` (или расширение само использует
-  `npx -y @nanonets/graft`; переопределить можно через `GRAFT_CMD`).
-- Построенный граф: `graft build` в корне репо (tree-sitter, без LLM-ключей, $0).
-  LLM-слой (`graft build --deep`) опционален: `GRAFT_PROVIDER`,
-  `GRAFT_API_KEY`, `GRAFT_MODEL`, `GRAFT_BASE_URL`.
-- Расширение работает только там, где выше cwd найден каталог `graft/`;
-  в остальных проектах — тихий no-op. В дочерние процессы ставится
-  `DO_NOT_TRACK=1` (без телеметрии).
+- Зависимости пакета: `web-tree-sitter`, `tree-sitter-wasm` (wasm-грамматики, ~25 языков).
+  Расширение загружает движок через jiti — внешних CLI нет, spawn не используется.
+- Построенный граф: `node engine/graft/bin/graft.mjs build` в корне репо
+  (или `/graft build` в pi). LLM-слой (deep-суммаризация) опционален — см. ниже.
+- Расширение работает только там, где выше cwd найден `graft/.engine/graph.json`;
+  в остальных проектах — тихий no-op.
 
 ## Что даёт
 
@@ -21,73 +20,76 @@
 |---|---|
 | `graft_ask` | ранжированный запрос к графу (символы/ноды с file:line, детерминированный) |
 | `graft_grep` | исчерпывающий regex по индексированным файлам, группировка по замыкающему символу |
-| `graft_callers` | точные рёбра: кто использует символ (`in`, по умолчанию) / на что ссылается (`out`), глубина `-d N` |
+| `graft_callers` | точные рёбра: кто использует символ (`in`, по умолчанию) / на что ссылается (`out`), глубина `depth` |
 | `graft_skeleton` | все сигнатуры файла без тел (~10× дешевле чтения) |
-| `graft_map` | ориентация в репо: кластеры каталогов, хабы, hotspots |
-| `graft_check` | отчёт свежести графа (JSON) |
-| `graft_blast` | blast radius git-диффа (`--base origin/main` и т.п.) |
-| `<graft>`-секция системного промпта | при каждом промпте (before_agent_start) подмешивается `graft map`; кэш 2 мин, инвалидация при правках |
+| `graft_map` | ориентация в репо: кластеры каталогов, хабы, hotspots (+ `full`-опция — глубокие описания) |
+| `graft_check` | отчёт свежести графа (JSON; при дрейфе exit 1) |
+| `graft_blast` | blast radius git-диффа (`base`, напр. `origin/main`) |
+| `<graft>`-секция системного промпта | при старте агента подмешивается `graft map`; кэш 2 мин, инвалидация при правках |
 | Push-режим (`--graft-push`) | дополнительно `graft ask "<промпт>"`, топ-хиты — в ту же секцию |
-| Blast radius после write/edit | к результату тула дописывается «кто зависит от изменённых символов» (skeleton → callers по первым 3 символам), + уведомление |
-| Бейдж в футере | `graft: synced` / `graft: ⚠ N stale` / `graft: нет графа` (graft check --json), обновление при старте сессии и после хуков |
-| `/graft` | статус (CLI, путь графа, свежесть, флаги); `/graft build` — пересборка; `/graft build deep` — с LLM-суммаризацией |
+| Blast radius после write/edit | к результату тула дописывается «кто зависит от изменённых символов» |
+| Авто-синхронизация | fingerprint (size+mtime) перед каждым запросом; тихая пересборка при дрейфе; после write/edit — debounced rebuild (флаг `--graft-auto-rebuild`, по умолчанию вкл) |
+| Бейдж в футере | `graft: synced · N% deep` / `⚠ N stale · N% deep` / `graft: нет графа` |
+| `/graft` | статус (путь графа, свежесть, флаги); `/graft build` — пересборка; `/graft build deep` — с LLM-суммаризацией |
 
-## Флаги
+## Флаги расширения
 
-| Флаг | По умолчанию | Назначение |
-|---|---|---|
-| `--graft` | true | Мастер-включатель (автоматически неактивен без графа) |
-| `--graft-map` | true | Секция с картой репо в системном промпте |
-| `--graft-push` | false | Подмешивать `graft ask` под каждый промпт |
-| `--graft-blast` | true | Blast radius после write/edit |
-| `--graft-max-output` | 16000 | Лимит вывода инструментов, символы |
+| Флаг | Назначение |
+|---|---|
+| `--graft-max-output` | максимум символов в ответе инструментов (или env `GRFT_MAX_OUTPUT`) |
+| `--graft-push` | в `<graft>`-секцию добавлять и результаты `ask` по промпту |
+| `--graft-auto-rebuild` | auto-rebuild графа после write/edit (def true) |
 
-## Ключи и переменные окружения
+## LLM-провайдер (только для deep: `/graft build deep`, `build --deep`)
 
-### LLM-провайдер (нужен только для `graft build --deep`)
-
-Базовый граф (`build`, `ask`, `grep`, `map`, `check`, `callers`, `blast`) —
-детерминированный tree-sitter, без ключей и сети. Ключи нужны лишь для
-LLM-слоя: суммаризация файлов, концепт-ноды, per-symbol crux.
+Deep — суммаризация файлов/символов и концепт-темы. Конфиг явный, без дефолтных
+эндпоинтов (openai-chat-формат, `fetch`):
 
 | Переменная | Назначение |
 |---|---|
-| `GRAFT_PROVIDER` | Wire-формат, не компания: `openai` (любой OpenAI-совместимый endpoint), `anthropic`, `litellm` (прокси), `orcarouter` |
-| `GRAFT_API_KEY` | Ключ провайдера |
-| `GRAFT_MODEL` | Идентификатор модели в терминологии провайдера (например `openai/gpt-4o-mini`, `claude-sonnet-5`) |
-| `GRAFT_BASE_URL` | Для формата `openai`: как выбрать провайдера — OpenRouter `https://openrouter.ai/api/v1`, Groq `https://api.groq.com/openai/v1`, Fireworks `https://api.fireworks.ai/inference/v1`, LiteLLM `http://localhost:4000`, Ollama `http://localhost:11434/v1`; для `anthropic` не нужна |
+| `GRFT_LLM_BASE_URL` | …/v1 (OpenAI-совместимый: Ollama, vLLM, OpenRouter, Anthropic-прокси) |
+| `GRFT_LLM_MODEL` | имя модели |
+| `GRFT_LLM_API_KEY` | ключ (для локальных серверов — любое значение) |
 
-Примеры:
+Пример (локальный vLLM): `GRFT_LLM_BASE_URL=http://127.0.0.1:8000/v1 GRFT_LLM_MODEL=qwen GRFT_LLM_API_KEY=dummy`.
+Без `GRFT_LLM_BASE_URL`/`GRFT_LLM_MODEL` — deep честно отказывается работать.
+Auto-deep (инкрементальный deep при обычной пересборке, если deep уже был)
+управляется тем же конфигом; выкл: `GRFT_AUTO_DEEP=0`.
 
-```bash
-# OpenRouter
-export GRAFT_PROVIDER=openai GRAFT_BASE_URL=https://openrouter.ai/api/v1
-export GRAFT_API_KEY=sk-or-... GRAFT_MODEL=openai/gpt-4o-mini
-
-# Anthropic напрямую
-export GRAFT_PROVIDER=anthropic GRAFT_API_KEY=sk-ant-... GRAFT_MODEL=claude-sonnet-5
-
-# Локальная модель (Ollama)
-export GRAFT_PROVIDER=openai GRAFT_BASE_URL=http://localhost:11434/v1
-export GRAFT_API_KEY=ollama GRAFT_MODEL=qwen2.5-coder:14b
-```
-
-### Расширение (pi)
+## Переменные окружения движка
 
 | Переменная | Назначение |
 |---|---|
-| `GRAFT_CMD` | Явный путь/имя CLI, которым расширение запускает graft (приоритет над поиском `graft` в PATH и npx) |
-| `DO_NOT_TRACK` | Расширение само ставит `DO_NOT_TRACK=1` дочерним процессам — телеметрия выключена; переменная дополнительно не нужна |
+| `GRFT_NO_REFRESH=1` | не автопересобирать граф перед запросами (fingerprint-проверка) |
+| `GRFT_AUTO_DEEP=0` | выключить auto-deep при структурной пересборке |
+| `GRFT_MAX_OUTPUT` | лимит вывода инструментов (если флаг не задан) |
+| `GRFT_MCP_ROOT` | корень репо для MCP-сервера (иначе — cwd) |
 
-### Graft CLI (настройки поведения)
+## Graft CLI — `node engine/graft/bin/graft.mjs`
 
-| Переменная | Назначение |
+| Команда | Назначение |
 |---|---|
-| `GRAFT_DIR` | Где лежит граф (по умолчанию `graft/` в корне репо) — расширение находит граф именно так, поэтому при нестандартном месте настраивать надо и CLI, и расширение |
-| `GRAFT_NO_REFRESH=1` | Выключить автопересборку графа перед запросами (по умолчанию каждый запрос обновляет граф по working tree, $0) |
-| `GRAFT_REFRESH=hash` | Сравнивать файлы по хэшу, а не size+mtime (медленнее, надёжнее) |
-| `GRAFT_NO_GITIGNORE=1` | Не писать `graft/` в `.gitignore` (если игнорируется глобально) |
-| `GRAFT_NO_IGNORE=1` | Не создавать `.ignore` (ripgrep re-admit) — только если поиском управляете сами |
-| `GRAFT_NO_STATUSLINE=1` | `graft init` не трогает statusLine Claude Code (для pi нерелевантно, но если репо общий) |
+| `build [--deep]` | пересборка (+ LLM-суммаризация при `--deep`) |
+| `map`, `ask <q> [--json]`, `grep <re>`, `callers <sym>`, `skeleton <file>` | запросы к графу (авто-ресинк перед каждым) |
+| `check [--json]` | дрейф графа; **exit 1 при дрейфе** (CI-friendly) |
+| `blast [base]` | blast radius git-диффа; `--format text\|json\|markdown`, `--no-owners`, `--name` (LLM-имена зон), `--export-viz <dir>` |
+| `viz [--serve [порт]]` | статичный `graft/viz.html` (SVG) или HTTP-сервер: `/` (live-reload каждые 5с) + `/api/graph` |
+| `lsp-status`, `lsp-sync` | нерешённые member-вызовы → LSP goToDefinition → рёбра `confidence: "lsp"` |
+| `init [--dry-run] [--no-mcp]` | секция в `AGENTS.md` (маркеры, идемпотентно) + `mcpServers.graft` в `.mcp.json` |
+| `uninstall [-y]` | убрать секцию и MCP-запись (без `-y` — dry-run) |
 
-Наследуемые фолбэки (если `GRAFT_API_KEY` не задан): `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` / `GRAFT_OPENROUTER_MODEL`, затем `ORCAROUTER_API_KEY` и т.д. — см. `.env.example` в [репозитории Graft](https://github.com/trailhq/Graft/blob/main/.env.example).
+### LSP (опционально)
+
+Статический путь (tree-sitter) покрывает прямые вызовы; наследование/динамика остаются
+в `graft/.engine/unresolved.json`. `lsp-sync` прогоняет их через LSP-сервер
+(goToDefinition) и добавляет рёбра. Серверы ставятся по желанию (отчёт — `lsp-status`):
+ts/js — `npm i -g typescript-language-server typescript`; py — `npm i -g pyright`;
+go — `go install golang.org/x/tools/gopls@latest`; rust — `cargo install rust-analyzer`;
+c/cpp — clangd.
+
+## MCP-сервер
+
+`node engine/graft/bin/graft-mcp.mjs` (stdio, JSON-RPC 2.0): 7 инструментов (ask, grep,
+callers, skeleton, map, check, blast). Регистрация в pi/Claude:
+`"graft": { "command": "node", "args": ["<путь>/graft-mcp.mjs"], "env": { "GRFT_MCP_ROOT": "<корень репо>" } }`
+(или `graft init` — впишет в `.mcp.json` сам).

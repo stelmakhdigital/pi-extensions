@@ -305,6 +305,107 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
 4. PendingVia + kind "type"; resolveVia: type → сразу класс-имя.
 5. Тесты: 21/21 (mkAsyncPair Promise<Pair>, useAsyncPair await, greet(g: Greeter), typedGreet).
 
-### Осталось
-- Коммит v1.6 (по команде пользователя) — и граф останавливается (бэклог закрыт;
-  остаток — только «ещё языки» по спросу, 100+ грамматик в tree-sitter-wasm).
+### v2.0 (программа A–E от 2026-09-25, в работе; v2.0 ГОТОВО, тест 23/23)
+Запрос пользователя: «все: A–E» (A автоматизация, B LSP+full-fidelity, C концепты+viz,
+D языки+монорепо, E CLI/init). tmux НЕДОСТУПЕН (unknown flag -S) — работаю напрямую.
+**v2.0 (A) — сделано:**
+1. `refresh.ts`: fingerprint.json (size+mtime после build; GRFT_REFRESH=hash — sha1);
+   `driftReport(root)` (git ls-files+stat, ~десятки мс); `ensureFresh(root)` — тихая
+   пересборка при дрейфе (GRFT_NO_REFRESH=1 выкл; БЕЗ ttl-кэша — TTL глотал дрейф, баг);
+   `enableAutoRebuild(fn, 4000)` — дебаунс-коалесер.
+2. `scan.ts`: `isIndexablePath()` (единый фильтр scanRepo+refresh).
+3. index.ts: build() пишет fingerprint; экспорты ensureFresh/driftReport/enableAutoRebuild/
+   deepCoverage (доля символов с актуальным deep).
+4. CLI: ask/grep/callers/skeleton/map/blast — ensureFresh; `check` — exit 1 при дрейфе
+   (и --json); check НЕ авто-ресинчит (это и есть отчёт).
+5. Расширение: ensureFresh во всех 7 тулзах + before_agent_start map; флаг
+   `--graft-auto-rebuild` (def true) — после write/edit: бейдж «syncing…» + debounced build;
+   бейдж: `graft: synced · N% deep` / `⚠ N stale · N% deep`; /graft — % deep.
+6. MCP: ensureFresh перед каждым тулзом.
+- Тесты: +refresh (fingerprint/ensureFresh/GRFT_NO_REFRESH), +CLI check exit 0/1 — 23/23.
+- Live: zz-probe.ts → ask → тихий rebuild (builtAt сместился). AUTO-REFRESH-OK.
+- **Остаток программы A–E: B5 LSP, B6 full-fidelity go/java/kt/php/swift, C7 концепт-узлы+Notes,
+  C8 viz serve, D9 +7 языков (R/Elixir/Solidity/OCaml/Zig/Clojure/Nix), D10 monorepo-scope,
+  E11 CLI UX (ask --json, blast --format/--name/--owners), E12 init/uninstall.**
+- Патч-скрипт расшир. — /tmp/patchA.py (уже применён).
+
+### v2.1 (D10 monorepo-scope) ГОТОВО, test 24/24 → после D9 25/25
+- scan.ts: `detectScopes(paths)` — сабпроекты по маркерам (package.json/pyproject/
+  Cargo.toml/go.mod/pom.xml/build.gradle в каталоге ≠ корню); scope → пути, корневые —
+  "(root)". Пусто — только корневой маркер. ВАЖНО: вызывается на listRepoPaths (ВСЕ пути),
+  не на code-файлы (маркеры не-кодовые!).
+- types.ts Graph.meta.scopes?; build.ts заполняет; query.ts: ask — scope-fusion (глоб.
+  топ-6 + топ-3 каждого scope, [scope] label), map — "scopes:" блок (files/symbols/hubs
+  per scope), grep — named-scope (opts.scope = имя scope → фильтр по path-set, иначе
+  prefix). Расширение graft_ask/graft_grep scope-param уже передаёт.
+- Тест: monorepo fixture (packages/alpha+beta), scopes/ask-label/map/grep --in-scope.
+
+### v2.2 (D9: +7 языков) ГОТОВО, test 25/25
+- Языки: r(.R/.r), elixir(.ex/.exs), solidity(.sol), ocaml(.ml/.mli), zig(.zig),
+  clojure(.clj/.cljs/.cljc), nix(.nix) — Lang union, LANG_BY_EXT, GRAMMAR(parse),
+  OTHER_LANGS(extract.ts), RULES(extractOther).
+- extractOther: break→continue (несколько правил под один node-type, напр. elixir
+  defmodule/def); +helpers deepFirstIdent, pathIdent.
+- Нюансы грамматик (wasm): R — имя fn = LHS binary_operator(<-) identifier; elixir —
+  defmodule/def/defp = call-ноды (head identifier), qualified по enclosing defmodule;
+  solidity — contract_declaration+function_definition, callee childForFieldName(function);
+  ocaml — value_name ВЛОЖЕН в let_binding (глубже), callee value_path→pathIdent;
+  zig — callee = plain identifier (walk передаёт уже identifier); clojure — (defn ...) =
+  list_lit, callee head sym_lit (fn.type==="sym_lit"!), SPECIAL-фильтр; nix — топ-уровень
+  в wasm глючит (ERROR), целиться в `binding` (attrset cfg={a=1;b=..}); nix-фикстура attrset.
+- Тест: языки v2 (7 новых) — символы + вызовы (R run→helper, Elixir Math.add→Math.sub,
+  Solidity App.run→App.calc, OCaml add→sub, zig/clojure run→helper, nix attrset).
+
+### v2.3 (B6: full-fidelity go/java/kotlin/php/swift) ГОТОВО, test 25/25
+- extractOther LangRules +memberCall (obj.m()→pending via ident) +varAssigns (тип-подсказки
+  x=new T()/x:T/x:=NewT()); extractOther теперь возвращает РЕАЛЬНЫЕ vars+pending (были пустые).
+- Правила: go selector_expression(short_var_decl, NewX()→X, &T{} comp lit), java
+  method_invocation(local_variable_decl, new T), kotlin call_expression+navigation_expression
+  (property_declaration val s=T()), php member_call_expression(assignment, new T), swift
+  call_expression+navigation_expression (property_declaration let s=T()).
+- **КРИТИЧНО**: build.ts globalMethods брал только kind==="method"; kotlin/swift методы —
+  kind "function" (квалифицированы Cls.m) → member-вызовы не резолвились. Исправлено:
+  kind method ИЛИ function.
+- PHP парсится ТОЛЬКО с `<?php` тегом (иначе program>text = parse error).
+- Тест: B6 full-fidelity (go/java/kt/php/swift: new + member).
+- **Осталось в A–E: B5 LSP (opt-in --lsp), C7 концепт-узлы+Notes, C8 viz serve+live-reload,
+  E11 CLI UX (ask --json, blast --format/--name/--owners/--export-viz), E12 init/uninstall.**
+
+### v2.4 (B5/C7/C8/E11/E12) ГОТОВО, test 29/29 — программа A–E ЗАВЕРШЕНА (2026-09-25)
+- **B5 LSP**: build → `graft/.engine/unresolved.json` (нерешённые member-вызовы с
+  file/line/col/caller; PendingMemberCall +line/col в extract.ts + extractOther).
+  `lsp.ts`: stdio LSP-клиент (JSON-RPC 2.0 + Content-Length): initialize→initialized→
+  didOpen→textDocument/definition → рёбра confidence "lsp" (merge, дедуп).
+  LSP_SERVERS: ts/js→typescript-language-server, py→pyright-langserver, go→gopls,
+  rust→rust-analyzer, c/cpp→clangd (каждый с args: --stdio где надо; gopls/rust-analyzer
+  без args). Без бинаря — отчёт + install-инструкция. CLI: lsp-status, lsp-sync.
+  Живая: pyright (локальный node_modules/.bin — глобальный npm i -g упал, code -13) —
+  fixture Box(Base), b.inherited() → edge use→Base (lsp) ✓.
+  py: типизированные параметры (typed_parameter/parameter, type/dotted_name child) →
+  vars {kind:"type"} — ИНАЧЕ py-кандидатов не генерировалось.
+  findNodeAtLine: span.start===line → else inside (start<=line<=end).
+- **C7**: Notes в карточках (маркеры <!-- graft:notes:begin/end -->, writeCards read→rm→
+  rewrite+Notes; маркеры проставляются во ВСЕ карточки); concept-links: детерминированные
+  по рёбрам (file→topic map, пары тем, счётчик, топ-20, type "uses") → deep.concepts.links
+  (+ ConceptLink type; map deep — блок «связи:»).
+- **C8**: viz.ts serveViz(root, port) — http: / (writeViz→read+RELOAD_SCRIPT перед </body>;
+  live-reload: fetch /api/graph 5с, по hash — reload), /api/graph (readGraph JSON).
+  CLI: `graft viz --serve [порт]` (def 8123). Live: curl 200 ✓.
+- **E11**: ask --json (askJson в query.ts); blast: --format text|json|markdown,
+  --no-owners (owner = git log -1 --format=%an на файл; null без owner-режима),
+  --name (LLM-имена зон, deepConfigSoft + llmChat, JSON-массив), --export-viz <dir>
+  (writeBlastViz: сабграф зон+зависимых нод → dir/index.html). blastData(base,{owners})
+  в query.ts (git diff -U0 + git log).
+- **E12**: wiring.ts initWiring/uninstallWiring — AGENTS.md секция (маркеры graft:begin/
+  end, idempotent, dry-run) + .mcp.json mcpServers.graft (merge; uninstall только graft).
+  CLI: init [--dry-run|--no-mcp], uninstall [-y] (без -y = dry-run).
+  БАГ: нет AGENTS.md → agents="" (пишалось пусто); фикс: else-ветка agents = sec + "\n".
+  БАГ: backticks в template literal секции (graft/, node ...) ломали TS-синтаксис —
+  убрал backticks из текста.
+- Тесты 29/29: +E11/E12 (CLI ask --json/blast formats/owners/export-viz/init/uninstall/
+  idempotent/dry-run), +B5 (unresolved/lspStatus/lspSync-graceful), +C7 (notes-регенерация
+  + links), +C8 (serveViz fetch /api/graph + html).
+- Граф репо после: 35 файлов / 500 узлов / 489 рёбер; lsp-status: 659 ts + 282 js + 14 py
+  кандидатов (серверы не установлены — install-подсказки).
+- **Программа A–E завершена. Коммит — по команде пользователя.**
+
