@@ -141,7 +141,7 @@ Auto-refresh: если deep уже запускали (deep.json не пуст) 
 
 Граф строится командой `/graft build [deep]` (в pi) или
 `node engine/graft/bin/graft.mjs build` (из консоли); `watch` — автопересборка при изменениях.
-Детали — в `SPEC-graft-engine.md`.
+Детали — в `extensions/graft/README.md`.
 
 ### Только sandbox
 
