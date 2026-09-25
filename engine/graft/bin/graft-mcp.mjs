@@ -73,6 +73,7 @@ const TOOLS = [
 
 async function callTool(name, args = {}) {
 	const r = root();
+	await engine.ensureFresh(r); // тихая пересборка при дрейфе (GRFT_NO_REFRESH=1 — выкл)
 	const q = engine.makeQueries(r);
 	switch (name) {
 		case "graft_ask":

@@ -1,6 +1,6 @@
 /** Типы движка graft-engine. */
 
-export type Lang = "ts" | "tsx" | "js" | "py" | "go" | "rust" | "c" | "cpp" | "sh" | "java" | "csharp" | "kotlin" | "ruby" | "php" | "swift" | "dart" | "scala" | "lua";
+export type Lang = "ts" | "tsx" | "js" | "py" | "go" | "rust" | "c" | "cpp" | "sh" | "java" | "csharp" | "kotlin" | "ruby" | "php" | "swift" | "dart" | "scala" | "lua" | "r" | "elixir" | "solidity" | "ocaml" | "zig" | "clojure" | "nix";
 
 export interface RepoFile {
 	/** Путь относительно корня репо (posix). */
@@ -33,7 +33,7 @@ export interface GraphEdge {
 	source: string;
 	target: string;
 	relation: EdgeRelation;
-	confidence: "extracted";
+	confidence: "extracted" | "lsp";
 }
 
 export interface GraphFileMeta {
@@ -47,6 +47,8 @@ export interface Graph {
 		builtAt: string;
 		root: string;
 		files: GraphFileMeta[];
+		/** Monorepo-скоупы: scope → пути (отсутствует/пусто — скоупов нет). */
+		scopes?: Record<string, string[]>;
 	};
 	nodes: GraphNode[];
 	edges: GraphEdge[];
@@ -58,16 +60,36 @@ export interface DeepSymbolEntry {
 	crux?: string[];
 }
 
+/** Связь между концептами (темами): from использует/зависит от to (по рёбрам графа). */
+export interface ConceptLink {
+	from: string;
+	to: string;
+	type: "uses";
+	count: number;
+}
+
 export interface DeepConcept {
 	name: string;
 	summary: string;
 	files: string[];
 }
 
+/** Нерешённый member-вызов (метод не найден статически) — кандидат для lsp-sync (LSP goToDefinition). */
+export interface LspCandidate {
+	file: string;
+	method: string;
+	/** 0-based строка/колонка имени метода. */
+	line: number;
+	col: number;
+	/** id вызывающего символа или файла. */
+	caller: string;
+}
+
 export interface DeepStore {
 	files: Record<string, { hash: string; summary: string }>;
 	symbols: Record<string, DeepSymbolEntry>;
-	concepts?: { hash: string; topics: DeepConcept[] };
+	/** Темы + типизованные связи между ними (part_of через files, uses — по рёбрам графа). */
+	concepts?: { hash: string; topics: DeepConcept[]; links?: ConceptLink[] };
 }
 
 /** Конфиг LLM для deep-прохода (openai-chat-формат). */

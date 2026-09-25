@@ -9,7 +9,8 @@ interface LlmReply {
 	crux?: string[];
 }
 
-async function llmChat(cfg: DeepConfig, system: string, user: string): Promise<string> {
+/** Один openai-chat запрос (для --name и concept-синтеза). */
+export async function llmChat(cfg: DeepConfig, system: string, user: string): Promise<string> {
 	const url = cfg.baseUrl.replace(/\/$/, "") + "/chat/completions";
 	const headers: Record<string, string> = { "content-type": "application/json" };
 	if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;

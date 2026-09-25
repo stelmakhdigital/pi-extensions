@@ -32,6 +32,8 @@ export interface Queries {
 	check: () => Promise<{ text: string; json: Record<string, unknown> }>;
 	blast: (base?: string) => Promise<string>;
 	blastFile: (path: string) => string;
+	askJson: (query: string) => { query: string; count: number; results: Array<{ name: string; kind: string; path: string; start: number; end: number; score: number; snippet: string; summary?: string }> };
+	blastData: (base?: string, opts?: { owners?: boolean }) => Promise<{ base: string | null; files: Array<{ path: string; owner: string | null; symbols: Array<{ name: string; start: number; dependents: string[] }> }> }>;
 }
 
 /** Источники файлов (кэш на время сессии запросов). */
@@ -63,6 +65,14 @@ export function makeQueries(root: string): Queries {
 		}
 	}
 	const nodeById = new Map(g.nodes.map((n) => [n.id, n]));
+	const scopes = g.meta.scopes ?? {};
+	const scopeOf = new Map<string, string>();
+	for (const [name, paths] of Object.entries(scopes)) for (const p of paths) scopeOf.set(p, name);
+	const scopeLabel = (path: string): string => {
+		const sc = scopeOf.get(path);
+		if (!sc) return "";
+		return ` [${sc === "(root)" ? "root" : sc}]`;
+	};
 
 	const skeleton = (file: string): string => {
 		const target = g.nodes.find((n) => n.kind === "file" && (n.path === file || n.path.endsWith(file)));
@@ -137,10 +147,26 @@ export function makeQueries(root: string): Queries {
 			.sort((a, b) => b.deg - a.deg)
 			.slice(0, 8);
 		const langs = [...new Set(files.map((f) => f.path.split(".").pop()))].sort().join(", ");
+		const scopeBlocks: string[] = [];
+		if (Object.keys(scopes).length) {
+				for (const [name, paths] of Object.entries(scopes).sort((x, y) => y[1].length - x[1].length)) {
+						const set = new Set(paths);
+						const symsIn = syms.filter((n) => set.has(n.path));
+						const hubsIn = symsIn
+								.map((n) => ({ n, deg: inDegree.get(n.id) ?? 0 }))
+								.filter((x) => x.deg > 0)
+								.sort((a, b) => b.deg - a.deg)
+								.slice(0, 3);
+						scopeBlocks.push(
+								`  ${name === "(root)" ? "root" : name} — ${paths.length} files, ${symsIn.length} symbols` + (hubsIn.length ? ` · hubs: ${hubsIn.map((h) => `${h.n.name} (${h.deg}←)`).join(", ")}` : ""),
+						);
+				}
+		}
 		const out = [
 			`repo map — ${files.length} files · ${syms.length} symbols · ${g.edges.length} edges · ${langs}`,
 			``,
-			...dirs.map(([d, c]) => `  ${d} — ${c} file${c > 1 ? "s" : ""}`),
+			...(scopeBlocks.length ? ["scopes:", ...scopeBlocks, ""] : []),
+		...dirs.map(([d, c]) => `  ${d} — ${c} file${c > 1 ? "s" : ""}`),
 			``,
 			`hubs (in-degree): ${hubs.map((h) => `${h.n.name} (${h.n.path.split("/").pop()}, ${h.deg}←)`).join("  ") || "—"}`,
 		];
@@ -149,6 +175,11 @@ export function makeQueries(root: string): Queries {
 			if (topics?.length) {
 				out.push("", "topics:");
 				for (const t of topics) out.push(`  ${t.name}: ${t.summary} [${t.files.slice(0, 8).join(", ")}${t.files.length > 8 ? ", …" : ""}]`);
+				const links = deep.concepts?.links;
+				if (links?.length) {
+					out.push("  связи:");
+					for (const l of links.slice(0, 10)) out.push(`  ${l.from} → ${l.to} (uses, ${l.count})`);
+				}
 			}
 			const withSummary = files
 				.map((f) => ({ p: f.path, s: deep.files[f.path]?.summary }))
@@ -162,7 +193,7 @@ export function makeQueries(root: string): Queries {
 		return out.join("\n");
 	};
 
-	const ask: Queries["ask"] = (query) => {
+		const askScore = (query: string): Array<{ n: GraphNode; score: number }> => {
 		const terms = query.toLowerCase().split(/[\s,;:()'"`/\\.#]+/).filter((t) => t.length > 1);
 		const scored: Array<{ n: GraphNode; score: number }> = [];
 		for (const n of g.nodes) {
@@ -183,8 +214,26 @@ export function makeQueries(root: string): Queries {
 			if (score > 0) score += Math.min(inDegree.get(n.id) ?? 0, 5) * 0.5;
 			if (score > 0) scored.push({ n, score });
 		}
-		scored.sort((a, b) => b.score - a.score);
-		const top = scored.slice(0, 12);
+				scored.sort((a, b) => b.score - a.score);
+		return scored;
+	};
+	const ask: Queries["ask"] = (query) => {
+		const scored = askScore(query);
+		let top: Array<{ n: GraphNode; score: number }> = scored.slice(0, 12);
+		if (Object.keys(scopes).length) {
+			// Scope-fusion: глобальный топ-6 + топ-3 каждого скоупа (сабпроект не тонет в крупном).
+			const picked = scored.slice(0, 6);
+			const ids = new Set(picked.map((x) => x.n.id));
+			for (const paths of Object.values(scopes)) {
+				const set = new Set(paths);
+				for (const x of scored) {
+					if (picked.length >= 12 || ids.has(x.n.id) || !set.has(x.n.path)) continue;
+					ids.add(x.n.id);
+					picked.push(x);
+				}
+			}
+			top = picked;
+		}
 		if (!top.length) return `graft ask: «${query}» — нет совпадений в графе`;
 		const lines = top.flatMap(({ n, score }) => {
 			const content = src.get(n.path);
@@ -193,7 +242,7 @@ export function makeQueries(root: string): Queries {
 				const ls = content.split("\n");
 				snippet = (ls[n.span.start - 1] ?? "").trim().slice(0, 100);
 			}
-			const out = [`  ${score.toFixed(1)}  ${n.name}  ${n.path}:L${n.span.start}-L${n.span.end}  ${snippet}`];
+			const out = [`  ${score.toFixed(1)}  ${n.name}  ${n.path}${scopeLabel(n.path)}:L${n.span.start}-L${n.span.end}  ${snippet}`];
 			const d = deep.symbols[n.id];
 			if (d && d.hash === n.bodyHash) {
 				out.push(`    ↳ ${d.summary}`);
@@ -203,6 +252,29 @@ export function makeQueries(root: string): Queries {
 		});
 		return `graft ask: «${query}»\n${lines.join("\n")}`;
 	};
+	const askJson: Queries["askJson"] = (query) => {
+		const scored = askScore(query);
+		const top = scored.slice(0, 12);
+		return {
+			query,
+			count: top.length,
+			results: top.map(({ n, score }) => {
+				const content = src.get(n.path);
+				const snippet = content ? (content.split("\n")[n.span.start - 1] ?? "").trim().slice(0, 100) : "";
+				const d = deep.symbols[n.id];
+				return {
+					name: n.name,
+					kind: n.kind,
+					path: n.path,
+					start: n.span.start,
+					end: n.span.end,
+					score: Math.round(score * 10) / 10,
+					snippet,
+					summary: d && d.hash === n.bodyHash ? d.summary : undefined,
+				};
+			}),
+		};
+	};
 
 	const grep: Queries["grep"] = (pattern, opts = {}) => {
 		let re: RegExp;
@@ -211,9 +283,15 @@ export function makeQueries(root: string): Queries {
 		} catch (e) {
 			return `graft grep: некорректный pattern: ${(e as Error).message}`;
 		}
-		const scopePrefix = opts.scope ?? "";
+		const scopeKey = ((): string | null => {
+			const sc = (opts.scope ?? "").replace(/\/$/, "");
+			return Object.keys(scopes).find((k) => k === sc) ?? null;
+		})();
+		const scopeFiles = scopeKey ? new Set(scopes[scopeKey]) : null;
+		const scopePrefix = scopeKey ? "" : (opts.scope ?? "");
 		const hitsByFile = new Map<string, Array<{ line: number; text: string; sym?: GraphNode }>>();
 		for (const f of g.meta.files) {
+			if (scopeFiles && !scopeFiles.has(f.path)) continue;
 			if (scopePrefix && !f.path.startsWith(scopePrefix.replace(/\/$/, ""))) continue;
 			const content = src.get(f.path);
 			if (!content) continue;
@@ -295,6 +373,49 @@ export function makeQueries(root: string): Queries {
 		return lines.join("\n");
 	};
 
+	const gitRun = (args: string[]): Promise<string> =>
+		new Promise<string>((res) => execFile("git", args, { maxBuffer: 32 * 1024 * 1024 }, (err: Error | null, o: string) => res(err ? "" : o)));
+
+	const blastCore = async (base: string | undefined, owners: boolean): Promise<Awaited<ReturnType<Queries["blastData"]>>> => {
+		const out = await gitRun(["-C", root, "diff", "--unified=0", ...(base ? [base] : [])]);
+		const byFile = new Map<string, Set<number>>();
+		let cur: string | null = null;
+		let newStart = 0;
+		for (const line of out.split("\n")) {
+			const f = line.match(/^diff --git a\/(.+) b\//);
+			if (f) {
+				cur = f[1];
+				byFile.set(cur, new Set());
+				continue;
+			}
+			const h = line.match(/^@@ -\d+(?:-\d+)? \+(\d+)/);
+			if (h) newStart = Number(h[1]);
+			if (cur && (line.startsWith("+") || line.startsWith("-")) && line[1] !== "=" && byFile.has(cur)) byFile.get(cur)!.add(newStart);
+		}
+		const files: Awaited<ReturnType<Queries["blastData"]>>["files"] = [];
+		for (const [path, lineNos] of byFile) {
+			const syms = g.nodes.filter((n) => n.path === path && n.kind !== "file");
+			const touched = syms.filter((x) => [...lineNos].some((ln) => ln >= x.span.start && ln <= x.span.end));
+			const list = (touched.length ? touched : g.nodes.filter((n) => n.id === path && n.kind === "file")).slice(0, 8);
+			const symbols = list.map((x) => ({
+				name: x.name,
+				start: x.span.start,
+				dependents: walkEdges(x.id, "in", 2, x.kind === "file")
+					.filter((h) => h.id !== x.id)
+					.slice(0, 12)
+					.map((h) => nodeById.get(h.id)!.name),
+			}));
+			let owner: string | null = null;
+			if (owners) {
+				owner = (await gitRun(["-C", root, "log", "-1", "--format=%an", "--", path])).trim() || null;
+			}
+			files.push({ path, owner, symbols });
+		}
+		return { base: base ?? null, files };
+	};
+
+	const blastData: Queries["blastData"] = async (base, opts = {}) => blastCore(base, opts.owners !== false);
+
 	const blast: Queries["blast"] = async (base) => {
 		const args = ["-C", root, "diff", "--unified=0"];
 		if (base) args.push(base);
@@ -333,5 +454,5 @@ export function makeQueries(root: string): Queries {
 		return lines.join("\n");
 	};
 
-	return { skeleton, callers, map, ask, grep, check, blast, blastFile };
+	return { skeleton, callers, map, ask, askJson, grep, check, blast, blastData, blastFile };
 }

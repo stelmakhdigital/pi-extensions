@@ -1,12 +1,13 @@
 /** Визуализация: самодостаточный graft/viz.html (SVG, без внешних зависимостей). */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
-import { readDeep } from "./store.js";
+import { readDeep, readGraph } from "./store.js";
 import type { Graph } from "./types.js";
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-export function writeViz(root: string, g: Graph): string {
+export function writeViz(root: string, g: Graph, outPath?: string): string {
 	const deep = readDeep(root);
 	const files = g.meta.files;
 	const fileIds = new Set(files.map((f) => f.path));
@@ -138,7 +139,51 @@ nodes.forEach((n) =>
 </body>
 </html>`;
 
-	const out = join(root, "graft", "viz.html");
+	const out = outPath ?? join(root, "graft", "viz.html");
 	writeFileSync(out, html, "utf8");
 	return out;
+}
+
+const RELOAD_SCRIPT = `<script>
+// live-reload: каждые 5с спрашиваем /api/graph; если граф изменился — перезагрузка.
+(function () {
+	var h = "";
+	setInterval(async function () {
+		try {
+			var r = await fetch("/api/graph", { cache: "no-store" });
+			var t = await r.text();
+			var s = t.length + ":" + t.slice(0, 300) + ":" + t.slice(-300);
+			if (h && h !== s) location.reload();
+			h = s;
+		} catch (e) { /* сервер занят — молча */ }
+	}, 5000);
+})();
+</script>`;
+
+/** HTTP-сервер viz: / (viz.html + live-reload), /api/graph (текущий graph.json). */
+export function serveViz(root: string, port: number): string {
+	const server = createServer((req, res) => {
+		try {
+			if (req.url === "/api/graph") {
+				const g = readGraph(root);
+				res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+				res.end(JSON.stringify(g));
+				return;
+			}
+			if (req.url === "/" || req.url === "/index.html") {
+				const path = writeViz(root, readGraph(root));
+				const html = readFileSync(path, "utf8").replace("</body>", RELOAD_SCRIPT + "\n</body>");
+				res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+				res.end(html);
+				return;
+			}
+			res.writeHead(404, { "content-type": "text/plain" });
+			res.end("not found ( / , /api/graph )");
+		} catch (e) {
+			res.writeHead(500, { "content-type": "text/plain" });
+			res.end(String(e));
+		}
+	});
+	server.listen(port);
+	return "http://127.0.0.1:" + port;
 }

@@ -120,7 +120,27 @@ ${input}`,
 		onProgress?.(`темы (fallback без LLM): ${topics.length}`);
 	}
 
-	deep.concepts = { hash, topics };
+	// Типизованные связи между темами (детерминированно, по рёбрам графа: from → to = "uses").
+	const fileTopic = new Map<string, number>();
+	topics.forEach((t, i) => { for (const f of t.files) fileTopic.set(f, i); });
+	const pairCount = new Map<string, number>();
+	for (const e of g.edges) {
+		const sp = e.source.includes("#") ? e.source.split("#")[0] : e.source;
+		const tp = e.target.includes("#") ? e.target.split("#")[0] : e.target;
+		const a2 = fileTopic.get(sp);
+		const b2 = fileTopic.get(tp);
+		if (a2 === undefined || b2 === undefined || a2 === b2) continue;
+		const key = a2 < b2 ? `${a2}->${b2}` : `${b2}->${a2}`;
+		pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
+	}
+	const links = [...pairCount.entries()]
+		.sort((x, y) => y[1] - x[1])
+		.slice(0, 20)
+		.map(([k, n]) => {
+			const [fa, fb] = k.split("->").map(Number);
+			return { from: topics[fa].name, to: topics[fb].name, type: "uses" as const, count: n };
+		});
+	deep.concepts = { hash, topics, links };
 	writeDeep(root, deep);
 	return topics;
 }

@@ -30,6 +30,9 @@ export interface PendingMemberCall {
 	caller: GraphNode | null;
 	method: string;
 	via: PendingVia;
+	/** Строка и колонка имени метода (0-based) — для LSP-запросов. */
+	line: number;
+	col: number;
 }
 
 export interface ExtractedFile {
@@ -427,7 +430,7 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 				if (m) addCallEdge(site.caller, m.id);
 				else {
 					const v = vars.get(obj.text);
-					if (v) pending.push({ caller: site.caller, method: prop.text, via: v });
+					if (v) pending.push({ caller: site.caller, method: prop.text, via: v, line: prop.startPosition.row, col: prop.startPosition.column });
 				}
 			} else if (obj.type === "new_expression") {
 				// new X().m(...)
@@ -441,7 +444,7 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 				const head = leftmostIdent(obj);
 				if (head) {
 					const v = vars.get(head);
-					if (v) pending.push({ caller: site.caller, method: prop.text, via: v });
+					if (v) pending.push({ caller: site.caller, method: prop.text, via: v, line: prop.startPosition.row, col: prop.startPosition.column });
 				}
 			}
 		}
@@ -549,6 +552,14 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 					const isMethod = !!className;
 					const gn = addSymbol(node, name, isMethod ? "method" : "function", !isMethod && !name.startsWith("_"), isMethod ? `${className}.${name}` : undefined);
 					nextCaller = gn;
+					// аннотированные параметры: b: Box → vars[b] = type Box (для member-вызовов)
+					const params = node.namedChildren.find((c) => c.type === "parameters");
+					for (const p of params?.namedChildren ?? []) {
+						if (p.type !== "typed_parameter" && p.type !== "parameter") continue;
+						const pn = p.childForFieldName?.("name") ?? p.namedChildren[0];
+						const pt = p.namedChildren.find((c) => c.type === "type" || c.type === "dotted_name");
+						if (pn && pt) vars.set(pn.text, { kind: "type", name: pt.text.split(".").pop() ?? pt.text });
+					}
 				}
 				break;
 			}
@@ -632,7 +643,7 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 				if (t) addCallEdge(site.caller, t.id);
 				else {
 					const v = vars.get(obj.text);
-					if (v) pending.push({ caller: site.caller, method: attr.text, via: v });
+					if (v) pending.push({ caller: site.caller, method: attr.text, via: v, line: attr.startPosition.row, col: attr.startPosition.column });
 				}
 			}
 		}
@@ -643,7 +654,7 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 
 // ---------- Обёртка ----------
 
-const OTHER_LANGS = new Set(["go", "rust", "c", "cpp", "sh", "java", "csharp", "kotlin", "ruby", "php", "swift", "dart", "scala", "lua"]);
+const OTHER_LANGS = new Set(["go", "rust", "c", "cpp", "sh", "java", "csharp", "kotlin", "ruby", "php", "swift", "dart", "scala", "lua", "r", "elixir", "solidity", "ocaml", "zig", "clojure", "nix"]);
 
 export async function extractFile(file: RepoFile): Promise<ExtractedFile> {
 	const tree = await parseSource(file.lang, file.content);

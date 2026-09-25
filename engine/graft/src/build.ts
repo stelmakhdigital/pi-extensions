@@ -1,9 +1,15 @@
 /** Сборка графа: scan → extract → разрешение импортов → Graph. */
 import { extractFile, resolveImport, resolvePyImport, type ExtractedFile } from "./extract.js";
-import { scanRepo } from "./scan.js";
-import type { Graph, GraphEdge } from "./types.js";
+import { detectScopes, listRepoPaths, scanRepo } from "./scan.js";
+import type { Graph, GraphEdge, LspCandidate } from "./types.js";
 
-export async function buildGraph(root: string): Promise<Graph> {
+export interface BuildGraphResult {
+	graph: Graph;
+	/** Нерешённые member-вызовы — кандидаты для lsp-sync (LSP goToDefinition). */
+	unresolved: LspCandidate[];
+}
+
+export async function buildGraph(root: string): Promise<BuildGraphResult> {
 	const files = await scanRepo(root);
 	if (files.length === 0) {
 		throw new Error("graft-engine: нет файлов для индексации (git ls-files пуст или git недоступен)");
@@ -43,7 +49,8 @@ export async function buildGraph(root: string): Promise<Graph> {
 	const allNodes = extracted.flatMap((e) => e.nodes);
 	const globalMethods = new Map<string, Map<string, Graph["nodes"][number][]>>();
 	for (const n of allNodes) {
-		if (n.kind !== "method" || !n.name.includes(".")) continue;
+		// Квалифицированные символы (Cls.m) — method (java/c#/...) или function (kotlin/swift).
+		if ((n.kind !== "method" && n.kind !== "function") || !n.name.includes(".")) continue;
 		const [cls, m] = n.name.split(".");
 		const mm = globalMethods.get(cls) ?? new Map();
 		mm.set(m, [...(mm.get(m) ?? []), n]);
@@ -87,16 +94,24 @@ export async function buildGraph(root: string): Promise<Graph> {
 		}
 		return null;
 	};
+	const unresolvedLsp: LspCandidate[] = [];
 	for (const e of extracted) {
 		for (const p of e.pending) {
 			const cls = resolveVia(p.via, e, new Set());
-			if (!cls) continue;
-			const cands = globalMethods.get(cls)?.get(p.method) ?? [];
+			const cands = cls ? (globalMethods.get(cls)?.get(p.method) ?? []) : [];
 			const target = cands.find((c) => c.path === e.file.path) ?? cands[0];
-			if (!target) continue;
-			const source = p.caller ? p.caller.id : e.file.path;
-			if (source === target.id) continue;
-			edges.push({ source, target: target.id, relation: "calls", confidence: "extracted" });
+			if (target) {
+				const source = p.caller ? p.caller.id : e.file.path;
+				if (source !== target.id) edges.push({ source, target: target.id, relation: "calls", confidence: "extracted" });
+				continue;
+			}
+			unresolvedLsp.push({
+				file: e.file.path,
+				method: p.method,
+				line: p.line,
+				col: p.col,
+				caller: p.caller?.id ?? e.file.path,
+			});
 		}
 	}
 
@@ -111,10 +126,15 @@ export async function buildGraph(root: string): Promise<Graph> {
 	});
 
 	void fileById;
+	const rawPaths = await listRepoPaths(root);
+	const scopes = detectScopes(rawPaths);
 	return {
-		version: 1,
-		meta: { builtAt: new Date().toISOString(), root, files: files.map((f) => ({ path: f.path, hash: f.hash })) },
-		nodes,
-		edges: uniqueEdges,
+		graph: {
+			version: 1,
+			meta: { builtAt: new Date().toISOString(), root, files: files.map((f) => ({ path: f.path, hash: f.hash })), scopes: Object.keys(scopes).length ? scopes : undefined },
+			nodes,
+			edges: uniqueEdges,
+		},
+		unresolved: unresolvedLsp,
 	};
 }

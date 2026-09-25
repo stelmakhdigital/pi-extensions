@@ -22,6 +22,9 @@ import {
 	blastFileText,
 	build,
 	checkStatus,
+	deepCoverage,
+	enableAutoRebuild,
+	ensureFresh,
 	findGraphRoot,
 	makeQueries,
 	type DeepConfig,
@@ -70,6 +73,11 @@ export default function graftExtension(pi: ExtensionAPI) {
 		type: "string",
 		default: "16000",
 	});
+	pi.registerFlag("graft-auto-rebuild", {
+		description: "Тихая пересборка графа после правок write/edit (дебаунс 4 c; бейдж «syncing…»)",
+		type: "boolean",
+		default: true,
+	});
 
 	let mapCache: { text: string; at: number } | null = null;
 	const MAP_TTL_MS = 120_000;
@@ -101,12 +109,22 @@ export default function graftExtension(pi: ExtensionAPI) {
 		}
 		try {
 			const st = await checkStatus(root);
-			if (st.text === "нет графа") ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "graft: нет графа — /graft build"));
-			else if (!st.ok) ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `graft: ⚠ ${st.stale} stale${st.added ? ` +${st.added} new` : ""}`));
-			else ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", "graft: synced"));
+			if (st.text === "нет графа") {
+				ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "graft: нет графа — /graft build"));
+				return;
+			}
+			const cov = Math.round(deepCoverage(root) * 100);
+			const deepPart = cov > 0 ? ` · ${cov}% deep` : "";
+			if (!st.ok) ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `graft: ⚠ ${st.stale} stale${st.added ? ` +${st.added} new` : ""}${deepPart}`));
+			else ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", `graft: synced${deepPart}`));
 		} catch {
 			// тихо
 		}
+	}
+
+	/** «syncing…» на время тихой пересборки (сбрасывается в refreshBadge). */
+	function setSyncingBadge(ctx: ExtensionContext): void {
+		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", "graft: syncing…"));
 	}
 
 	// ---------- Инструменты ----------
@@ -127,6 +145,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			try {
+				await ensureFresh(root);
 				let out = makeQueries(root).ask(params.query);
 				if (params.scope) {
 					const prefix = params.scope.endsWith("/") ? params.scope : `${params.scope}/`;
@@ -155,6 +174,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			try {
+				await ensureFresh(root);
 				const out = makeQueries(root).grep(params.pattern, { scope: params.scope, fixed: params.fixed, ignoreCase: params.ignoreCase });
 				return toolResult(cap(out, maxOut()), { cmd: `graft grep ${params.pattern}` });
 			} catch (e) {
@@ -178,6 +198,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			try {
+				await ensureFresh(root);
 				const out = makeQueries(root).callers(params.symbol, { direction: params.direction, depth: params.depth });
 				return toolResult(cap(out, maxOut()), { cmd: `graft callers ${params.symbol}` });
 			} catch (e) {
@@ -199,6 +220,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			try {
+				await ensureFresh(root);
 				const out = makeQueries(root).skeleton(params.file);
 				return toolResult(cap(out, maxOut()), { cmd: `graft skeleton ${params.file}` });
 			} catch (e) {
@@ -220,6 +242,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			try {
+				await ensureFresh(root);
 				const out = makeQueries(root).map({ maxDirs: params.maxDirs });
 				mapCache = { text: out, at: Date.now() };
 				return toolResult(cap(out, maxOut()), { cmd: "graft map" });
@@ -262,6 +285,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			try {
+				await ensureFresh(root);
 				const out = await makeQueries(root).blast(params.base);
 				return toolResult(cap(out, maxOut()), { cmd: `graft blast ${params.base ?? ""}`.trim() });
 			} catch (e) {
@@ -289,6 +313,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 		if (wantMap) {
 			if (!mapCache || Date.now() - mapCache.at > MAP_TTL_MS) {
 				try {
+					await ensureFresh(root);
 					const out = makeQueries(root).map();
 					mapCache = { text: out, at: Date.now() };
 				} catch {
@@ -325,11 +350,15 @@ export default function graftExtension(pi: ExtensionAPI) {
 
 		mapCache = null;
 		const blast = blastFileText(root, path);
-		if (!blast) return;
-		const note = `🌿 Graft blast radius по ${path}:\n${blast}`;
-		if (ctx.hasUI) ctx.ui.notify(note, "info");
-		void refreshBadge(ctx, root);
-		return { content: [...event.content, { type: "text", text: note }] };
+		const note = blast ? `🌿 Graft blast radius по ${path}:\n${blast}` : "";
+		if (note && ctx.hasUI) ctx.ui.notify(note, "info");
+
+		// Auto-rebuild: тихая пересборка после правки (дебаунс в enableAutoRebuild).
+		if (pi.getFlag("--graft-auto-rebuild") !== false) {
+			setSyncingBadge(ctx);
+			enableAutoRebuild(() => build(root, {}).then(() => refreshBadge(ctx, root)));
+		}
+		return note ? { content: [...event.content, { type: "text", text: note }] } : undefined;
 	});
 
 	// ---------- Команда /graft ----------
@@ -341,10 +370,11 @@ export default function graftExtension(pi: ExtensionAPI) {
 			const parts: string[] = [`Graft: pi-graft-engine (engine/graft, свой движок)`];
 			if (root) {
 				const st = await checkStatus(root);
+				const cov = Math.round(deepCoverage(root) * 100);
 				parts.push(
 					st.text === "нет графа"
 						? "Граф: НЕ СОБРАН (/graft build)"
-						: `Граф: ${root} — ${st.ok ? "синхронен" : `дрейф (stale ${st.stale}, new ${st.added})`}`,
+						: `Граф: ${root} — ${st.ok ? "синхронен" : `дрейф (stale ${st.stale}, new ${st.added})`}${cov > 0 ? ` · ${cov}% deep` : ""}`,
 				);
 			} else {
 				parts.push("Граф: не найден (запусти `/graft build` в корне репо)");

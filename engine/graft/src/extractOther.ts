@@ -10,10 +10,28 @@ const firstIdent = (n: TsNode): string | null => {
 	for (const c of n.namedChildren) if (c.type === "identifier") return c.text;
 	return null;
 };
+const RESERVED_OBJ = new Set(["this", "self", "true", "false", "null", "None", "nil"]);
+
 const lastIdent = (n: TsNode): string | null => {
 	let out: string | null = null;
 	for (const c of n.namedChildren) if (c.type === "identifier") out = c.text;
 	return out;
+};
+
+const deepFirstIdent = (n: TsNode): string | null => {
+	for (const c of n.namedChildren) {
+		if (c.type === "identifier") return c.text;
+		const r = deepFirstIdent(c);
+		if (r) return r;
+	}
+	return null;
+};
+// value_path/attrpath/цепочки: последний ident-сегмент (M.f → f).
+const pathIdent = (n: TsNode): string | null => {
+	const r = lastIdent(n);
+	if (r) return r;
+	const parts = n.text.split(".");
+	return parts.length ? parts[parts.length - 1] : null;
 };
 
 const nameChild = (n: TsNode, types: string[]): string | null => {
@@ -28,6 +46,7 @@ const enclosingClassName = (n: TsNode): string | null => {
 		if (p.type === "object_declaration") return nameChild(p, ["identifier", "type_identifier"]);
 		if (p.type === "class") return nameChild(p, ["constant", "identifier"]); // ruby
 		if (p.type === "class_definition") return nameChild(p, ["identifier"]); // dart/scala
+			if (p.type === "contract_declaration") return nameChild(p, ["identifier"]); // solidity
 	}
 	return null;
 };
@@ -55,6 +74,10 @@ interface LangRules {
 	calleeFrom?: "lastIdent";
 	/** Тело метода — соседний узел после сигнатуры (dart): ходить с caller=метод. */
 	pairedBody?: boolean;
+	/** Member-вызов obj.m() → pending (full fidelity: go/java/kotlin/php/swift). */
+	memberCall?: (n: TsNode) => { obj: string; method: string } | null;
+	/** Подсказки типов локальных переменных: x = new T() / x: T / x := NewT(). */
+	varAssigns?: Array<{ node: string; varName: (n: TsNode) => string | null; resolve: (n: TsNode) => { kind: "new" | "type"; name: string } | null }>;
 }
 
 const RULES: Record<string, LangRules> = {
@@ -86,6 +109,47 @@ const RULES: Record<string, LangRules> = {
 			{ node: "type_declaration", kind: "type", name: (n) => n.childForFieldName?.("name")?.text ?? null },
 		],
 		callee: (fn) => (fn.type === "identifier" ? fn.text : fn.type === "selector_expression" ? fn.childForFieldName?.("property")?.text ?? null : null),
+		memberCall: (n) => {
+			if (n.type !== "call_expression") return null;
+			const sel = n.namedChildren[0];
+			if (!sel || sel.type !== "selector_expression") return null;
+			const obj = sel.namedChildren[0];
+			const m = sel.namedChildren.find((c) => c.type === "field_identifier");
+			if (!obj || obj.type !== "identifier" || !m) return null;
+			return { obj: obj.text, method: m.text };
+		},
+		varAssigns: [
+			{
+				node: "short_var_declaration",
+				varName: (n) => {
+					const l = n.namedChildren.find((c) => c.type === "expression_list");
+					return l?.namedChildren.find((c) => c.type === "identifier")?.text ?? null;
+				},
+				resolve: (n) => {
+					const lists = n.namedChildren.filter((c) => c.type === "expression_list");
+					const r = lists[lists.length - 1];
+					if (!r) return null;
+					const findComp = (x: TsNode, d = 0): string | null => {
+						if (d > 3) return null;
+						for (const c of x.namedChildren) {
+							if (c.type === "composite_literal") return c.namedChildren.find((y) => y.type === "type_identifier")?.text ?? null;
+							const rr = findComp(c, d + 1);
+							if (rr) return rr;
+						}
+						return null;
+					};
+					const comp = findComp(r);
+					if (comp) return { kind: "new", name: comp };
+					const ce = r.namedChildren.find((c) => c.type === "call_expression");
+					if (ce) {
+						const id = ce.namedChildren.find((c) => c.type === "identifier");
+						// Go-идиома: NewService() → Service
+						if (id && /^New[A-Z]/.test(id.text)) return { kind: "new", name: id.text.slice(3) };
+					}
+					return null;
+				},
+			},
+		],
 	},
 	rust: {
 		symbols: [
@@ -173,6 +237,30 @@ const RULES: Record<string, LangRules> = {
 		],
 		callee: (fn) => (fn.type === "identifier" ? fn.text : null),
 		callNode: "method_invocation",
+		memberCall: (n) => {
+			if (n.type !== "method_invocation") return null;
+			const obj = n.namedChildren[0];
+			const meth = n.namedChildren[1];
+			if (!obj || obj.type !== "identifier" || !meth || meth.type !== "identifier") return null;
+			return { obj: obj.text, method: meth.text };
+		},
+		varAssigns: [
+			{
+				node: "local_variable_declaration",
+				varName: (n) => {
+					const vd = n.namedChildren.find((c) => c.type === "variable_declarator");
+					return vd?.namedChildren.find((c) => c.type === "identifier")?.text ?? null;
+				},
+				resolve: (n) => {
+					const vd = n.namedChildren.find((c) => c.type === "variable_declarator");
+					const oce = vd?.namedChildren.find((c) => c.type === "object_creation_expression");
+					const ctor = oce?.namedChildren.find((c) => c.type === "type_identifier")?.text;
+					if (ctor) return { kind: "new", name: ctor };
+					const ty = n.namedChildren.find((c) => c.type === "type_identifier")?.text;
+					return ty ? { kind: "type", name: ty } : null;
+				},
+			},
+		],
 	},
 	csharp: {
 		symbols: [
@@ -290,6 +378,27 @@ const RULES: Record<string, LangRules> = {
 		],
 		callee: (fn) => (fn.type === "name" || fn.type === "identifier" ? fn.text : null),
 		callNodes: ["function_call_expression", "member_call_expression"],
+		memberCall: (n) => {
+			if (n.type !== "member_call_expression") return null;
+			const vn = n.namedChildren.find((c) => c.type === "variable_name");
+			const meth = n.childForFieldName?.("name") ?? n.namedChildren.find((c) => c.type === "name");
+			const on = vn?.namedChildren.find((c) => c.type === "name");
+			if (!on || !meth) return null;
+			return { obj: on.text, method: meth.text };
+		},
+		varAssigns: [
+			{
+				node: "assignment_expression",
+				varName: (n) => {
+					const vn = n.namedChildren.find((c) => c.type === "variable_name");
+					return vn?.namedChildren.find((c) => c.type === "name")?.text ?? null;
+				},
+				resolve: (n) => {
+					const oce = n.namedChildren.find((c) => c.type === "object_creation_expression");
+					return oce ? { kind: "new", name: oce.namedChildren.find((c) => c.type === "name")?.text ?? "" } : null;
+				},
+			},
+		],
 	},
 	swift: {
 		symbols: [
@@ -320,6 +429,212 @@ const RULES: Record<string, LangRules> = {
 			return null;
 		},
 		callNode: "call_expression",
+		memberCall: (n) => {
+			if (n.type !== "call_expression") return null;
+			const nav = n.namedChildren.find((c) => c.type === "navigation_expression");
+			if (!nav) return null;
+			const base_ = nav.namedChildren[0];
+			const suf = nav.namedChildren.find((c) => c.type === "navigation_suffix");
+			if (!base_ || base_.type !== "simple_identifier" || !suf) return null;
+			const m = suf.text.replace(/^[.!?]+/, "");
+			return m ? { obj: base_.text, method: m } : null;
+		},
+		varAssigns: [
+			{
+				node: "property_declaration",
+				varName: (n) => {
+					const p = n.namedChildren.find((c) => c.type === "pattern");
+					return p?.namedChildren.find((c) => c.type === "simple_identifier")?.text ?? null;
+				},
+				resolve: (n) => {
+					const ce = n.namedChildren.find((c) => c.type === "call_expression");
+					const ctor = ce?.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+					if (ctor) return { kind: "new", name: ctor };
+					const ut = n.namedChildren.find((c) => c.type === "user_type");
+					return ut ? { kind: "type", name: ut.text } : null;
+				},
+			},
+		],
+	},
+
+	r: {
+		symbols: [
+			{
+				// add <- function(x, y) { ... } — binary_operator [identifier add, function_definition]
+				node: "binary_operator",
+				kind: "function",
+				name: (n) => {
+					const children = n.namedChildren;
+					if (children.length < 2) return null;
+					const last = children[children.length - 1];
+					if (last.type !== "function_definition") return null;
+					const first = children[0];
+					return first.type === "identifier" ? first.text : null;
+				},
+			},
+		],
+		callee: (fn) => {
+			const first = fn.namedChildren[0];
+			return first && first.type === "identifier" ? first.text : null;
+		},
+		callNode: "call",
+	},
+	elixir: {
+		symbols: [
+			{
+				// defmodule Math do ... end → class (name = alias/identifier в arguments)
+				node: "call",
+				kind: "class",
+				name: (n) => {
+					const head = n.namedChildren[0];
+					if (!head || head.type !== "identifier" || head.text !== "defmodule") return null;
+					const args = n.namedChildren[1];
+					const first = args?.namedChildren[0];
+					return first ? first.text : null;
+				},
+			},
+			{
+				// def/defp add(...) — method (квалификация: enclosing defmodule)
+				node: "call",
+				kind: "method",
+				name: (n) => {
+					const head = n.namedChildren[0];
+					if (!head || head.type !== "identifier" || (head.text !== "def" && head.text !== "defp")) return null;
+					const args = n.namedChildren[1];
+					const first = args?.namedChildren[0];
+					if (!first) return null;
+					// add(a, b) → call [identifier add, ...]; run → identifier
+					if (first.type === "call") {
+						const nm = first.namedChildren.find((c) => c.type === "identifier");
+						return nm?.text ?? null;
+					}
+					return first.type === "identifier" ? first.text : null;
+				},
+				qualified: (n) => {
+					const args = n.namedChildren[1];
+					const first = args?.namedChildren[0];
+					let nm: string | null = null;
+					if (first) {
+						if (first.type === "call") nm = first.namedChildren.find((c) => c.type === "identifier")?.text ?? null;
+						else if (first.type === "identifier") nm = first.text;
+					}
+					for (let p = n.parent; p; p = p.parent) {
+						if (p.type !== "call") continue;
+						const head = p.namedChildren[0];
+						if (head?.type === "identifier" && head.text === "defmodule") {
+							const mod = p.namedChildren[1]?.namedChildren[0]?.text;
+							return mod && nm ? `${mod}.${nm}` : null;
+						}
+					}
+					return null;
+				},
+			},
+		],
+		callee: (fn) => {
+			if (fn.type === "identifier") {
+				const t = fn.text;
+				// ключевые слова/макро-построители — не вызовы
+				const NON_CALL = new Set(["def", "defp", "defmodule", "do", "end", "if", "case", "fn", "for", "cond", "unless", "with", "try", "catch", "rescue", "quote", "unquote", "use", "import", "require", "alias", "behaviour", "raise", "send", "spawn", "spawn_link", "receive", "after", "else", "when"]);
+				return NON_CALL.has(t) ? null : t;
+			}
+			if (fn.type === "dot") return lastIdent(fn); // Math.add → add
+			return null;
+		},
+		callNode: "call",
+	},
+	solidity: {
+		symbols: [
+			{ node: "contract_declaration", kind: "class", name: (n) => nameChild(n, ["identifier"]) },
+			{
+				node: "function_definition",
+				kind: "method",
+				name: (n) => nameChild(n, ["identifier"]),
+				qualified: (n) => {
+					const nm = nameChild(n, ["identifier"]);
+					const cls = enclosingClassName(n);
+					return cls && nm ? `${cls}.${nm}` : null;
+				},
+			},
+			{ node: "struct_declaration", kind: "type", name: (n) => nameChild(n, ["identifier"]) },
+			{ node: "interface_declaration", kind: "type", name: (n) => nameChild(n, ["identifier"]) },
+		],
+		callee: (fn) => {
+			const field = fn.childForFieldName?.("function");
+			if (field) return field.text;
+			return firstIdent(fn);
+		},
+		callNode: "call_expression",
+	},
+	ocaml: {
+		symbols: [
+			{ node: "value_definition", kind: "function", name: (n) => nameChild(n, ["value_name"]) ?? nameChild(n.namedChildren[0] ?? n, ["value_name"]) },
+			{ node: "module_definition", kind: "class", name: (n) => nameChild(n, ["module_name"]) ?? nameChild(n.namedChildren[0] ?? n, ["module_name"]) },
+			{ node: "type_definition", kind: "type", name: (n) => nameChild(n, ["type_name"]) ?? nameChild(n.namedChildren[0] ?? n, ["type_name"]) },
+		],
+		callee: (fn) => {
+			if (fn.type === "value_path") return pathIdent(fn);
+			const first = fn.namedChildren[0];
+			if (!first) return null;
+			if (first.type === "value_path") return pathIdent(first); // M.f → f
+			if (first.type === "identifier") return first.text;
+			return null;
+		},
+		callNode: "application_expression",
+	},
+	zig: {
+		symbols: [
+			{
+				node: "function_declaration",
+				kind: "function",
+				name: (n) => n.childForFieldName?.("name")?.text ?? nameChild(n, ["identifier"]),
+			},
+			{ node: "struct_declaration", kind: "class", name: (n) => nameChild(n, ["identifier"]) },
+			{ node: "union_declaration", kind: "type", name: (n) => nameChild(n, ["identifier"]) },
+		],
+		callee: (fn) => (fn.type === "identifier" ? fn.text : firstIdent(fn)),
+		callNode: "call_expression",
+	},
+	clojure: {
+		symbols: [
+			{
+				// (defn run [] ...) — list_lit [sym_lit defn, sym_lit run, ...]
+				node: "list_lit",
+				kind: "function",
+				name: (n) => {
+					const head = n.namedChildren[0];
+					if (!head || head.type !== "sym_lit") return null;
+					if (head.text !== "defn" && head.text !== "defn-") return null;
+					const second = n.namedChildren[1];
+					return second && second.type === "sym_lit" ? second.text : null;
+				},
+			},
+		],
+		callee: (fn) => {
+			const head = fn.type === "sym_lit" ? fn : fn.namedChildren[0];
+			if (!head || head.type !== "sym_lit") return null;
+			const t = head.text;
+			const SPECIAL = new Set(["defn", "defn-", "def", "def-", "defmacro", "defmulti", "defprotocol", "defrecord", "ns", "in-ns", "let", "letfn", "fn", "loop", "do", "doseq", "dofor", "for", "if", "when", "when-let", "when-some", "cond", "case", "try", "catch", "finally", "throw", "require", "import", "declare", "deftype", "definterface", "defstruct", "redef"]);
+			return SPECIAL.has(t) ? null : t;
+		},
+		callNode: "list_lit",
+	},
+	nix: {
+		symbols: [
+			{
+				// attrset-биндинг: binding [attrpath [a], expr] (топ-уровень в wasm-грамматике глючит)
+				node: "binding",
+				kind: "function",
+				name: (n) => deepFirstIdent(n),
+			},
+		],
+		callee: (fn) => {
+			const first = fn.namedChildren[0];
+			if (!first) return null;
+			if (first.type === "variable_expression") return firstIdent(first);
+			if (first.type === "identifier") return first.text;
+			return null;
+		},
+		callNode: "apply_expression",
 	},
 	kotlin: {
 		symbols: [
@@ -337,14 +652,42 @@ const RULES: Record<string, LangRules> = {
 		],
 		callee: (fn) => (fn.type === "simple_identifier" || fn.type === "identifier" ? fn.text : null),
 		callNode: "call_expression",
+		memberCall: (n) => {
+			if (n.type !== "call_expression") return null;
+			const nav = n.namedChildren.find((c) => c.type === "navigation_expression");
+			if (!nav) return null;
+			const base_ = nav.namedChildren[0];
+			const suf = nav.namedChildren.find((c) => c.type === "navigation_suffix");
+			if (!base_ || base_.type !== "simple_identifier" || !suf) return null;
+			const m = suf.text.replace(/^[.!?]+/, "");
+			return m ? { obj: base_.text, method: m } : null;
+		},
+		varAssigns: [
+			{
+				node: "property_declaration",
+				varName: (n) => {
+					const vd = n.namedChildren.find((c) => c.type === "variable_declaration");
+					return vd?.namedChildren.find((c) => c.type === "simple_identifier")?.text ?? null;
+				},
+				resolve: (n) => {
+					const ce = n.namedChildren.find((c) => c.type === "call_expression");
+					const ctor = ce?.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+					if (ctor) return { kind: "new", name: ctor };
+					const vd = n.namedChildren.find((c) => c.type === "variable_declaration");
+					const ty = vd?.namedChildren.find((c) => c.type === "user_type")?.text;
+					return ty ? { kind: "type", name: ty } : null;
+				},
+			},
+		],
 	},
 };
-
 export async function extractOther(file: RepoFile, tree: Tree, lang: string): Promise<ExtractedFile> {
 	const rules = RULES[lang];
 	const nodes: GraphNode[] = [];
 	const edges: GraphEdge[] = [];
 	const callSites: Array<{ callee: string; caller: GraphNode | null }> = [];
+	const vars = new Map<string, PendingVia>();
+	const pending: PendingMemberCall[] = [];
 	const lineCount = file.content.split("\n").length;
 
 	nodes.push({
@@ -384,7 +727,7 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 		if (skipped.has(node.id)) return;
 		let nextCaller = caller;
 		for (const rule of rules.symbols) {			if (node.type !== rule.node) continue;
-			const name = rule.name(node);			if (!name) break;
+			const name = rule.name(node);			if (!name) continue;
 			nextCaller = addSymbol(node, name, rule.kind, rule.qualified?.(node) ?? null);			// dart: function_body — следующий за сигнатурой SIBLING; идём в него с caller=метод
 			if (rules.pairedBody && node.type === "method_signature") {
 				const sib = node.parent?.namedChildren ?? [];
@@ -422,6 +765,26 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 			}
 			if (callee) callSites.push({ callee, caller });
 		}
+		// B6: member-вызовы obj.m() → pending (резолвится в build.ts по vars/классам)
+		if (rules.memberCall) {
+			const mc = rules.memberCall(node);
+			if (mc && !RESERVED_OBJ.has(mc.obj)) {
+				const text = node.text;
+				const idx = text.indexOf(mc.method);
+				const lineStart = text.lastIndexOf("\n", idx) + 1;
+				const linesBefore = text.slice(0, idx).split("\n").length - 1;
+				pending.push({ caller, method: mc.method, via: { kind: "ident", name: mc.obj }, line: node.startPosition.row + linesBefore, col: idx - lineStart });
+			}
+		}
+		// B6: тип-подсказки локальных переменных
+		if (rules.varAssigns) {
+			for (const va of rules.varAssigns) {
+				if (node.type !== va.node) continue;
+				const vn = va.varName(node);
+				const res = va.resolve(node);
+				if (vn && res) vars.set(vn, res);
+			}
+		}
 		// ruby: `helper` / dart: `helper();` — identifier в операторной позиции — вызов
 		const BARE_PARENTS = new Set(["body_statement", "expression_statement"]);
 		if (rules.bareIdentCall && node.type === "identifier" && node.parent && BARE_PARENTS.has(node.parent.type)) {			const callee = rules.callee(node);
@@ -456,8 +819,8 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 		edges,
 		imports: [],
 		exports: new Map([...byName.entries()].filter(([, n]) => n.kind !== "file")),
-		vars: new Map<string, PendingVia>(),
+		vars,
 		fnReturns: new Map<string, string>(), // у rule-языков явных return-типов нет
-		pending: [] as PendingMemberCall[],
+		pending,
 	};
 }

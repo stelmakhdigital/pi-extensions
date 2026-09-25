@@ -38,6 +38,13 @@ export async function getLanguage(lang: Lang): Promise<Language> {
 		dart: "dart",
 		scala: "scala",
 		lua: "lua",
+		r: "r",
+		elixir: "elixir",
+		solidity: "solidity",
+		ocaml: "ocaml",
+		zig: "zig",
+		clojure: "clojure",
+		nix: "nix",
 	};
 	const grammar = GRAMMAR[lang];
 		l = await Language.load(getWasmPath(grammar as "typescript"));

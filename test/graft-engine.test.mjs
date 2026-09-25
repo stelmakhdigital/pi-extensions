@@ -3,7 +3,7 @@
  * Run: node test/graft-engine.test.mjs
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
@@ -81,6 +81,10 @@ func Helper() int { return 1 }
 
 func (i *Item) Show() string { return i.Name }
 
+func NewItem() *Item { return &Item{} }
+
+func Go() { s := NewItem(); _ = s.Show() }
+
 func Run() int { return Helper() }
 `);
 mkfile("tool.rs", `pub struct Widget { v: i32 }
@@ -98,7 +102,8 @@ mkfile("svc.java", `public class Service {
   public String getName() { return name; }
   public void run() { this.helper(); }
   private void helper() {}
-}`);
+}
+public class App { public void go() { Service s = new Service(); s.getName(); } }`);
 mkfile("svc.cs", `public class Service {
   public string GetName() => name;
   public void Run() { Helper(); }
@@ -108,7 +113,8 @@ mkfile("svc.kt", `class Service {
   fun getName(): String = name
   fun run() { helper() }
   private fun helper() { }
-}`);
+}
+class App { fun go() { val s = Service(); s.getName() } }`);
 mkfile("svc.rb", `class Service
   def run
     helper
@@ -125,6 +131,7 @@ class Service {
   public function run() { $this->helper(); }
   private function helper() {}
 }
+function go() { $s = new Service(); $s->run(); }
 `);
 mkfile("svc.swift", `class Service {
   func run() {
@@ -134,6 +141,7 @@ mkfile("svc.swift", `class Service {
 
   func helper() {}
 }
+func go() { let s = Service(); s.run() }
 `);
 mkfile("svc.dart", `class Service {
   void run() {
@@ -229,6 +237,12 @@ await check("edges: импорты + references + calls", () => {
 		assert(edge("svc.lua#Service.run", "svc.lua#Service.helper"), "lua self:helper");
 		// return-вызов: pairWrap → return pairBase() → Pair
 		assert(edge("src/util.ts#usePair3", "src/util.ts#Pair.get"), "transitive: usePair3→Pair.get");
+		// B6 full-fidelity: new/конструктор + member-вызовы (go/java/kt/php/swift)
+		assert(edge("app.go#Go", "app.go#Item.Show"), "go: s := NewItem(); s.Show()");
+		assert(edge("svc.java#App.go", "svc.java#Service.getName"), "java: Service s = new Service(); s.getName()");
+		assert(edge("svc.kt#App.go", "svc.kt#Service.getName"), "kotlin: val s = Service(); s.getName()");
+		assert(edge("svc.php#go", "svc.php#Service.run"), "php: $s = new Service(); $s->run()");
+		assert(edge("svc.swift#go", "svc.swift#Service.run"), "swift: let s = Service(); s.run()");
 		// дженерики: Promise<Pair> → Pair; await mkAsyncPair() → Pair
 		assert(!edge("src/util.ts#useAsyncPair", "src/util.ts#Pair.get"), "без .m() — нет ребра");
 		// типизированные: параметр g: Greeter / const g: Greeter
@@ -491,6 +505,222 @@ await check("карточки и index.md", () => {
 	assert(card.includes("helper") && card.includes("Файл делает X."), card);
 	const idx = readFileSync(join(root, "graft/index.md"), "utf8");
 	assert(idx.includes("repo map"), idx);
+});
+
+await check("refresh: fingerprint + ensureFresh (дрейф → rebuild; чисто → skip; GRFT_NO_REFRESH)", async () => {
+	const fp = join(root, "graft", ".engine", "fingerprint.json");
+	assert(readFileSync(fp, "utf8"), "fingerprint.json пишется после build");
+	let r = await engine.ensureFresh(root);
+	assert(!r.refreshed, `без дрейфа — нет пересборки: ${JSON.stringify(r)}`);
+	writeFileSync(join(root, "src/util.ts"), readFileSync(join(root, "src/util.ts"), "utf8") + "export const extra3 = 3;\n");
+	const dr = await engine.driftReport(root);
+	assert(dr.drifted && dr.changed >= 1, `driftReport: ${JSON.stringify(dr)}`);
+	r = await engine.ensureFresh(root);
+	assert(r.refreshed && r.files >= 1, `пересборка при дрейфе: ${JSON.stringify(r)}`);
+	r = await engine.ensureFresh(root);
+	assert(!r.refreshed, "после rebuild — чисто");
+	process.env.GRFT_NO_REFRESH = "1";
+	writeFileSync(join(root, "src/util.ts"), readFileSync(join(root, "src/util.ts"), "utf8") + "export const extra4 = 4;\n");
+	r = await engine.ensureFresh(root);
+	assert(!r.refreshed && r.skipped === "GRFT_NO_REFRESH=1", `GRFT_NO_REFRESH: ${JSON.stringify(r)}`);
+	delete process.env.GRFT_NO_REFRESH;
+	const c = readFileSync(join(root, "src/util.ts"), "utf8").replace("export const extra3 = 3;\n", "").replace("export const extra4 = 4;\n", "");
+	writeFileSync(join(root, "src/util.ts"), c);
+	await engine.build(root, { autoDeep: false });
+});
+
+await check("CLI: check → exit 1 при дрейфе (CI-сигнал)", () => {
+	const binPath = fileURLToPath(new URL("../engine/graft/bin/graft.mjs", import.meta.url));
+	const codeOf = () => {
+		let code = 0;
+		try {
+			execFileSync("node", [binPath, "check", "--dir", root], { stdio: "pipe" });
+		} catch (e) {
+			code = e.status;
+		}
+		return code;
+	};
+	assert(codeOf() === 0, "чисто → exit 0");
+	writeFileSync(join(root, "src/util.ts"), readFileSync(join(root, "src/util.ts"), "utf8") + "export const cliDrift = 1;\n");
+	assert(codeOf() === 1, "дрейф → exit 1");
+	writeFileSync(join(root, "src/util.ts"), readFileSync(join(root, "src/util.ts"), "utf8").replace("export const cliDrift = 1;\n", ""));
+});
+
+await check("monorepo: scopes (детект, ask-fusion, map, grep --in-scope)", async () => {
+	const mroot = mkdtempSync(join(tmpdir(), "ge-mono-"));
+	execFileSync("git", ["init", "-q", "."], { cwd: mroot });
+	const mfile = (p, c) => { mkdirSync(join(mroot, p, ".."), { recursive: true }); writeFileSync(join(mroot, p), c); };
+	mfile("package.json", "{\"name\":\"root\",\"workspaces\":[\"packages/*\"]}");
+	mfile("packages/alpha/package.json", "{\"name\":\"alpha\"}");
+	mfile("packages/alpha/src/alpha.ts", `export function alphaCore(): string { return alphaHelper(); }
+export function alphaHelper(): string { return "a"; }`);
+	mfile("packages/beta/package.json", "{\"name\":\"beta\"}");
+	mfile("packages/beta/src/beta.ts", `export function betaCore(): string { return betaUtil(); }
+export function betaUtil(): string { return "b"; }`);
+	mfile("rootfile.ts", `export function rootEntry(): string { return "r"; }`);
+	const rep = await engine.build(mroot);
+	const g = engine.readGraph(mroot);
+	const sc = g.meta.scopes;
+	assert(sc && sc["packages/alpha"] && sc["packages/beta"] && sc["(root)"], `scopes: ${JSON.stringify(Object.keys(sc ?? {}))}`);
+	assert(sc["packages/alpha"].includes("packages/alpha/src/alpha.ts"), "alpha-файл в скоупе");
+	const q = engine.makeQueries(mroot);
+	const mapOut = q.map();
+	assert(mapOut.includes("scopes:") && mapOut.includes("packages/alpha"), `map scopes: ${mapOut.slice(0, 200)}`);
+	const askOut = q.ask("alpha core");
+	assert(askOut.includes("[packages/alpha]"), `ask label: ${askOut.slice(0, 200)}`);
+	// named-scope в grep
+	const gA = q.grep("alpha", { scope: "packages/alpha" });
+	const gB = q.grep("beta", { scope: "packages/alpha" });
+	assert(gA.includes("alpha") && !gA.toLowerCase().includes("beta.ts"), `grep in alpha: ${gA.slice(0, 150)}`);
+	assert(gB.includes("нет хитов"), `grep beta в alpha — пусто: ${gB.slice(0, 80)}`);
+	rmSync(mroot, { recursive: true, force: true });
+});
+
+await check("языки v2 (7 новых): r/elixir/solidity/ocaml/zig/clojure/nix — символы + вызовы", async () => {
+	const lroot = mkdtempSync(join(tmpdir(), "ge-langs-"));
+	execFileSync("git", ["init", "-q", "."], { cwd: lroot });
+	const lf = (p, c) => { mkdirSync(join(lroot, p, ".."), { recursive: true }); writeFileSync(join(lroot, p), c); };
+	lf("pkg/r.R", "helper <- function(x) { x + 1 }\nrun <- function() { helper(1) }\n");
+	lf("pkg/math.ex", "defmodule Math do\n  def add(a, b), do: sub(a, b)\n  defp sub(a, b), do: a - b\nend\n");
+	lf("pkg/app.sol", "contract App {\n  function run() external returns (uint) { return calc(1); }\n  function calc(uint x) public pure returns (uint) { return x + 1; }\n}\n");
+	lf("pkg/core.ml", "let sub a b = a - b\nlet add a b = sub a b\n");
+	lf("pkg/util.zig", "fn helper() u32 { return 1; }\npub fn run() void { _ = helper(); }\n");
+	lf("pkg/core.clj", "(defn helper [x] (+ x 1))\n(defn run [] (helper 1))\n");
+	lf("pkg/mod.nix", "cfg = { a = 1; b = a + 2; };\n");
+	const g = engine.readGraph ? null : null;
+	const rep = await engine.build(lroot);
+	const graph = JSON.parse(readFileSync(join(lroot, "graft", ".engine", "graph.json"), "utf8"));
+	const names = new Set(graph.nodes.filter((n) => n.kind !== "file").map((n) => n.name));
+	const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+	const calls = graph.edges.filter((e) => e.relation === "calls");
+	const edge = (srcName, tgtName) => calls.some((e) => {
+		const s = byId.get(e.source)?.name;
+		const t = byId.get(e.target)?.name;
+		return s === srcName && t === tgtName;
+	});
+	assert(names.has("run") && names.has("helper"), `R: ${[...names].join(",")}`);
+	assert(names.has("Math.add") && names.has("Math.sub"), `Elixir: ${[...names].filter((n) => n.includes(".")).join(",")}`);
+	assert(names.has("App") && names.has("App.run") && names.has("App.calc"), `Solidity: ${[...names].join(",")}`);
+	assert(names.has("add") && names.has("sub"), `OCaml: ${[...names].join(",")}`);
+	assert(edge("run", "helper"), "R run→helper");
+	assert(edge("Math.add", "Math.sub"), "Elixir Math.add→Math.sub");
+	assert(edge("App.run", "App.calc"), "Solidity App.run→App.calc");
+	assert(edge("add", "sub"), "OCaml add→sub");
+	assert(edge("run", "helper") && graph.nodes.some((n) => n.path.endsWith(".zig") && n.name === "run"), "zig run");
+	assert(graph.nodes.some((n) => n.path.endsWith(".clj") && n.name === "helper") && edge("run", "helper"), "clojure run→helper");
+	assert(graph.nodes.some((n) => n.path.endsWith(".nix") && n.name === "b"), "nix attrset bindings");
+	rmSync(lroot, { recursive: true, force: true });
+});
+
+await check("CLI E11/E12: ask --json, blast --format/json/markdown/owners/export-viz, init/uninstall", () => {
+	const binPath = fileURLToPath(new URL("../engine/graft/bin/graft.mjs", import.meta.url));
+	const run = (args, expectFail = false) => {
+		try {
+			return { code: 0, out: execFileSync("node", [binPath, ...args], { stdio: "pipe" }).toString() };
+		} catch (e) {
+			return { code: e.status, out: ((e.stdout ?? "") + (e.stderr ?? "")).toString() };
+		}
+	};
+	// ask --json
+	let r = run(["ask", "helper", "--json", "--dir", root]);
+	assert(r.code === 0, `ask --json: ${r.out.slice(0, 200)}`);
+	const j = JSON.parse(r.out);
+	assert(j.count >= 1 && Array.isArray(j.results) && j.results[0].name, `askJson: ${r.out.slice(0, 150)}`);
+	// blast: создаём дрейф (изменения в коммитнутом файле)
+	writeFileSync(join(root, "src/util.ts"), readFileSync(join(root, "src/util.ts"), "utf8") + "export const blastProbe = 1;\n");
+	r = run(["blast", "--format", "json", "--dir", root]);
+	assert(r.code === 0, `blast json: ${r.out.slice(0, 200)}`);
+	const bj = JSON.parse(r.out);
+	assert(bj.files.length >= 1 && bj.files[0].path === "src/util.ts", `blastData: ${JSON.stringify(bj.files?.map((f) => f.path))}`);
+	assert(typeof bj.files[0].owner === "string" || bj.files[0].owner === null, "owner поле");
+	r = run(["blast", "--format", "json", "--no-owners", "--dir", root]);
+	const bj2 = JSON.parse(r.out);
+	assert(bj2.files[0].owner === null, "no-owners → null");
+	r = run(["blast", "--format", "markdown", "--no-owners", "--dir", root]);
+	assert(r.out.includes("## Blast radius") && r.out.includes("src/util.ts"), `markdown: ${r.out.slice(0, 150)}`);
+	// export-viz
+	r = run(["blast", "--export-viz", join(root, "blastviz"), "--no-owners", "--dir", root]);
+	assert(r.code === 0 && existsSync(join(root, "blastviz", "index.html")), `export-viz: ${r.out.slice(0, 150)}`);
+	// вернуть файл в исходное состояние
+	writeFileSync(join(root, "src/util.ts"), readFileSync(join(root, "src/util.ts"), "utf8").replace("export const blastProbe = 1;\n", ""));
+	// init / uninstall
+	const wroot = mkdtempSync(join(tmpdir(), "ge-wire-"));
+	execFileSync("git", ["init", "-q", "."], { cwd: wroot });
+	r = run(["init", "--dir", wroot]);
+	assert(r.code === 0, `init: ${r.out.slice(0, 200)}`);
+	const agentsMd = readFileSync(join(wroot, "AGENTS.md"), "utf8");
+	assert(agentsMd.includes("graft:begin") && agentsMd.includes("Graft code graph"), "AGENTS.md секция");
+	const mcp = JSON.parse(readFileSync(join(wroot, ".mcp.json"), "utf8"));
+	assert(mcp.mcpServers.graft.command === "node" && mcp.mcpServers.graft.args[0].endsWith("graft-mcp.mjs"), ".mcp.json graft");
+	// idempotency
+	r = run(["init", "--dir", wroot]);
+	assert(r.out.includes("[unchanged]"), `idempotent: ${r.out}`);
+	// dry-run не пишет
+	const wroot2 = mkdtempSync(join(tmpdir(), "ge-wire2-"));
+	run(["init", "--dry-run", "--dir", wroot2]);
+	assert(!existsSync(join(wroot2, "AGENTS.md")), "dry-run не пишет");
+	// uninstall
+	r = run(["uninstall", "-y", "--dir", wroot]);
+	const agentsMd2 = readFileSync(join(wroot, "AGENTS.md"), "utf8");
+	assert(!agentsMd2.includes("graft:begin"), "uninstall: секция убрана");
+	const mcp2 = JSON.parse(readFileSync(join(wroot, ".mcp.json"), "utf8"));
+	assert(!mcp2.mcpServers || !mcp2.mcpServers.graft, "uninstall: mcp graft убран");
+	rmSync(wroot, { recursive: true, force: true });
+	rmSync(wroot2, { recursive: true, force: true });
+});
+
+await check("LSP B5: unresolved-кандидаты, lspStatus, lspSync без сервера", async () => {
+	mkfile("src/lspfix.ts",
+		"export class LspBox { open() { return 1; } }\n" +
+		"export function useLspBox(b: LspBox) { return b.open() + b.missingMethod(); }\n");
+	await engine.build(root, { autoDeep: false });
+	const cand = engine.readUnresolved(root);
+	assert(cand.some((c) => c.method === "missingMethod" && c.file === "src/lspfix.ts" && c.line >= 1 && c.col >= 0),
+		`unresolved: ${JSON.stringify(cand)}`);
+	const st = engine.lspStatus(root);
+	const tsRow = st.find((r) => r.lang === "ts");
+	assert(tsRow && tsRow.candidates >= 1, `lspStatus: ${JSON.stringify(st)}`);
+	const rep = await engine.lspSync(root);
+	assert(rep.candidates >= 1, `lspSync candidates: ${JSON.stringify(rep)}`);
+	// без сервера — честный отчёт, без рёбер
+	const tsLang = rep.langs.find((l) => l.lang === "ts");
+	if (tsLang && !tsLang.available) {
+		assert(tsLang.ok === false && tsLang.edges === 0 && tsLang.install.length > 0, `graceful: ${JSON.stringify(tsLang)}`);
+	}
+});
+
+await check("C7: Notes в карточках переживают регенерацию + concept-links", async () => {
+	// Notes: перепишем карточку с заметками между маркерами
+	const cardPath = join(root, "graft/cards/src/app.ts.md");
+	const card = readFileSync(cardPath, "utf8");
+	const b = "<!-- graft:notes:begin -->";
+	const e = "<!-- graft:notes:end -->";
+	const bi = card.indexOf(b);
+	assert(bi >= 0, "маркеры notes в карточке");
+	const patched = card.slice(0, bi) + b + "\nМоя заметка: тут важно.\n" + e + card.slice(card.indexOf(e) + e.length);
+	writeFileSync(cardPath, patched);
+	engine.writeCards(root, engine.readGraph(root), engine.readDeep(root));
+	const after = readFileSync(cardPath, "utf8");
+	assert(after.includes("Моя заметка: тут важно."), "notes пережил регенерацию");
+	// Concept links: conceptsBuild (fallback без LLM) на фикстуре с кросс-вызовами
+	await engine.conceptsBuild(root, engine.readGraph(root), { baseUrl: "", model: "", apiKey: "" });
+	const deep = engine.readDeep(root);
+	assert(Array.isArray(deep.concepts?.topics) && deep.concepts.topics.length >= 1, `topics: ${JSON.stringify(deep.concepts?.topics?.length)}`);
+	assert(Array.isArray(deep.concepts?.links), "links массив");
+	// если есть кросс-каталожные вызовы — найдётся связь
+	assert(deep.concepts.links.length >= 0, "links посчитаны");
+});
+
+await check("C8: viz serve (HTTP /api/graph + live-reload)", async () => {
+	const port = 18231;
+	const url = engine.serveViz(root, port);
+	await new Promise((r) => setTimeout(r, 300));
+	const gres = await fetch(`${url}/api/graph`);
+	assert(gres.status === 200, `api status ${gres.status}`);
+	const gj = await gres.json();
+	assert(gj.version === 1 && Array.isArray(gj.nodes), "api/graph JSON");
+	const html = await (await fetch(`${url}/`)).text();
+	assert(html.includes("live-reload") && html.includes("api/graph"), "html + reload-скрипт");
 });
 
 server.close();

@@ -11,19 +11,27 @@
 import { buildGraph } from "./build.js";
 import { deepBuild, deepCfgFromEnv } from "./deep.js";
 import { conceptsBuild } from "./concepts.js";
-import { writeViz } from "./viz.js";
+import { serveViz, writeViz } from "./viz.js";
+import { writeFingerprint } from "./refresh.js";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { readGraph } from "./store.js";
 
-export { conceptsBuild, writeViz };
-export { readGraph } from "./store.js";
-import { hasDeep, hasGraph, readDeep, writeCards, writeGraph, writeIndex } from "./store.js";
+export { conceptsBuild, serveViz, writeViz };
+export { readGraph, readDeep, writeCards, writeDeep } from "./store.js";
+import { hasDeep, hasGraph, readDeep, writeCards, writeGraph, writeIndex, writeUnresolved } from "./store.js";
 import { makeQueries } from "./query.js";
 import type { DeepConfig, Graph } from "./types.js";
 
-export { findGraphRoot, hasGraph } from "./store.js";
+export { findGraphRoot, hasGraph, readUnresolved, writeUnresolved } from "./store.js";
+export { lspStatus, lspSync, LSP_SERVERS } from "./lsp.js";
 export { makeQueries } from "./query.js";
 export type { Queries } from "./query.js";
 export type { DeepConfig, Graph, GraphNode, DeepStore } from "./types.js";
 export { scanRepo } from "./scan.js";
+export { ensureFresh, driftReport, enableAutoRebuild } from "./refresh.js";
+export { initWiring, uninstallWiring, mcpServerPath } from "./wiring.js";
+export { llmChat } from "./deep.js";
 
 export interface BuildOptions {
 	deep?: DeepConfig;
@@ -42,8 +50,10 @@ export interface BuildReport {
 
 /** Пересобрать граф: структурный слой (+ deep при opts.deep). */
 export async function build(root: string, opts: BuildOptions = {}): Promise<BuildReport> {
-	const g: Graph = await buildGraph(root);
+	const { graph: g, unresolved } = await buildGraph(root);
+	writeUnresolved(root, unresolved);
 	writeGraph(root, g);
+	await writeFingerprint(root, g.meta.files.map((f) => f.path), Object.fromEntries(g.meta.files.map((f) => [f.path, f.hash])));
 
 	let deepReport: BuildReport["deep"];
 	if (opts.deep) {
@@ -87,5 +97,49 @@ export function blastFileText(root: string, path: string): string {
 	} catch {
 		return "";
 	}
+}
+
+/** Blast-радиус как отдельная viz-страница (сабграф зон + зависимостей) в outDir/index.html. */
+export function writeBlastViz(
+	root: string,
+	data: { files: Array<{ path: string; symbols: Array<{ name: string; dependents: string[] }> }> },
+	outDir: string,
+): string {
+	const g = readGraph(root);
+	const nodeById = new Map(g.nodes.map((n) => [n.id, n]));
+	void nodeById;
+	const nameToId = new Map(g.nodes.filter((n) => n.kind !== "file").map((n) => [n.name, n.id]));
+	const keep = new Set<string>(data.files.map((f) => f.path));
+	for (const f of data.files) for (const sym of f.symbols) for (const dep of sym.dependents) {
+		const id = nameToId.get(dep);
+		if (id) keep.add(id);
+	}
+	const fileOf = (id: string) => (id.includes("#") ? id.split("#")[0] : id);
+	const paths = new Set([...keep].map(fileOf));
+	const nodes = g.nodes.filter((n) => keep.has(n.id) || (n.kind === "file" && paths.has(n.path)));
+	const idSet = new Set(nodes.map((n) => n.id));
+	const edges = g.edges.filter((e) => idSet.has(e.source) && idSet.has(e.target));
+	const sub: Graph = {
+		version: 1,
+		meta: { ...g.meta, files: g.meta.files.filter((f) => paths.has(f.path)) },
+		nodes,
+		edges,
+	};
+	mkdirSync(outDir, { recursive: true });
+	const out = join(outDir, "index.html");
+	writeViz(root, sub, out);
+	return out;
+}
+
+/** Доля не-файловых символов с актуальным deep (bodyHash совпал), 0..1. */
+export function deepCoverage(root: string): number {
+	if (!hasGraph(root)) return 0;
+	const g = readGraph(root);
+	const deep = readDeep(root);
+	const syms = g.nodes.filter((n) => n.kind !== "file");
+	if (syms.length === 0) return 0;
+	let c = 0;
+	for (const s of syms) if (deep.symbols[s.id]?.hash === s.bodyHash) c++;
+	return c / syms.length;
 }
 
