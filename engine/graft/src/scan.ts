@@ -15,6 +15,17 @@ const LANG_BY_EXT: Record<string, Lang> = {
 	".mjs": "js",
 	".cjs": "js",
 	".py": "py",
+	".go": "go",
+	".rs": "rust",
+	".c": "c",
+	".h": "c",
+	".cpp": "cpp",
+	".cc": "cpp",
+	".cxx": "cpp",
+	".hpp": "cpp",
+	".hh": "cpp",
+	".sh": "sh",
+	".bash": "sh",
 };
 
 const SKIP_RE = /(^|\/)(node_modules|\.git|dist|build|out|\.memory|__pycache__|artifacts)(\/|$)/;
@@ -31,7 +42,7 @@ function gitLines(root: string, args: string[]): Promise<string[]> {
 	});
 }
 
-function langOf(path: string): Lang | null {
+export function langOf(path: string): Lang | null {
 	const dot = path.lastIndexOf(".");
 	if (dot < 0) return null;
 	return LANG_BY_EXT[path.slice(dot).toLowerCase()] ?? null;

@@ -10,6 +10,11 @@
  */
 import { buildGraph } from "./build.js";
 import { deepBuild } from "./deep.js";
+import { conceptsBuild } from "./concepts.js";
+import { writeViz } from "./viz.js";
+
+export { conceptsBuild, writeViz };
+export { readGraph } from "./store.js";
 import { hasGraph, readDeep, writeCards, writeGraph, writeIndex } from "./store.js";
 import { makeQueries } from "./query.js";
 import type { DeepConfig, Graph } from "./types.js";
@@ -42,7 +47,8 @@ export async function build(root: string, opts: BuildOptions = {}): Promise<Buil
 	if (opts.deep) {
 		const rep = await deepBuild(root, g, opts.deep, opts.onProgress);
 		deepReport = rep;
-		// deep.json уже записан внутри deepBuild; пересобираем карточки/index с суммари.
+		await conceptsBuild(root, g, opts.deep, opts.onProgress);
+		// deep.json уже записан внутри deepBuild/conceptsBuild; пересобираем карточки/index.
 	}
 	const deep = readDeep(root);
 	const cards = writeCards(root, g, deep);

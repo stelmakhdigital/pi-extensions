@@ -10,7 +10,7 @@
 | [prompt-snippets](extensions/prompt-snippets/) | Комбинируемые одноцелевые промпт-правила: включаются на каждое сообщение через меню (`alt+s` / `/snippets`), вставляются перед или после вашего текста |
 | [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах |
 | [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: задаёт пользователю один вопрос (текст, выбор одного, мультивыбор) и ждёт ответа |
-| [graft](extensions/graft/) | Интеграция [Graft](https://github.com/trailhq/Graft): нативные инструменты `graft_ask/grep/callers/skeleton/map/check/blast`, карта репо в системном промпте, blast radius после write/edit, бейдж свежести |
+| [graft](extensions/graft/) | Кодовый граф: нативные инструменты `graft_ask/grep/callers/skeleton/map/check/blast` (свой движок `engine/graft/`), карта репо в системном промпте, blast radius после write/edit, бейдж свежести, MCP-сервер, viz |
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
 | [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41 t/s · ⌀ 0.8s` (EMA по ответам, на лету при стриминге; TTFT — время до первого токена; aborted/короткие ответы не считаются) |
 | [subagents](extensions/subagents/) | Асинхронные подагенты в tmux: спавн в панель (не блокирует основную сессию), live-виджет статусов и токенов (starting/active/waiting/stalled), steer-результат, resume/interrupt, agent-definitions (`.pi/agents/*.md`) + 4 bundled-агента (planner/scout/worker/reviewer); команды `/spawn`, `/subagents [doctor|status]`, `/iterate [agent] <task>`, `/plan <task>` (planner→worker→reviewer); `spawning`/`deny-tools` в frontmatter; вне tmux — handoff (перезапуск pi внутри tmux с продолжением сессии) |
@@ -124,14 +124,18 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 blast radius после write/edit, бейдж свежести и команду `/graft`.
 Вне репо с построенным графом расширение молчит.
 
-**Graft-движок встроён в пакет** (`engine/graft/`): собственный парсер
-(web-tree-sitter + tree-sitter-wasm, TS/JS/Python), собственный формат
-хранилища (`graft/.engine/`, `graft/cards/`, `graft/index.md`) и
-LLM-«deep»-проход (явный конфиг `GRFT_LLM_BASE_URL`/`GRFT_LLM_MODEL`/
-`GRFT_LLM_API_KEY`, openai-chat-формат). Без внешних CLI-зависимостей:
-граф строится командой `/graft build` (в pi) или
-`node engine/graft/bin/graft.mjs build` (из консоли). Детали — в
-`SPEC-graft-engine.md`.
+**Graft-движок встроён в пакет** (`engine/graft/`): собственный движок кодового графа
+(web-tree-sitter + wasm-грамматики; языки: TS/JS/Python — полная двухпроходная экстракция,
+Go/Rust/C/C++/Shell — структура + именованные вызовы), LLM-обогащение (deep: summaries + crux,
+только по явной конфигурации), concept-темы, собственное хранилище
+(`graft/.engine/`, `graft/cards/`, `graft/index.md`) и CLI (`engine/graft/bin/graft.mjs`:
+build/deep/map/ask/grep/callers/skeleton/check/blast/concepts/viz/watch).
+Плюс **MCP-сервер** (`engine/graft/bin/graft-mcp.mjs`, stdio JSON-RPC) для внешних агентов
+и **viz** (`graft/viz.html`, self-contained SVG-карта).
+
+Граф строится командой `/graft build [deep]` (в pi) или
+`node engine/graft/bin/graft.mjs build` (из консоли); `watch` — автопересборка при изменениях.
+Детали — в `SPEC-graft-engine.md`.
 
 ### Только sandbox
 

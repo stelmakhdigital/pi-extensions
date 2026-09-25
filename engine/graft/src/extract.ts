@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { Tree, Node as TsNode } from "web-tree-sitter";
 import { parseSource } from "./parse.js";
+import { extractOther } from "./extractOther.js";
 import type { GraphEdge, GraphNode, RepoFile } from "./types.js";
 
 const sha1 = (s: string) => createHash("sha1").update(s).digest("hex");
@@ -24,6 +25,13 @@ export interface FileImport {
 	names: string[];
 }
 
+export type PendingVia = { kind: "new" | "call" | "ident"; name: string };
+export interface PendingMemberCall {
+	caller: GraphNode | null;
+	method: string;
+	via: PendingVia;
+}
+
 export interface ExtractedFile {
 	file: RepoFile;
 	nodes: GraphNode[];
@@ -32,6 +40,10 @@ export interface ExtractedFile {
 	imports: FileImport[];
 	/** Экспортируемые имена файла (имя → узел) — для разрешения импортов. */
 	exports: Map<string, GraphNode>;
+	/** Локальные переменные → предполагаемый тип (new X / X() / ident-цепь). */
+	vars: Map<string, PendingVia>;
+	/** Нерезолвленные member-вызовы (obj.m()) — резолвятся в build.ts по глобальным индексам. */
+	pending: PendingMemberCall[];
 }
 
 function nameChild(node: TsNode, types: string[]): string | null {
@@ -59,6 +71,8 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 	const nodes: GraphNode[] = [];
 	const imports: FileImport[] = [];
 	const callSites: CallSite[] = [];
+	const vars = new Map<string, PendingVia>();
+	const pending: PendingMemberCall[] = [];
 	const lineCount = file.content.split("\n").length;
 
 	nodes.push({
@@ -166,6 +180,20 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 				if (name && value && (value.type === "arrow_function" || value.type === "function_expression")) {
 					nextCaller = addSymbol(node, name, "function", isExportedAncestor(node));
 				}
+				// Тип-подсказка для member-вызовов: const x = new Foo(...) / Foo(...) / y
+				if (name && typeof name === "string" && value) {
+					if (value.type === "new_expression") {
+						const ctor = value.childForFieldName?.("constructor");
+						if (ctor) {
+							vars.set(name, { kind: "new", name: ctor.type === "identifier" ? ctor.text : leftmostIdent(ctor) ?? ctor.text });
+						}
+					} else if (value.type === "call_expression") {
+						const f = value.childForFieldName?.("function");
+						if (f?.type === "identifier") vars.set(name, { kind: "call", name: f.text });
+					} else if (value.type === "identifier") {
+						vars.set(name, { kind: "ident", name: value.text });
+					}
+				}
 				break;
 			}
 			case "pair": {
@@ -231,11 +259,41 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 			} else if (obj.type === "identifier") {
 				const m = methodByClass.get(obj.text)?.get(prop.text);
 				if (m) addCallEdge(site.caller, m.id);
+				else {
+					const v = vars.get(obj.text);
+					if (v) pending.push({ caller: site.caller, method: prop.text, via: v });
+				}
+			} else if (obj.type === "new_expression") {
+				// new X().m(...)
+				const ctor = obj.childForFieldName?.("constructor");
+				if (ctor?.type === "identifier") {
+					const m = methodByClass.get(ctor.text)?.get(prop.text);
+					if (m) addCallEdge(site.caller, m.id);
+				}
+			} else if (obj.type === "member_expression") {
+				// Цепь a.b.m(...) — тип по левому сегменту.
+				const head = leftmostIdent(obj);
+				if (head) {
+					const v = vars.get(head);
+					if (v) pending.push({ caller: site.caller, method: prop.text, via: v });
+				}
 			}
 		}
 	}
 
-	return { file, nodes, edges, imports, exports: collectExports(nodes) };
+	return { file, nodes, edges, imports, exports: collectExports(nodes), vars, pending };
+}
+
+/** Левый идентификатор цепочки member_expression (a.b.c → a). */
+function leftmostIdent(node: TsNode): string | null {
+	let n: TsNode = node;
+	while (n.type === "member_expression") {
+		const o = n.childForFieldName?.("object");
+		if (!o) return null;
+		if (o.type === "identifier") return o.text;
+		n = o;
+	}
+	return null;
 }
 
 function collectExports(nodes: GraphNode[]): Map<string, GraphNode> {
@@ -256,6 +314,8 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 	const nodes: GraphNode[] = [];
 	const imports: FileImport[] = [];
 	const callSites: PyCallSite[] = [];
+	const vars = new Map<string, PendingVia>();
+	const pending: PendingMemberCall[] = [];
 	const lineCount = file.content.split("\n").length;
 
 	nodes.push({
@@ -344,6 +404,17 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 				imports.push({ specifier: modText, names });
 				break;
 			}
+			case "assignment": {
+				// x = Foo(...) / x = y — тип-подсказка для x.m(...)
+				const left = node.childForFieldName?.("left");
+				const right = node.childForFieldName?.("right");
+				if (left?.type === "identifier" && right) {
+					const rf = right.type === "call" ? right.childForFieldName?.("function") : null;
+					if (rf?.type === "identifier") vars.set(left.text, { kind: "call", name: rf.text });
+					else if (right.type === "identifier") vars.set(left.text, { kind: "ident", name: right.text });
+				}
+				break;
+			}
 			case "call": {
 				const fn = node.childForFieldName?.("function");
 				if (fn) callSites.push({ fn, caller, className });
@@ -376,18 +447,28 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 			if (attr && obj?.type === "identifier" && (obj.text === "self" || obj.text === "cls") && site.className) {
 				const t = byName.get(`${site.className}.${attr.text}`);
 				if (t) addCallEdge(site.caller, t.id);
+			} else if (attr && obj?.type === "identifier" && obj.text !== "self" && obj.text !== "cls") {
+				const t = byName.get(`${obj.text}.${attr.text}`);
+				if (t) addCallEdge(site.caller, t.id);
+				else {
+					const v = vars.get(obj.text);
+					if (v) pending.push({ caller: site.caller, method: attr.text, via: v });
+				}
 			}
 		}
 	}
 
-	return { file, nodes, edges, imports, exports: collectExports(nodes) };
+	return { file, nodes, edges, imports, exports: collectExports(nodes), vars, pending };
 }
 
 // ---------- Обёртка ----------
 
+const OTHER_LANGS = new Set(["go", "rust", "c", "cpp", "sh"]);
+
 export async function extractFile(file: RepoFile): Promise<ExtractedFile> {
 	const tree = await parseSource(file.lang, file.content);
 	if (file.lang === "py") return extractPy(file, tree);
+	if (OTHER_LANGS.has(file.lang)) return extractOther(file, tree, file.lang);
 	return extractJsTs(file, tree);
 }
 

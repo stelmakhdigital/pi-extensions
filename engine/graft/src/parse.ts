@@ -19,8 +19,19 @@ export async function getLanguage(lang: Lang): Promise<Language> {
 	let l = languages.get(lang);
 	if (!l) {
 		await ensureParsers();
-		const grammar = lang === "ts" ? "typescript" : lang === "tsx" ? "tsx" : lang === "js" ? "javascript" : "python";
-		l = await Language.load(getWasmPath(grammar));
+		const GRAMMAR: Record<Lang, string> = {
+		ts: "typescript",
+		tsx: "tsx",
+		js: "javascript",
+		py: "python",
+		go: "go",
+		rust: "rust",
+		c: "c",
+		cpp: "cpp",
+		sh: "bash",
+	};
+	const grammar = GRAMMAR[lang];
+		l = await Language.load(getWasmPath(grammar as "typescript"));
 		languages.set(lang, l);
 	}
 	return l;

@@ -47,9 +47,11 @@ export function start(): string { return new Engine("ge").run("hi"); }
 mkfile("src/util.ts", `export function helper(s: string): string { return s.toUpperCase(); }
 export const helper2 = (s: string) => s.trim();
 export function boost(s: string): string { return helper(s) + "x"; }
+export interface Task { id: string; done: boolean; }
 `);
-mkfile("main.mjs", `import { start } from "./src/app.js";
+mkfile("main.mjs", `import { start, Engine } from "./src/app.js";
 export function go() { return start(); }
+export function useEngine() { const e = new Engine("x"); return e.track("a"); }
 `);
 mkfile("pytool.py", `import sys
 def run_task(name):
@@ -58,13 +60,34 @@ class TaskRunner:
     def execute(self, name):
         return run_task(name)
 `);
+mkfile("app.go", `package app
+
+type Item struct{ Name string }
+
+func Helper() int { return 1 }
+
+func (i *Item) Show() string { return i.Name }
+
+func Run() int { return Helper() }
+`);
+mkfile("tool.rs", `pub struct Widget { v: i32 }
+impl Widget {
+    fn value(&self) -> i32 { self.v }
+}
+fn add(a: i32, b: i32) -> i32 { a + b }
+fn make() -> i32 { add(1, 2) }
+`);
+mkfile("run.sh", `#!/usr/bin/env bash
+greet() { echo hi; }
+main() { greet; echo done; }
+`);
 execFileSync("git", ["add", "-A"], { cwd: root });
 execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: root });
 
 // ── build ──
 const report = await engine.build(root);
 await check("build: базовые счётчики", () => {
-	assert(report.files === 4, `files=${report.files}`);
+	assert(report.files === 7, `files=${report.files}`);
 	assert(report.nodes > 10, `nodes=${report.nodes}`);
 	assert(report.edges >= 5, `edges=${report.edges}`);
 });
@@ -89,6 +112,18 @@ await check("edges: импорты + references + calls", () => {
 	assert(edge("main.mjs", "src/app.ts#start", "references"), "main→start reference");
 
 	assert(edge("pytool.py#TaskRunner.execute", "pytool.py#run_task"), "py method→run_task");
+		// member-chain: new X().m() и cross-file const e = new Imported()
+	assert(edge("src/app.ts#start", "src/app.ts#Engine.run"), "start→Engine.run (new().m)");
+	assert(edge("main.mjs#useEngine", "src/app.ts#Engine.track"), "useEngine→Engine.track (cross-file)");
+		// другие языки
+	assert(node("app.go#Helper")?.kind === "function", "go func");
+	assert(node("app.go#Item.Show")?.kind === "method", "go method");
+	assert(edge("app.go#Item.Show", "app.go#Helper") || edge("app.go#Run", "app.go#Helper"), "go call Helper");
+	assert(node("tool.rs#Widget")?.kind === "class", "rust struct");
+	assert(node("tool.rs#add")?.kind === "function", "rust fn");
+	assert(edge("tool.rs#make", "tool.rs#add"), "rust make→add");
+	assert(node("run.sh#greet")?.kind === "function", "sh function");
+	assert(edge("run.sh#main", "run.sh#greet"), "sh main→greet");
 });
 
 const q = engine.makeQueries(root);
@@ -113,7 +148,7 @@ await check("callers in/out/depth", () => {
 
 await check("map", () => {
 	const out = q.map();
-	assert(out.startsWith("repo map — 4 files"), out);
+	assert(out.startsWith("repo map — 7 files"), out);
 	assert(out.includes("hubs (in-degree):"), out);
 	assert(out.includes("run_task"), out);
 });
@@ -175,9 +210,12 @@ const server = http.createServer((req, res) => {
 	req.on("end", () => {
 		const prompt = JSON.parse(body).messages.map((m) => m.content).join("\n");
 		llmCalls.push(prompt);
-		const reply = prompt.includes("Опиши ОДНИМ предложением (≤40 слов)")
-			? "Файл делает X."
-			: JSON.stringify({ summary: "Символ делает Y.", crux: ["return x + \"!\";", "nope_line"] });
+		let reply;
+		if (prompt.includes("Опиши ОДНИМ предложением (≤40 слов)")) reply = "Файл делает X.";
+		else if (prompt.includes("топик")) {
+			const files = [...prompt.matchAll(/^- (\S+):/gm)].map((x) => x[1]);
+			reply = JSON.stringify({ topics: [{ name: "Ядро", summary: "Одна тема для всего.", files: [files[0]] }] });
+		} else reply = JSON.stringify({ summary: "Символ делает Y.", crux: ["return x + \"!\";", "nope_line"] });
 		res.setHeader("content-type", "application/json");
 		res.end(JSON.stringify({ choices: [{ message: { content: reply } }] }));
 	});
@@ -196,7 +234,72 @@ await check("deep: LLM-проход + кэш crux", async () => {
 	const engTrack = deep.symbols["src/app.ts#Engine.track"];
 	assert(engTrack?.summary === "Символ делает Y.", "symbol summary");
 	assert(engTrack?.crux?.length === 1 && engTrack.crux[0] === 'return x + "!";', `crux отфильтрован до реальных строк: ${JSON.stringify(engTrack?.crux)}`);
+	assert(deep.symbols["src/util.ts#Task"], "тип (interface) в deep");
 });
+
+await check("concepts: LLM-темы + полное покрытие файлов", () => {
+	const deep = JSON.parse(readFileSync(join(root, "graft", ".engine", "deep.json"), "utf8"));
+	assert(deep.concepts?.topics?.length, "темы есть");
+	const covered = new Set(deep.concepts.topics.flatMap((tp) => tp.files));
+	for (const f of ["src/app.ts", "src/util.ts", "main.mjs", "pytool.py", "app.go", "tool.rs", "run.sh"]) assert(covered.has(f), "файл в теме: " + f);
+});
+
+await check("ask/map: deep-вывод (summary, crux, темы, file-summaries)", () => {
+	const q2 = engine.makeQueries(root);
+	const askOut = q2.ask("track");
+	assert(askOut.includes("↳ Символ делает Y."), "summary в ask: " + askOut.slice(0, 300));
+	assert(askOut.includes('crux: return x + "!";'), "crux в ask");
+	const mapOut = q2.map({ deep: true });
+	assert(mapOut.includes("topics:"), "темы в map: " + mapOut.slice(0, 400));
+	assert(mapOut.includes("file summaries (deep):"), "file summaries в map");
+	const mapPlain = q2.map();
+	assert(!mapPlain.includes("file summaries"), "обычный map без deep (токен-бюджет)");
+});
+
+await check("viz: graft/viz.html генерируется", () => {
+	const out = engine.writeViz(root, engine.readGraph(root));
+	const html = readFileSync(out, "utf8");
+	assert(html.includes("<svg") && html.includes("graft viz"), "svg + заголовок");
+	assert(html.includes("src/app.ts"), "файлы в данных");
+});
+
+await check("mcp: stdio JSON-RPC roundtrip", async () => {
+	const { spawn } = await import("node:child_process");
+	const bin = new URL("../engine/graft/bin/graft-mcp.mjs", import.meta.url).pathname;
+	const p = spawn(process.execPath, [bin], { env: { ...process.env, GRFT_MCP_ROOT: root } });
+	let buf = "";
+	const lines = [];
+	p.stdout.on("data", (d) => {
+		buf += d.toString();
+		let i;
+		while ((i = buf.indexOf("\n")) >= 0) {
+			lines.push(buf.slice(0, i).trim());
+			buf = buf.slice(i + 1);
+		}
+	});
+	const send = (o) => p.stdin.write(JSON.stringify(o) + "\n");
+	send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } });
+	send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+	send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "graft_map", arguments: {} } });
+	await new Promise((r) => {
+		const iv = setInterval(() => {
+			if (lines.length >= 3) {
+				clearInterval(iv);
+				r();
+			}
+		}, 50);
+		setTimeout(() => {
+			clearInterval(iv);
+			r();
+		}, 5000);
+	});
+	const [init, list, call] = lines.map((l) => JSON.parse(l));
+	assert(init.result.serverInfo?.name?.includes("graft"), "initialize");
+	assert(list.result.tools.length === 7, "tools/list");
+	assert(call.result.content[0].text.includes("repo map"), "tools/call map");
+	p.kill();
+});
+
 
 await check("deep: инкрементальность (кэш по bodyHash)", async () => {
 	const rep = await engine.build(root, { deep: deepCfg });

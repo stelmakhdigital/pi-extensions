@@ -1,6 +1,6 @@
 /** Типы движка graft-engine. */
 
-export type Lang = "ts" | "tsx" | "js" | "py";
+export type Lang = "ts" | "tsx" | "js" | "py" | "go" | "rust" | "c" | "cpp" | "sh";
 
 export interface RepoFile {
 	/** Путь относительно корня репо (posix). */
@@ -58,9 +58,16 @@ export interface DeepSymbolEntry {
 	crux?: string[];
 }
 
+export interface DeepConcept {
+	name: string;
+	summary: string;
+	files: string[];
+}
+
 export interface DeepStore {
 	files: Record<string, { hash: string; summary: string }>;
 	symbols: Record<string, DeepSymbolEntry>;
+	concepts?: { hash: string; topics: DeepConcept[] };
 }
 
 /** Конфиг LLM для deep-прохода (openai-chat-формат). */

@@ -72,7 +72,7 @@ export async function deepBuild(root: string, g: Graph, cfg: DeepConfig, onProgr
 	const deep: DeepStore = readDeep(root);
 	const report: DeepReport = { filesDone: 0, filesCached: 0, symbolsDone: 0, symbolsCached: 0, symbolsFailed: 0 };
 	const fileNodes = g.nodes.filter((n) => n.kind === "file");
-	const symNodes = g.nodes.filter((n) => n.kind === "function" || n.kind === "method" || n.kind === "class");
+	const symNodes = g.nodes.filter((n) => n.kind === "function" || n.kind === "method" || n.kind === "class" || n.kind === "type");
 
 	for (const f of fileNodes) {
 		const cached = deep.files[f.path];

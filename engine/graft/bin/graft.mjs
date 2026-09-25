@@ -10,6 +10,9 @@
  *   node engine/graft/bin/graft.mjs skeleton <file> [dir]
  *   node engine/graft/bin/graft.mjs check [--json] [dir]
  *   node engine/graft/bin/graft.mjs blast [base]
+ *   node engine/graft/bin/graft.mjs concepts [dir]     # темы (LLM, fallback по каталогам)
+ *   node engine/graft/bin/graft.mjs watch [dir]       # авто-пересборка при изменениях
+ *   node engine/graft/bin/graft.mjs viz [dir]         # graft/viz.html
  *
  * Deep-конфиг (явный): GRFT_LLM_BASE_URL, GRFT_LLM_MODEL, GRFT_LLM_API_KEY.
  */
@@ -33,13 +36,15 @@ function optVal(name) {
 }
 
 function deepConfig() {
-	const baseUrl = process.env.GRFT_LLM_BASE_URL;
-	const model = process.env.GRFT_LLM_MODEL;
-	if (!baseUrl || !model) {
+	const soft = deepConfigSoft();
+	if (!soft.baseUrl || !soft.model) {
 		console.error("deep: нет конфига. Задайте GRFT_LLM_BASE_URL и GRFT_LLM_MODEL (опц. GRFT_LLM_API_KEY).");
 		process.exit(2);
 	}
-	return { baseUrl, model, apiKey: process.env.GRFT_LLM_API_KEY };
+	return soft;
+}
+function deepConfigSoft() {
+	return { baseUrl: process.env.GRFT_LLM_BASE_URL, model: process.env.GRFT_LLM_MODEL, apiKey: process.env.GRFT_LLM_API_KEY };
 }
 
 const dirArg = (a) => (a && !a.startsWith("-") && ["ask", "grep", "callers", "skeleton"].includes(cmd) ? a : undefined);
@@ -107,6 +112,39 @@ switch (cmd) {
 	case "blast": {
 		const base = rest.find((a) => !a.startsWith("-"));
 		console.log(await engine.makeQueries(root).blast(base));
+		break;
+	}
+	case "concepts": {
+		const cfg = deepConfigSoft();
+		if (!cfg.baseUrl && !cfg.model) console.log("подсказка: без GRFT_LLM_BASE_URL/MODEL темы соберутся fallback'ом по каталогам");
+		const g = engine.readGraph(root);
+		const topics = await engine.conceptsBuild(root, g, cfg, (m) => console.log("  …", m));
+		for (const t of topics) console.log(`${t.name}: ${t.summary}\n  [${t.files.slice(0, 10).join(", ")}${t.files.length > 10 ? ", …" : ""}]`);
+		break;
+	}
+	case "watch": {
+		const { watch } = await import("node:fs");
+		let timer = null;
+		const w = watch(root, { recursive: true });
+		w.on("change", (_ev, p) => {
+			if (!p || p.startsWith("graft/") || p.includes("node_modules/")) return;
+			clearTimeout(timer);
+			timer = setTimeout(async () => {
+				try {
+					const rep = await engine.build(root);
+					console.log(`[${new Date().toLocaleTimeString()}] rebuild: ${rep.files} файлов, ${rep.nodes} узлов, ${rep.edges} рёбер`);
+				} catch (e) {
+					console.log("rebuild failed:", e.message);
+				}
+			}, 1500);
+		});
+		console.log(`graft watch: слежу за ${root} (дебаунс 1.5s, структурная пересборка). Ctrl+C — стоп.`);
+		await new Promise(() => {});
+		break;
+	}
+	case "viz": {
+		const out = engine.writeViz(root, engine.readGraph(root));
+		console.log(`graft viz: ${out}`);
 		break;
 	}
 	default:

@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readDeep, readGraph } from "./store.js";
-import { listRepoPaths } from "./scan.js";
+import { langOf, listRepoPaths } from "./scan.js";
 import type { Graph, GraphNode } from "./types.js";
 
 function nodeLabel(n: GraphNode): string {
@@ -26,7 +26,7 @@ function resolveSymbol(g: Graph, name: string): GraphNode | null {
 export interface Queries {
 	skeleton: (file: string) => string;
 	callers: (symbol: string, opts?: { direction?: "in" | "out"; depth?: number }) => string;
-	map: (opts?: { maxDirs?: number }) => string;
+	map: (opts?: { maxDirs?: number; deep?: boolean }) => string;
 	ask: (query: string) => string;
 	grep: (pattern: string, opts?: { scope?: string; fixed?: boolean; ignoreCase?: boolean }) => string;
 	check: () => Promise<{ text: string; json: Record<string, unknown> }>;
@@ -121,6 +121,7 @@ export function makeQueries(root: string): Queries {
 
 	const map: Queries["map"] = (opts = {}) => {
 		const maxDirs = opts.maxDirs ?? 40;
+		const wantDeep = opts.deep === true;
 		const files = g.meta.files;
 		const byDir = new Map<string, number>();
 		for (const f of files) {
@@ -143,6 +144,21 @@ export function makeQueries(root: string): Queries {
 			``,
 			`hubs (in-degree): ${hubs.map((h) => `${h.n.name} (${h.n.path.split("/").pop()}, ${h.deg}←)`).join("  ") || "—"}`,
 		];
+		if (wantDeep) {
+			const topics = deep.concepts?.topics;
+			if (topics?.length) {
+				out.push("", "topics:");
+				for (const t of topics) out.push(`  ${t.name}: ${t.summary} [${t.files.slice(0, 8).join(", ")}${t.files.length > 8 ? ", …" : ""}]`);
+			}
+			const withSummary = files
+				.map((f) => ({ p: f.path, s: deep.files[f.path]?.summary }))
+				.filter((x): x is { p: string; s: string } => Boolean(x.s))
+				.slice(0, 30);
+			if (withSummary.length) {
+				out.push("", "file summaries (deep):");
+				for (const x of withSummary) out.push(`  ${x.p} — ${x.s.slice(0, 140)}`);
+			}
+		}
 		return out.join("\n");
 	};
 
@@ -170,14 +186,20 @@ export function makeQueries(root: string): Queries {
 		scored.sort((a, b) => b.score - a.score);
 		const top = scored.slice(0, 12);
 		if (!top.length) return `graft ask: «${query}» — нет совпадений в графе`;
-		const lines = top.map(({ n, score }) => {
+		const lines = top.flatMap(({ n, score }) => {
 			const content = src.get(n.path);
 			let snippet = "";
 			if (content) {
 				const ls = content.split("\n");
 				snippet = (ls[n.span.start - 1] ?? "").trim().slice(0, 100);
 			}
-			return `  ${score.toFixed(1)}  ${n.name}  ${n.path}:L${n.span.start}-L${n.span.end}  ${snippet}`;
+			const out = [`  ${score.toFixed(1)}  ${n.name}  ${n.path}:L${n.span.start}-L${n.span.end}  ${snippet}`];
+			const d = deep.symbols[n.id];
+			if (d && d.hash === n.bodyHash) {
+				out.push(`    ↳ ${d.summary}`);
+				for (const c of (d.crux ?? []).slice(0, 2)) out.push(`    crux: ${c.slice(0, 100)}`);
+			}
+			return out;
 		});
 		return `graft ask: «${query}»\n${lines.join("\n")}`;
 	};
@@ -229,8 +251,7 @@ export function makeQueries(root: string): Queries {
 		const list = await listRepoPaths(root);
 		const current = new Map<string, string>();
 		for (const p of list) {
-			const lang = p.slice(p.lastIndexOf(".") + 1).toLowerCase();
-			if (!["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "py"].includes(lang)) continue;
+			if (!langOf(p)) continue;
 			if (/(^|\/)(node_modules|\.git|dist|build|out|\.memory)(\/|$)/.test(p) || p === "graft" || p.startsWith("graft/")) continue;
 			try {
 				current.set(p, h(readFileSync(join(root, p), "utf8")));

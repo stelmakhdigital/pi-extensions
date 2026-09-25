@@ -30,9 +30,27 @@ span:{start,end}, signature, exported, bodyHash}`.
 Edge: `{source, target, relation: calls|imports|references, confidence:"extracted"}`.
 
 ## Движок `engine/graft/` (модули)
-- `scan.ts` — обход репо: `git ls-files` + untracked (fallback fs-walk); языки:
-  .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs/.py; исключения: node_modules, graft/, .git,
-  dist, *.min.js, fixtures/tests-артефакты.
+- `scan.ts` — обход репо: `git ls-files` + untracked (fallback fs-walk); языки (v1.1):
+  .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs/.py (tree-sitter, двухпроходная экстракция) +
+  .go/.rs/.c/.h/.cpp/.cc/.cxx/.hpp/.hh/.sh/.bash (tree-sitter + правила, `extractOther.ts`);
+  исключения: node_modules, graft/, .git, dist, *.min.js, fixtures/tests-артефакты.
+
+### 2b. v1.1 (после v1, 2026-09-24)
+- **Member-цепочки вызовов** (extract + build): `new X().m()` / `x.m()`, где x — результат
+  new/вызова/идент; резолв по `globalMethods` (имена методов классов) + `resolveVia`
+  (new→класс; call→класс-результат; ident→locals). Полная типизация возвратных типов — вне.
+- **Deep в ask/map**: ask — `↳ summary` + `crux:` у топ-хитов; map — темы (concepts) и
+  file-summaries опционально (`{ deep: true }`); системный промпт — без deep (бюджет 120 с).
+- **Concept-ноды** (`concepts.ts`): LLM-кластеризация файлов в 3–8 тем (каждый файл ровно в
+  одной; жёсткий JSON), детерминированный dir-fallback; кэш `deep.concepts` по hash(пути+summaries);
+  CLI `concepts`.
+- **Viz** (`viz.ts`): `graft/viz.html` — self-contained SVG (кластеры каталогов, размер = degree,
+  клик = подсветка соседей, deep-панель, темы); CLI `viz`.
+- **Watch** (CLI): `fs.watch` recursive + debounce 1.5 с → инкрементальная пересборка.
+- **MCP** (`bin/graft-mcp.mjs`): минимальный MCP-сервер (stdio, JSON-RPC 2.0, newline-delimited),
+  7 инструментов (graft_ask/grep/callers/skeleton/map/check/blast); корень = env `GRFT_MCP_ROOT`
+  или cwd; без внешних зависимостей (jiti + движок).
+- **Типы (interface/type_alias)** теперь в deep-проходе (были function/method/class).
 - `parse/` — загрузка web-tree-sitter + wasm (deps: `web-tree-sitter`, `tree-sitter-wasm`);
   парсинг → дерево; кэш парсинга в памяти на сессию.
 - `symbols.ts` — узлы: функции/классы/методы/типы/константы-экспорты, span, signature,
@@ -95,7 +113,7 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
 - Удалить упоминания @nanonets/graft (доки, README) после миграции.
 
 ## Вне v1 (бэклог)
-- Другие языки (grammaries подкидываются), MCP-сервер, viz, LLM-«концепт-ноды»-группировка
+- (v1.1 выполнено: другие языки, MCP, viz, concept-ноды, deep в ask/map, member-цепочки, watch)
   (сверх per-file/per-symbol), авто-refresh по watch, scorecard качества.
 
 ## 5b. Конфигурация deep (как запускать)

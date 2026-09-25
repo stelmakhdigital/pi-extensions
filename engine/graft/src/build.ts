@@ -39,6 +39,50 @@ export async function buildGraph(root: string): Promise<Graph> {
 	}
 	for (const e of extracted) edges.push(...e.edges);
 
+	// Member-chain вызовы (obj.m()): глобальное разрешение new/import-цепей в классы.
+	const allNodes = extracted.flatMap((e) => e.nodes);
+	const globalMethods = new Map<string, Map<string, Graph["nodes"][number][]>>();
+	for (const n of allNodes) {
+		if (n.kind !== "method" || !n.name.includes(".")) continue;
+		const [cls, m] = n.name.split(".");
+		const mm = globalMethods.get(cls) ?? new Map();
+		mm.set(m, [...(mm.get(m) ?? []), n]);
+		globalMethods.set(cls, mm);
+	}
+	const resolveVia = (via: { kind: string; name: string }, ex: (typeof extracted)[number], seen: Set<string>): string | null => {
+		if (seen.has(via.name)) return null;
+		seen.add(via.name);
+		if (via.kind === "new" || via.kind === "call") return via.name;
+		const v2 = ex.vars.get(via.name);
+		if (v2) return resolveVia(v2, ex, seen);
+		// import: локальное имя → класс в целевом файле
+		for (const imp of ex.imports) {
+			if (!imp.names.includes(via.name)) continue;
+			const tf =
+				ex.file.lang === "py"
+					? resolvePyImport(ex.file.path, imp.specifier, knownPaths)
+					: resolveImport(ex.file.path, imp.specifier, knownPaths);
+			if (!tf) return null;
+			const te = extracted.find((x) => x.file.path === tf);
+			const sym = te?.exports.get(via.name);
+			if (sym?.kind === "class") return sym.name;
+			return null;
+		}
+		return null;
+	};
+	for (const e of extracted) {
+		for (const p of e.pending) {
+			const cls = resolveVia(p.via, e, new Set());
+			if (!cls) continue;
+			const cands = globalMethods.get(cls)?.get(p.method) ?? [];
+			const target = cands.find((c) => c.path === e.file.path) ?? cands[0];
+			if (!target) continue;
+			const source = p.caller ? p.caller.id : e.file.path;
+			if (source === target.id) continue;
+			edges.push({ source, target: target.id, relation: "calls", confidence: "extracted" });
+		}
+	}
+
 	const nodes = extracted.flatMap((e) => e.nodes);
 	// Уникализация рёбер.
 	const dedup = new Set<string>();
