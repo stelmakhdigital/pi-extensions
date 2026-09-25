@@ -127,3 +127,6 @@
 - [x] v1.5 (2026-09-24, бэклог 4): auto-refresh deep — инкрементальный deep при структурном
       build (hasDeep + env-конфиг; 0 LLM-вызовов без дрейфа; выкл: autoDeep=false / GRFT_AUTO_DEEP=0);
       watch — auto-deep в отчёте; unit 21/21 (+auto-deep: дрейф/кэш/выкл)
+- [x] v1.6 (2026-09-24, бэклог 5, финал): дженерики (Promise<T> → T; Foo<T> → Foo),
+      типизированные локальные (const x: Foo, параметры f(o: Foo)), await-unwrap;
+      unit 21/21 (+generics/typed); **бэклог графта закрыт**

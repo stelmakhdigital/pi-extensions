@@ -189,7 +189,7 @@ Live-интеграция v2 (tmux 3.6, локальная LLM): doctor — вс
 sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог событий.
 
 ## GRAFT-ENGINE (задача от 2026-09-24: свой движок вместо @nanonets/graft)
-**v1–v1.5 ГОТОВО (2026-09-24). Коммиты: ef48083 (v1), 092ca7c (v1.1), 4f3399b (v1.2), 7f3c48a (v1.3), 741ab68 (v1.4); v1.5 — pending.**
+**v1–v1.6 ГОТОВО (2026-09-24, бэклог ЗАКРЫТ). Коммиты: ef48083 (v1), 092ca7c (v1.1), 4f3399b (v1.2), 7f3c48a (v1.3), 741ab68 (v1.4), a997cfe (v1.5); v1.6 — pending.**
 
 ### Что есть
 - `engine/graft/` (TS, tsc strict, 14 модулей): scan (git ls-files + untracked; языки:
@@ -292,8 +292,19 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
 5. Тест 21-й: auto-deep (созданный дрейф → filesDone≥1 + LLM-вызовы; повтор → 0 вызовов;
    GRFT_AUTO_DEEP=0 → rep.deep undefined; в конце — восстановление main-fake summary,
    иначе карточки-тест ловит «Авто summary»).
+6. **Live auto-deep (cat-vllm, 33 мин)**: дрейф v1.1–v1.4 → 15+109 новых, 17+290 кэш, 6 ошибок;
+   8 реальных тем; retry 11с; сходимость 2.2с, 0 ошибок, 404/404 кэш. deep.json репо обновлён.
+
+### v1.6 (беклог 5, 2026-09-24 — финал, БЭКЛОГ ЗАКРЫТ)
+1. **Дженерики**: `typeOfAnnotation` (вместо returnTypeOf) — Promise/PromiseLike<T> → первый
+   не-примитивный аргумент (PRIMITIVE_TYPES set); Promise<примитив> → null; Foo<T> → Foo.
+2. **Типизированные локальные**: `collectParamTypes` (required/optional/formal_parameter —
+   граммака TS 0.20+; type_annotation как named child БЕЗ fieldName!) → vars {kind:"type"};
+   аннотация переменной (`const x: Foo`) ставится ПОСЛЕ value-инференса (authoritative).
+3. **await**: variable_declarator value: await_expression → unwrap к argument.
+4. PendingVia + kind "type"; resolveVia: type → сразу класс-имя.
+5. Тесты: 21/21 (mkAsyncPair Promise<Pair>, useAsyncPair await, greet(g: Greeter), typedGreet).
 
 ### Осталось
-- Дождаться фонового auto-deep (tmux /home/arkalaust/.pi/autodeep.sock, лог ~/.pi/autodeep.log)
-  + коммит v1.5 (по команде пользователя).
-- Бэклог дальше: дженерики/return-цепи >3, прочие языки (100+ грамматик).
+- Коммит v1.6 (по команде пользователя) — и граф останавливается (бэклог закрыт;
+  остаток — только «ещё языки» по спросу, 100+ грамматик в tree-sitter-wasm).
