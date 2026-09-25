@@ -27,6 +27,7 @@ const enclosingClassName = (n: TsNode): string | null => {
 		if (p.type === "class_declaration") return nameChild(p, ["identifier", "type_identifier", "simple_identifier", "name"]);
 		if (p.type === "object_declaration") return nameChild(p, ["identifier", "type_identifier"]);
 		if (p.type === "class") return nameChild(p, ["constant", "identifier"]); // ruby
+		if (p.type === "class_definition") return nameChild(p, ["identifier"]); // dart/scala
 	}
 	return null;
 };
@@ -52,6 +53,8 @@ interface LangRules {
 	bareIdentCall?: boolean;
 	/** Имя callee — последний именованный ребёнок (ruby: obj.helper). */
 	calleeFrom?: "lastIdent";
+	/** Тело метода — соседний узел после сигнатуры (dart): ходить с caller=метод. */
+	pairedBody?: boolean;
 }
 
 const RULES: Record<string, LangRules> = {
@@ -188,6 +191,69 @@ const RULES: Record<string, LangRules> = {
 		callee: (fn) => (fn.type === "identifier" ? fn.text : null),
 		callNode: "invocation_expression",
 	},
+	dart: {
+		symbols: [
+			{ node: "class_definition", kind: "class", name: (n) => nameChild(n, ["identifier"]) },
+			{
+				node: "method_signature",
+				kind: "method",
+				name: (n) => {
+					const sig = n.namedChildren.find((c) => c.type === "function_signature");
+					return sig ? nameChild(sig, ["identifier"]) : nameChild(n, ["identifier"]);
+				},
+				qualified: (n) => {
+					const sig = n.namedChildren.find((c) => c.type === "function_signature");
+					const nm = sig ? nameChild(sig, ["identifier"]) : nameChild(n, ["identifier"]);
+					const cls = enclosingClassName(n);
+					return cls && nm ? `${cls}.${nm}` : null;
+				},
+			},
+			{ node: "function_declaration", kind: "function", name: (n) => nameChild(n, ["identifier"]) },
+		],
+		callee: (fn) => (fn.type === "identifier" ? fn.text : null),
+		bareIdentCall: true,
+		pairedBody: true,
+	},
+	scala: {
+		symbols: [
+			{ node: "class_definition", kind: "class", name: (n) => nameChild(n, ["identifier"]) },
+			{
+				node: "function_definition",
+				kind: "function",
+				name: (n) => nameChild(n, ["identifier"]),
+				qualified: (n) => {
+					const nm = nameChild(n, ["identifier"]);
+					const cls = enclosingClassName(n);
+					return cls && nm ? `${cls}.${nm}` : null;
+				},
+			},
+		],
+		callee: (fn) => (fn.type === "identifier" ? fn.text : null),
+		callNode: "call_expression",
+	},
+	lua: {
+		symbols: [
+			{
+				node: "function_declaration",
+				kind: "method",
+				name: (n) => {
+					const idx = n.namedChildren[0];
+					if (!idx) return null;
+					const idents = idx.namedChildren.filter((c) => c.type === "identifier");
+					return idents.length ? idents[idents.length - 1].text : null;
+				},
+				qualified: (n) => {
+					const idx = n.namedChildren[0];
+					if (!idx || idx.namedChildren.filter((c) => c.type === "identifier").length < 2) return null;
+					const idents = idx.namedChildren.filter((c) => c.type === "identifier");
+					return `${idents[0].text}.${idents[idents.length - 1].text}`;
+				},
+			},
+		],
+		callee: (fn) => (fn.type === "identifier" ? fn.text : null),
+		callNodes: ["function_call"],
+		calleeFrom: "lastIdent",
+	},
 	ruby: {
 		symbols: [
 			{ node: "class", kind: "class", name: (n) => nameChild(n, ["constant", "identifier"]) },
@@ -313,13 +379,23 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 		return gn;
 	};
 
+	const skipped = new Set<number>();
 	const walk = (node: TsNode, caller: GraphNode | null): void => {
+		if (skipped.has(node.id)) return;
 		let nextCaller = caller;
-		for (const rule of rules.symbols) {
-			if (node.type !== rule.node) continue;
-			const name = rule.name(node);
-			if (!name) break;
-			nextCaller = addSymbol(node, name, rule.kind, rule.qualified?.(node) ?? null);
+		for (const rule of rules.symbols) {			if (node.type !== rule.node) continue;
+			const name = rule.name(node);			if (!name) break;
+			nextCaller = addSymbol(node, name, rule.kind, rule.qualified?.(node) ?? null);			// dart: function_body — следующий за сигнатурой SIBLING; идём в него с caller=метод
+			if (rules.pairedBody && node.type === "method_signature") {
+				const sib = node.parent?.namedChildren ?? [];
+				const i = sib.findIndex((c) => c.id === node.id); // web-tree-sitter: child-обёртки — новые объекты
+				for (let k = i + 1; k < sib.length; k++) {
+					if (sib[k].type === "function_body") {
+						walk(sib[k], nextCaller);
+						skipped.add(sib[k].id);
+					} else break;
+				}
+				}
 			break;
 		}
 		const callTypes = rules.callNodes ?? [rules.callNode ?? "call_expression"];
@@ -327,7 +403,14 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 			let callee: string | null = null;
 			if (rules.calleeFrom === "lastIdent") {
 				let last: TsNode | null = null;
-				for (const c of node.namedChildren) if (c.type === "identifier" || c.type === "constant") last = c;
+				for (const c of node.namedChildren) {
+					if (c.type === "identifier" || c.type === "constant") last = c;
+					else if (c.type === "method_index_expression" || c.type === "dot_index_expression") {
+						// lua: self:helper / obj.helper — имя метода внутри index-ноды
+						const id = [...c.namedChildren].reverse().find((x) => x.type === "identifier");
+						if (id) last = id;
+					}
+				}
 				callee = last?.text ?? null;
 			} else {
 				// callee — первая "именованная" нода (this/obj могут идти первыми: this.m(), o.m())
@@ -339,9 +422,9 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 			}
 			if (callee) callSites.push({ callee, caller });
 		}
-		// ruby: `helper` в операторной позиции — вызов
-		if (rules.bareIdentCall && node.type === "identifier" && node.parent?.type === "body_statement") {
-			const callee = rules.callee(node);
+		// ruby: `helper` / dart: `helper();` — identifier в операторной позиции — вызов
+		const BARE_PARENTS = new Set(["body_statement", "expression_statement"]);
+		if (rules.bareIdentCall && node.type === "identifier" && node.parent && BARE_PARENTS.has(node.parent.type)) {			const callee = rules.callee(node);
 			if (callee) callSites.push({ callee, caller });
 		}
 		for (const c of node.namedChildren) walk(c, nextCaller);

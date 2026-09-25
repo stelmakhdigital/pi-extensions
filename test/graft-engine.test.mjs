@@ -53,6 +53,9 @@ export function mkPair(): Pair { return new Pair(); }
 export function usePair(): string { const p = mkPair(); return p.get(); }
 export function mkPair2() { return new Pair(); }
 export function usePair2(): string { const p2 = mkPair2(); return p2.get(); }
+export function pairBase(): Pair { return new Pair(); }
+export function pairWrap(): Pair { return pairBase(); }
+export function usePair3(): string { const p3 = pairWrap(); return p3.get(); }
 `);
 mkfile("main.mjs", `import { start, Engine } from "./src/app.js";
 export function go() { return start(); }
@@ -127,13 +130,37 @@ mkfile("svc.swift", `class Service {
   func helper() {}
 }
 `);
+mkfile("svc.dart", `class Service {
+  void run() {
+    helper();
+  }
+
+  void helper() {}
+}
+`);
+mkfile("svc.scala", `class Service {
+  def run(): Unit = {
+    helper()
+  }
+
+  private def helper(): Unit = {}
+}
+`);
+mkfile("svc.lua", `local Service = {}
+function Service:run()
+  self:helper()
+end
+
+function Service:helper()
+end
+`);
 execFileSync("git", ["add", "-A"], { cwd: root });
 execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: root });
 
 // ── build ──
 const report = await engine.build(root);
 await check("build: базовые счётчики", () => {
-	assert(report.files === 13, `files=${report.files}`);
+	assert(report.files === 16, `files=${report.files}`);
 	assert(report.nodes > 10, `nodes=${report.nodes}`);
 	assert(report.edges >= 5, `edges=${report.edges}`);
 });
@@ -188,6 +215,15 @@ await check("edges: импорты + references + calls", () => {
 		assert(edge("svc.php#Service.run", "svc.php#Service.helper"), "php $this->helper");
 		assert(node("svc.swift#Service.run")?.kind === "function", "swift func");
 		assert(edge("svc.swift#Service.run", "svc.swift#Service.helper"), "swift run→helper (self.)");
+		// dart/scala/lua
+		assert(node("svc.dart#Service.run")?.kind === "method", "dart method");
+		assert(edge("svc.dart#Service.run", "svc.dart#Service.helper"), "dart run→helper");
+		assert(node("svc.scala#Service.run")?.kind === "function", "scala def");
+		assert(edge("svc.scala#Service.run", "svc.scala#Service.helper"), "scala run→helper");
+		assert(node("svc.lua#Service.run")?.kind === "method", "lua method (Service:run)");
+		assert(edge("svc.lua#Service.run", "svc.lua#Service.helper"), "lua self:helper");
+		// return-вызов: pairWrap → return pairBase() → Pair
+		assert(edge("src/util.ts#usePair3", "src/util.ts#Pair.get"), "transitive: usePair3→Pair.get");
 	});
 
 const q = engine.makeQueries(root);
@@ -212,7 +248,7 @@ await check("callers in/out/depth", () => {
 
 await check("map", () => {
 	const out = q.map();
-	assert(out.startsWith("repo map — 13 files"), out);
+	assert(out.startsWith("repo map — 16 files"), out);
 	assert(out.includes("hubs (in-degree):"), out);
 	assert(out.includes("run_task"), out);
 });
@@ -305,7 +341,7 @@ await check("concepts: LLM-темы + полное покрытие файлов
 	const deep = JSON.parse(readFileSync(join(root, "graft", ".engine", "deep.json"), "utf8"));
 	assert(deep.concepts?.topics?.length, "темы есть");
 	const covered = new Set(deep.concepts.topics.flatMap((tp) => tp.files));
-	for (const f of ["src/app.ts", "src/util.ts", "main.mjs", "pytool.py", "app.go", "tool.rs", "run.sh", "svc.java", "svc.cs", "svc.kt", "svc.rb", "svc.php", "svc.swift"]) assert(covered.has(f), "файл в теме: " + f);
+	for (const f of ["src/app.ts", "src/util.ts", "main.mjs", "pytool.py", "app.go", "tool.rs", "run.sh", "svc.java", "svc.cs", "svc.kt", "svc.rb", "svc.php", "svc.swift", "svc.dart", "svc.scala", "svc.lua"]) assert(covered.has(f), "файл в теме: " + f);
 });
 
 await check("concepts: fallback без LLM (каталог + язык для root + прочее)", async () => {

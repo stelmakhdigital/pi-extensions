@@ -90,6 +90,31 @@ function inferredReturn(node: TsNode): string | null {
 	return firstNewCtor(body, 0);
 }
 
+/** Первое «return g()» в теле → имя g (для транзитивного fnReturns). */
+function firstReturnCall(node: TsNode): string | null {
+	const body = node.type === "variable_declarator"
+		? node.childForFieldName?.("value")
+		: (node.childForFieldName?.("body") ?? node);
+	if (!body) return null;
+	const walk = (n: TsNode, depth: number): string | null => {
+		if (depth > 6) return null;
+		if (n.type === "return_statement") {
+			const arg = n.namedChildren[0];
+			if (arg?.type === "call_expression") {
+				const fn = arg.childForFieldName?.("function");
+				if (fn?.type === "identifier") return fn.text;
+			}
+			return null;
+		}
+		for (const c of n.namedChildren) {
+			const r = walk(c, depth + 1);
+			if (r) return r;
+		}
+		return null;
+	};
+	return walk(body, 0);
+}
+
 /** Явный возвратный тип: первый type_identifier/identifier (Foo, Foo<T> → Foo). */
 function returnTypeOf(rt: TsNode, depth = 0): string | null {
 	if (depth > 3) return null;
@@ -128,6 +153,7 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 	const callSites: CallSite[] = [];
 	const vars = new Map<string, PendingVia>();
 	const fnReturns = new Map<string, string>();
+	const returnCalls = new Map<string, string>(); // fn → первое «return g()»
 	const pending: PendingMemberCall[] = [];
 	const lineCount = file.content.split("\n").length;
 
@@ -223,6 +249,10 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 					if (!fnReturns.has(name)) {
 						const inf = inferredReturn(node);
 						if (inf) fnReturns.set(name, inf);
+						else {
+							const rc = firstReturnCall(node);
+							if (rc) returnCalls.set(name, rc);
+						}
 					}
 				}
 				break;
@@ -254,6 +284,10 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 					if (!fnReturns.has(name)) {
 						const inf = inferredReturn(node);
 						if (inf) fnReturns.set(name, inf);
+						else {
+							const rc = firstReturnCall(node);
+							if (rc) returnCalls.set(name, rc);
+						}
 					}
 				}
 				// Тип-подсказка для member-вызовов: const x = new Foo(...) / Foo(...) / y
@@ -357,6 +391,19 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 		}
 	}
 
+	// транзитивное fnReturns: f → return g() → fnReturns[g] (до 3 хопов, без циклов)
+	for (let pass = 0; pass < 3; pass++) {
+		let changed = false;
+		for (const [fn, callee] of returnCalls) {
+			if (fnReturns.has(fn)) continue;
+			const t = fnReturns.get(callee);
+			if (t) {
+				fnReturns.set(fn, t);
+				changed = true;
+			}
+		}
+		if (!changed) break;
+	}
 	return { file, nodes, edges, imports, exports: collectExports(nodes), vars, fnReturns, pending };
 }
 
@@ -540,7 +587,7 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 
 // ---------- Обёртка ----------
 
-const OTHER_LANGS = new Set(["go", "rust", "c", "cpp", "sh", "java", "csharp", "kotlin", "ruby", "php", "swift"]);
+const OTHER_LANGS = new Set(["go", "rust", "c", "cpp", "sh", "java", "csharp", "kotlin", "ruby", "php", "swift", "dart", "scala", "lua"]);
 
 export async function extractFile(file: RepoFile): Promise<ExtractedFile> {
 	const tree = await parseSource(file.lang, file.content);

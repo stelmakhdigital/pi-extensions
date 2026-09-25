@@ -33,6 +33,9 @@ const LANG_BY_EXT: Record<string, Lang> = {
 	".rb": "ruby",
 	".php": "php",
 	".swift": "swift",
+	".dart": "dart",
+	".scala": "scala",
+	".lua": "lua",
 };
 
 const SKIP_RE = /(^|\/)(node_modules|\.git|dist|build|out|\.memory|__pycache__|artifacts)(\/|$)/;

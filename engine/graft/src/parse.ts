@@ -35,6 +35,9 @@ export async function getLanguage(lang: Lang): Promise<Language> {
 		ruby: "ruby",
 		php: "php",
 		swift: "swift",
+		dart: "dart",
+		scala: "scala",
+		lua: "lua",
 	};
 	const grammar = GRAMMAR[lang];
 		l = await Language.load(getWasmPath(grammar as "typescript"));

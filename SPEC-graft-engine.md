@@ -80,8 +80,20 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
   `bareIdentCall`; enclosing class — по parent-walk (class_declaration / object_declaration /
   ruby class, имя-ноды: identifier/type_identifier/simple_identifier/name/constant).
 - Языки движка теперь (15): ts/tsx/js/mjs/cjs/py + go/rust/c/cpp/sh/java/csharp/kotlin/ruby/php/swift.
-- Остаток беклога: full type inference (return-выражения-вызовы, дженерики), авто-refresh deep
-  (фактически уже есть: bodyHash-кэш + build deep), другие языки (грамматики 100+ в tree-sitter-wasm).
+### 2e. v1.4 (2026-09-24, бэклог-итерация 3)
+- **Return-вызовы (транзитивно)**: `function wrap() { return base(); }` → fnReturns[wrap] =
+  fnReturns[base] (до 3 хопов, без циклов; первое «return g()» в теле).
+- **Языки +3: Dart, Scala, Lua** (`extractOther.ts`):
+  - dart: class/method (qualified); вызовы — bare identifier в expression_statement;
+    **pairedBody**: в dart-грамматике function_body — SIBLING метод_signature, а не child
+    (walk тела с caller=метод; по node.id — child-обёртки web-tree-sitter не равны по ссылке!);
+  - scala: class/def (qualified, имя = первый identifier, modifiers первыми), call_expression;
+  - lua: function_declaration (dot/method index → qualified «Service.m»), function_call
+    (callee: identifier или метод внутри method/dot_index_expression — lastIdent).
+- Языки движка теперь (18): ts/tsx/js/mjs/cjs/py + go/rust/c/cpp/sh/java/csharp/kotlin/ruby/php/
+  swift/dart/scala/lua.
+- Остаток беклога: full type inference (дженерики, return-цепи >3), другие языки
+  (грамматики 100+ в tree-sitter-wasm), авто-refresh deep (фактически уже есть: bodyHash-кэш).
 - `parse/` — загрузка web-tree-sitter + wasm (deps: `web-tree-sitter`, `tree-sitter-wasm`);
   парсинг → дерево; кэш парсинга в памяти на сессию.
 - `symbols.ts` — узлы: функции/классы/методы/типы/константы-экспорты, span, signature,
