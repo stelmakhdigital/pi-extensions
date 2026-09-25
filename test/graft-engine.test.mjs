@@ -51,6 +51,8 @@ export interface Task { id: string; done: boolean; }
 export class Pair { a = "x"; get(): string { return this.a; } }
 export function mkPair(): Pair { return new Pair(); }
 export function usePair(): string { const p = mkPair(); return p.get(); }
+export function mkPair2() { return new Pair(); }
+export function usePair2(): string { const p2 = mkPair2(); return p2.get(); }
 `);
 mkfile("main.mjs", `import { start, Engine } from "./src/app.js";
 export function go() { return start(); }
@@ -99,13 +101,39 @@ mkfile("svc.kt", `class Service {
   fun run() { helper() }
   private fun helper() { }
 }`);
+mkfile("svc.rb", `class Service
+  def run
+    helper
+    helper()
+    obj.helper
+  end
+
+  def helper
+  end
+end
+`);
+mkfile("svc.php", `<?php
+class Service {
+  public function run() { $this->helper(); }
+  private function helper() {}
+}
+`);
+mkfile("svc.swift", `class Service {
+  func run() {
+    helper()
+    self.helper()
+  }
+
+  func helper() {}
+}
+`);
 execFileSync("git", ["add", "-A"], { cwd: root });
 execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: root });
 
 // ── build ──
 const report = await engine.build(root);
 await check("build: базовые счётчики", () => {
-	assert(report.files === 10, `files=${report.files}`);
+	assert(report.files === 13, `files=${report.files}`);
 	assert(report.nodes > 10, `nodes=${report.nodes}`);
 	assert(report.edges >= 5, `edges=${report.edges}`);
 });
@@ -152,6 +180,14 @@ await check("edges: импорты + references + calls", () => {
 		assert(edge("svc.kt#Service.run", "svc.kt#Service.helper"), "kotlin run→helper");
 		// type inference: f(): Pair → p.get() = Pair.get
 		assert(edge("src/util.ts#usePair", "src/util.ts#Pair.get"), "fnReturns: usePair→Pair.get");
+		assert(edge("src/util.ts#usePair2", "src/util.ts#Pair.get"), "inferred return: usePair2→Pair.get");
+		// ruby/php/swift
+		assert(node("svc.rb#Service.run")?.kind === "method", "ruby method");
+		assert(edge("svc.rb#Service.run", "svc.rb#Service.helper"), "ruby run→helper (bare + call)");
+		assert(node("svc.php#Service.run")?.kind === "method", "php method");
+		assert(edge("svc.php#Service.run", "svc.php#Service.helper"), "php $this->helper");
+		assert(node("svc.swift#Service.run")?.kind === "function", "swift func");
+		assert(edge("svc.swift#Service.run", "svc.swift#Service.helper"), "swift run→helper (self.)");
 	});
 
 const q = engine.makeQueries(root);
@@ -176,7 +212,7 @@ await check("callers in/out/depth", () => {
 
 await check("map", () => {
 	const out = q.map();
-	assert(out.startsWith("repo map — 10 files"), out);
+	assert(out.startsWith("repo map — 13 files"), out);
 	assert(out.includes("hubs (in-degree):"), out);
 	assert(out.includes("run_task"), out);
 });
@@ -269,7 +305,7 @@ await check("concepts: LLM-темы + полное покрытие файлов
 	const deep = JSON.parse(readFileSync(join(root, "graft", ".engine", "deep.json"), "utf8"));
 	assert(deep.concepts?.topics?.length, "темы есть");
 	const covered = new Set(deep.concepts.topics.flatMap((tp) => tp.files));
-	for (const f of ["src/app.ts", "src/util.ts", "main.mjs", "pytool.py", "app.go", "tool.rs", "run.sh", "svc.java", "svc.cs", "svc.kt"]) assert(covered.has(f), "файл в теме: " + f);
+	for (const f of ["src/app.ts", "src/util.ts", "main.mjs", "pytool.py", "app.go", "tool.rs", "run.sh", "svc.java", "svc.cs", "svc.kt", "svc.rb", "svc.php", "svc.swift"]) assert(covered.has(f), "файл в теме: " + f);
 });
 
 await check("concepts: fallback без LLM (каталог + язык для root + прочее)", async () => {

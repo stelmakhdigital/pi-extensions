@@ -48,6 +48,48 @@ export interface ExtractedFile {
 	pending: PendingMemberCall[];
 }
 
+/** Возвратное выражение: первое «return new X» в теле → X (нет аннотации типа). */
+function inferredReturn(node: TsNode): string | null {
+	const firstNewCtor = (n: TsNode, depth: number): string | null => {
+		if (depth > 6) return null;
+		if (n.type === "return_statement") {
+			const arg = n.namedChildren[0];
+			if (arg?.type === "new_expression") {
+				const ctor = arg.childForFieldName?.("constructor");
+				if (ctor?.type === "identifier") return ctor.text;
+			}
+			return null;
+		}
+		for (const c of n.namedChildren) {
+			const r = firstNewCtor(c, depth + 1);
+			if (r) return r;
+		}
+		return null;
+	};
+	const body = node.type === "variable_declarator"
+		? node.childForFieldName?.("value")
+		: (node.childForFieldName?.("body") ?? node);
+	if (!body) return null;
+	// arrow/function_expression: тело может быть выражением (=> new Foo())
+	if (body.type === "arrow_function" || body.type === "function_expression") {
+		const inner = body.childForFieldName?.("body");
+		if (inner) {
+			if (inner.type === "new_expression") {
+				const ctor = inner.childForFieldName?.("constructor");
+				if (ctor?.type === "identifier") return ctor.text;
+			}
+			else return firstNewCtor(inner, 0);
+		}
+		return null;
+	}
+	if (body.type === "new_expression") {
+		const ctor = body.childForFieldName?.("constructor");
+		if (ctor?.type === "identifier") return ctor.text;
+		return null;
+	}
+	return firstNewCtor(body, 0);
+}
+
 /** Явный возвратный тип: первый type_identifier/identifier (Foo, Foo<T> → Foo). */
 function returnTypeOf(rt: TsNode, depth = 0): string | null {
 	if (depth > 3) return null;
@@ -178,6 +220,10 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 						const t = returnTypeOf(rt);
 						if (t) fnReturns.set(name, t);
 					}
+					if (!fnReturns.has(name)) {
+						const inf = inferredReturn(node);
+						if (inf) fnReturns.set(name, inf);
+					}
 				}
 				break;
 			}
@@ -204,6 +250,10 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 					if (rt) {
 						const t = returnTypeOf(rt);
 						if (t) fnReturns.set(name, t);
+					}
+					if (!fnReturns.has(name)) {
+						const inf = inferredReturn(node);
+						if (inf) fnReturns.set(name, inf);
 					}
 				}
 				// Тип-подсказка для member-вызовов: const x = new Foo(...) / Foo(...) / y
@@ -490,7 +540,7 @@ function extractPy(file: RepoFile, tree: Tree): ExtractedFile {
 
 // ---------- Обёртка ----------
 
-const OTHER_LANGS = new Set(["go", "rust", "c", "cpp", "sh", "java", "csharp", "kotlin"]);
+const OTHER_LANGS = new Set(["go", "rust", "c", "cpp", "sh", "java", "csharp", "kotlin", "ruby", "php", "swift"]);
 
 export async function extractFile(file: RepoFile): Promise<ExtractedFile> {
 	const tree = await parseSource(file.lang, file.content);

@@ -24,8 +24,9 @@ const nameChild = (n: TsNode, types: string[]): string | null => {
 /** Квалифицированное имя метода: enclosing class (java/csharp/kotlin). */
 const enclosingClassName = (n: TsNode): string | null => {
 	for (let p = n.parent; p; p = p.parent) {
-		if (p.type === "class_declaration") return nameChild(p, ["identifier", "type_identifier", "simple_identifier"]);
+		if (p.type === "class_declaration") return nameChild(p, ["identifier", "type_identifier", "simple_identifier", "name"]);
 		if (p.type === "object_declaration") return nameChild(p, ["identifier", "type_identifier"]);
+		if (p.type === "class") return nameChild(p, ["constant", "identifier"]); // ruby
 	}
 	return null;
 };
@@ -45,6 +46,12 @@ interface LangRules {
 	callee: (fn: TsNode) => string | null;
 	/** Тип call-ноды (вместо call_expression). */
 	callNode?: string;
+	/** Несколько типов call-нод (php: function/member/object). */
+	callNodes?: string[];
+	/** Базовый identifier в операторной позиции считается вызовом (ruby: `helper`). */
+	bareIdentCall?: boolean;
+	/** Имя callee — последний именованный ребёнок (ruby: obj.helper). */
+	calleeFrom?: "lastIdent";
 }
 
 const RULES: Record<string, LangRules> = {
@@ -181,6 +188,73 @@ const RULES: Record<string, LangRules> = {
 		callee: (fn) => (fn.type === "identifier" ? fn.text : null),
 		callNode: "invocation_expression",
 	},
+	ruby: {
+		symbols: [
+			{ node: "class", kind: "class", name: (n) => nameChild(n, ["constant", "identifier"]) },
+			{
+				node: "method",
+				kind: "method",
+				name: (n) => nameChild(n, ["identifier"]),
+				qualified: (n) => {
+					const nm = nameChild(n, ["identifier"]);
+					const cls = enclosingClassName(n);
+					return cls && nm ? `${cls}.${nm}` : null;
+				},
+			},
+		],
+		callee: (fn) => (fn.type === "identifier" || fn.type === "constant" ? fn.text : null),
+		callNode: "call",
+		calleeFrom: "lastIdent",
+		bareIdentCall: true,
+	},
+	php: {
+		symbols: [
+			{ node: "class_declaration", kind: "class", name: (n) => nameChild(n, ["name", "identifier"]) },
+			{
+				node: "method_declaration",
+				kind: "method",
+				name: (n) => nameChild(n, ["name", "identifier"]),
+				qualified: (n) => {
+					const nm = nameChild(n, ["name", "identifier"]);
+					const cls = enclosingClassName(n);
+					return cls && nm ? `${cls}.${nm}` : null;
+				},
+			},
+			{ node: "function_definition", kind: "function", name: (n) => nameChild(n, ["name", "identifier"]) },
+		],
+		callee: (fn) => (fn.type === "name" || fn.type === "identifier" ? fn.text : null),
+		callNodes: ["function_call_expression", "member_call_expression"],
+	},
+	swift: {
+		symbols: [
+			{ node: "class_declaration", kind: "class", name: (n) => nameChild(n, ["type_identifier", "identifier", "simple_identifier"]) },
+			{
+				node: "function_declaration",
+				kind: "function",
+				name: (n) => nameChild(n, ["simple_identifier", "identifier"]),
+				qualified: (n) => {
+					const nm = nameChild(n, ["simple_identifier", "identifier"]);
+					const cls = enclosingClassName(n);
+					return cls && nm ? `${cls}.${nm}` : null;
+				},
+			},
+		],
+		callee: (fn) => {
+			if (fn.type === "simple_identifier" || fn.type === "identifier") return fn.text;
+			if (fn.type === "navigation_expression") {
+				// self.m() / obj.m() — имя метода = последний ident в цепочке
+				let cur: TsNode | undefined = fn;
+				for (let d = 0; cur && d < 3; d++) {
+					const nm = cur.namedChildren.find((c) => c.type === "simple_identifier" || c.type === "identifier");
+					if (nm) return nm.text;
+					cur = cur.namedChildren[0];
+				}
+				return null;
+			}
+			return null;
+		},
+		callNode: "call_expression",
+	},
 	kotlin: {
 		symbols: [
 			{ node: "class_declaration", kind: "class", name: (n) => nameChild(n, ["type_identifier", "identifier", "simple_identifier"]) },
@@ -248,17 +322,27 @@ export async function extractOther(file: RepoFile, tree: Tree, lang: string): Pr
 			nextCaller = addSymbol(node, name, rule.kind, rule.qualified?.(node) ?? null);
 			break;
 		}
-		const callType = rules.callNode ?? "call_expression";
-		if (node.type === callType) {
-			// callee — первая "именованная" нода (this/obj могут идти первыми: this.m(), o.m())
-			const CALLEE_TYPES = ["identifier", "simple_identifier", "command_name", "word", "type_identifier"];
-			const fn = rules.callNode
-				? (node.namedChildren.find((c) => CALLEE_TYPES.includes(c.type)) ?? node.namedChildren[0])
-				: (node.childForFieldName?.("function") as TsNode | undefined);
-			if (fn) {
-				const callee = rules.callee(fn);
-				if (callee) callSites.push({ callee, caller });
+		const callTypes = rules.callNodes ?? [rules.callNode ?? "call_expression"];
+		if (callTypes.includes(node.type)) {
+			let callee: string | null = null;
+			if (rules.calleeFrom === "lastIdent") {
+				let last: TsNode | null = null;
+				for (const c of node.namedChildren) if (c.type === "identifier" || c.type === "constant") last = c;
+				callee = last?.text ?? null;
+			} else {
+				// callee — первая "именованная" нода (this/obj могут идти первыми: this.m(), o.m())
+				const CALLEE_TYPES = ["identifier", "simple_identifier", "command_name", "word", "type_identifier", "name", "navigation_expression"];
+				const fn = rules.callNode || rules.callNodes
+					? (node.namedChildren.find((c) => CALLEE_TYPES.includes(c.type)) ?? node.namedChildren[0])
+					: (node.childForFieldName?.("function") as TsNode | undefined);
+				if (fn) callee = rules.callee(fn);
 			}
+			if (callee) callSites.push({ callee, caller });
+		}
+		// ruby: `helper` в операторной позиции — вызов
+		if (rules.bareIdentCall && node.type === "identifier" && node.parent?.type === "body_statement") {
+			const callee = rules.callee(node);
+			if (callee) callSites.push({ callee, caller });
 		}
 		for (const c of node.namedChildren) walk(c, nextCaller);
 	};

@@ -32,6 +32,9 @@ export async function getLanguage(lang: Lang): Promise<Language> {
 		java: "java",
 		csharp: "c_sharp",
 		kotlin: "kotlin",
+		ruby: "ruby",
+		php: "php",
+		swift: "swift",
 	};
 	const grammar = GRAMMAR[lang];
 		l = await Language.load(getWasmPath(grammar as "typescript"));

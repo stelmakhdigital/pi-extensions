@@ -64,6 +64,24 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
 - **Concepts-fallback без LLM** улучшен: корень — по языковой семье (root/ts-js, root/py,
   root/java, …), каталоги — темы; группы <2 файлов → «прочее».
 - Языки движка теперь: ts/tsx/js/mjs/cjs/py (двухпроходные) + go/rust/c/cpp/sh/java/csharp/kotlin.
+
+### 2d. v1.3 (2026-09-24, бэклог-итерация 2)
+- **Возвратные выражения (inferred return)**: без аннотации — первое «return new X» в теле
+  функции/стрелки (включая expression-body `=> new X()`) → fnReturns. Только `new X`
+  (надежно); `return foo()`-цепи — вне.
+- **Языки +3: Ruby, PHP, Swift** (`extractOther.ts`):
+  - ruby: class/method (qualified), вызовы: `call` (callee = последний identifier — obj.helper)
+    + базовый identifier в операторной позиции (body_statement);
+  - php: class/method (qualified, имя-нода «name»), function_call_expression /
+    member_call_expression ($this->helper);
+  - swift: class/func (qualified), call_expression (simple_identifier | navigation_expression
+    self.m()/obj.m() — последний ident в цепочке).
+- Механика: `callNodes[]` (несколько типов call-нод), `calleeFrom: "lastIdent"`,
+  `bareIdentCall`; enclosing class — по parent-walk (class_declaration / object_declaration /
+  ruby class, имя-ноды: identifier/type_identifier/simple_identifier/name/constant).
+- Языки движка теперь (15): ts/tsx/js/mjs/cjs/py + go/rust/c/cpp/sh/java/csharp/kotlin/ruby/php/swift.
+- Остаток беклога: full type inference (return-выражения-вызовы, дженерики), авто-refresh deep
+  (фактически уже есть: bodyHash-кэш + build deep), другие языки (грамматики 100+ в tree-sitter-wasm).
 - `parse/` — загрузка web-tree-sitter + wasm (deps: `web-tree-sitter`, `tree-sitter-wasm`);
   парсинг → дерево; кэш парсинга в памяти на сессию.
 - `symbols.ts` — узлы: функции/классы/методы/типы/константы-экспорты, span, signature,
@@ -126,8 +144,8 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
 - Удалить упоминания @nanonets/graft (доки, README) после миграции.
 
 ## Вне v1 (бэклог)
-- (v1.1/v1.2 выполнено: другие языки ×8, MCP, viz, concept-ноды, deep в ask/map, member-цепочки, watch, return-типы, concepts-fallback)
-- Полная типизация (возвратные выражения, дженерики), авто-refresh deep, другие языки (ruby/php/swift — грамматики есть)
+- (v1.1–v1.3 выполнено: 15 языков, MCP, viz, concept-ноды + fallback, deep в ask/map, member-цепочки, watch, return-типы + return-выражения)
+- Полная типизация (return-вызовы, дженерики), авто-refresh deep, прочие языки (100+ грамматик в tree-sitter-wasm)
   (сверх per-file/per-symbol), авто-refresh по watch, scorecard качества.
 
 ## 5b. Конфигурация deep (как запускать)
