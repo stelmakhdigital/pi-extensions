@@ -189,7 +189,7 @@ Live-интеграция v2 (tmux 3.6, локальная LLM): doctor — вс
 sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог событий.
 
 ## GRAFT-ENGINE (задача от 2026-09-24: свой движок вместо @nanonets/graft)
-**v1–v1.4 ГОТОВО (2026-09-24). Коммиты: ef48083 (v1), 092ca7c (v1.1), 4f3399b (v1.2), 7f3c48a (v1.3); v1.4 — pending.**
+**v1–v1.5 ГОТОВО (2026-09-24). Коммиты: ef48083 (v1), 092ca7c (v1.1), 4f3399b (v1.2), 7f3c48a (v1.3), 741ab68 (v1.4); v1.5 — pending.**
 
 ### Что есть
 - `engine/graft/` (TS, tsc strict, 14 модулей): scan (git ls-files + untracked; языки:
@@ -278,7 +278,22 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
    Lua (function_declaration с dot/method index, function_call, self:m()).
 3. Движок: **18 языков**.
 
+### v1.5 (беклог 4, 2026-09-24): auto-refresh deep
+1. **Auto-deep в `build()`** (index.ts): при `!opts.deep` — если `hasDeep(root)` (deep.json
+   не пуст) И `deepCfgFromEnv()` (GRFT_LLM_BASE_URL/MODEL) → инкрементальный deepBuild +
+   conceptsBuild. Только изменившиеся bodyHash; **без дрейфа — 0 LLM-вызовов**.
+   Выкл: `autoDeep: false` / env `GRFT_AUTO_DEEP=0`. `store.hasDeep`, `deep.deepCfgFromEnv` —
+   новые экспорты.
+2. **CLI watch**: auto-deep включён (через build); строка rebuild показывает
+   `+N файлов/+M символов (кэш a/b)`; заголовок — подсказка про env.
+3. Semантика: auto-deep = тихое обновление по дрейфу; `build deep` = явный полный проход.
+4. **Live**: tmux-запуск `build .` с GRFT_LLM_* — «… auto-deep: инкрементальный deep
+   (env-конфиг)» (перечитывает дрейф v1.1–v1.4, ~200+ символов, cat-vllm).
+5. Тест 21-й: auto-deep (созданный дрейф → filesDone≥1 + LLM-вызовы; повтор → 0 вызовов;
+   GRFT_AUTO_DEEP=0 → rep.deep undefined; в конце — восстановление main-fake summary,
+   иначе карточки-тест ловит «Авто summary»).
+
 ### Осталось
-- Live smoke v1.4 (быстрый) + коммит v1.4 (по команде пользователя).
-- Бэклог дальше: дженерики/return-цепи >3, прочие языки (100+ грамматик), авто-refresh deep
-  (фактически уже: bodyHash-кэш + build deep).
+- Дождаться фонового auto-deep (tmux /home/arkalaust/.pi/autodeep.sock, лог ~/.pi/autodeep.log)
+  + коммит v1.5 (по команде пользователя).
+- Бэклог дальше: дженерики/return-цепи >3, прочие языки (100+ грамматик).

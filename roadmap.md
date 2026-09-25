@@ -124,3 +124,6 @@
 - [x] v1.4 (2026-09-24, бэклог 3): return-вызовы (транзитивно до 3 хопов),
       языки +3 (Dart/Scala/Lua; pairedBody для dart, lastIdent + index-ноды для lua);
       18 языков; unit 20/20 (fixtures dart/scala/lua, transitive fnReturns)
+- [x] v1.5 (2026-09-24, бэклог 4): auto-refresh deep — инкрементальный deep при структурном
+      build (hasDeep + env-конфиг; 0 LLM-вызовов без дрейфа; выкл: autoDeep=false / GRFT_AUTO_DEEP=0);
+      watch — auto-deep в отчёте; unit 21/21 (+auto-deep: дрейф/кэш/выкл)
