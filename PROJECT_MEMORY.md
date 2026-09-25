@@ -552,3 +552,19 @@ skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 уз
   Number.isFinite-проверка.
 - Тест прозы — на фейк-LLM (ветка «аналитик кодовой базы» → фикс-текст); генерацию
   реальным LLM не юнит-тестим (позиция та же, что deep).
+
+### v2.12 (usage mix: граф vs прямой source-read) ГОТОВО, engine 38 / smoke 64 (2026-09-25)
+- sourceReads/sourceTokens в MetricsFile: tool_result-хук, toolName === "read"
+  (и !isError, и enabled), ~токены = ceil(textLen/4) по content-текстам.
+  ИСКЛЮЧЕНИЕ: пути graft/* (norm.includes("/graft/") || norm.startsWith("graft/"))
+  — читы карточек/прозы/viz это граф, не source. ВАЖНО: относительный путь
+  "graft/cards/x.md" БЕЗ ведущего слэша — includes("/graft/") его не ловит,
+  нужен startsWith.
+- share = graftCalls / (graftCalls + sourceReads) по вызовам (позиция: метрика
+  по вызовам, не по токенам — их "usage mix" тоже про каналы, а не объём).
+- CLI `graft stats [--json]`: без root/ensureFresh (случай до "check"),
+  dir из GRFT_STATE_DIR || ~/.local/state/pi-graft/metrics, файл с max ts,
+  битые JSON пропускаются; пустой dir — подсказка. json: session/ts/graftCalls/
+  tokensSaved/sourceReads/sourceTokensRead/graphSharePct/graftTurns/reportedTurns.
+- /graft stats: строка «Usage mix: N% граф / M% прямой source-read (K read, ≈T tok)»
+  только если sr>0 (не шуметь, пока модель не читала напрямую).

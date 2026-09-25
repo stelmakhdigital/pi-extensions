@@ -195,3 +195,10 @@
          - graft/prose/x.md»), CLI `graft prose` (список нод);
       бонус-фикс: depth NaN в заголовке callers (CLI Number(undefined))
       unit 37, smoke 63
+- [x] v2.12 (2026-09-25, usage mix — граф vs прямой source-read):
+      метрика sourceReads/sourceTokens в сессионном JSON (тул read; читы
+      graft/* не считаются), строка «Usage mix: N% граф / M% прямой
+      source-read» в /graft stats, CLI `graft stats [--json]` (без графа
+      и сети: последняя сессия по ts, доля графа, токены сэкономлено/прочитано,
+      🌱-доля) — parity с их `graft stats` (local session JSON, no network)
+      unit 38, smoke 64

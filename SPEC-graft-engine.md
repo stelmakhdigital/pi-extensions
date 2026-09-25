@@ -361,3 +361,13 @@ Push-пакет = топ-3 указателя `path:Lstart-Lend  name`, без �
   (hash по файлам темы; без LLM-конфига — не вызывается). Retrieval: `ask` вставляет
   блок «prose (…): - graft/prose/x.md — тема» (топ-3 по совпадениям ключевых слов).
   CLI: `graft prose` — список нод.
+
+### 2v. v2.12 (usage mix: граф vs прямой source-read)
+- Метрика: `sourceReads`/`sourceTokens` в `~/.local/state/pi-graft/metrics/<sid>.json`
+  (override GRFT_STATE_DIR) — пишутся tool_result-хуком на тул `read`
+  (≈токены = ceil(len/4)); пути `graft/*` исключены (это граф, не source).
+- `Usage mix`: доля graft-вызовов от (graft-вызовы + source-reads) —
+  «какую долю модель брала через граф, а какую читала source напрямую».
+- `/graft stats` — строка Usage mix (если были source-reads).
+- CLI `graft stats [--json]` — без графа и сети (локальный JSON последней
+  сессии): вызовы/экономия, source-reads/прочитано, usage mix, 🌱-доля.
