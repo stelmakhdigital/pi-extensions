@@ -308,6 +308,14 @@ await check("ask", () => {
 	assert(none.includes("нет совпадений"), none);
 });
 
+await check("askJson: coverage/coverageStrong (coverage-гейт push)", () => {
+	const hit = q.askJson("helper function in util");
+	assert(hit.coverageStrong > 0.5, `strong для точного имени: ${hit.coverageStrong}`);
+	assert(hit.coverage >= hit.coverageStrong, "broad >= strong");
+	const weak = q.askJson("zzz qqq xxx yyy");
+	assert(weak.coverage === 0 && weak.coverageStrong === 0, `слабый: ${JSON.stringify({ c: weak.coverage, s: weak.coverageStrong })}`);
+});
+
 await check("grep: хиты + innermost-символ", () => {
 	const out = q.grep("helper");
 	assert(out.includes("src/util.ts"), out);

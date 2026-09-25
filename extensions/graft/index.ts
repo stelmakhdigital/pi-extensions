@@ -63,9 +63,9 @@ export default function graftExtension(pi: ExtensionAPI) {
 		default: true,
 	});
 	pi.registerFlag("graft-push", {
-		description: "При каждом промпте догонять `graft ask \"<промпт>\"` и класть топ-хиты в секцию <graft>",
+		description: "При каждом промпте класть в секцию <graft> указатели графа под промпт (вкл по умолчанию; выкл: --graft-push=false). Гейты: длина/слова, coverage, novelty-dedup",
 		type: "boolean",
-		default: false,
+		default: true,
 	});
 	pi.registerFlag("graft-blast", {
 		description: "После write/edit дописывать blast radius (кто зависит от изменённых символов)",
@@ -145,7 +145,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 	/** Сессионные метрики на диске (~/.local/state/pi-graft/metrics/<sid>.json, override: GRFT_STATE_DIR). */
 	const metricsDir = (): string => process.env.GRFT_STATE_DIR?.trim() || join(homedir(), ".local", "state", "pi-graft", "metrics");
 	const metricsPath = (sid: string): string => join(metricsDir(), `${sid}.json`);
-	interface MetricsFile { calls: number; tokens: number; ts: number }
+	interface MetricsFile { calls: number; tokens: number; graftTurns: number; reportedTurns: number; ts: number }
 	const readMetrics = (ctx: ExtensionContext): MetricsFile | null => {
 		try {
 			const sid = (ctx.sessionManager as { getSessionId?: () => string } | undefined)?.getSessionId?.();
@@ -155,15 +155,17 @@ export default function graftExtension(pi: ExtensionAPI) {
 			return null;
 		}
 	};
-	const trackMetrics = (ctx: ExtensionContext, patch: { calls?: number; tokens?: number }): void => {
+	const trackMetrics = (ctx: ExtensionContext, patch: { calls?: number; tokens?: number; graftTurns?: number; reportedTurns?: number }): void => {
 		try {
 			const sid = (ctx.sessionManager as { getSessionId?: () => string } | undefined)?.getSessionId?.();
 			if (!sid) return;
 			const p = metricsPath(sid);
-			let m: MetricsFile = { calls: 0, tokens: 0, ts: Date.now() };
+			let m: MetricsFile = { calls: 0, tokens: 0, graftTurns: 0, reportedTurns: 0, ts: Date.now() };
 			try { m = { ...m, ...(JSON.parse(readFileSync(p, "utf8")) as MetricsFile) }; } catch { /* новая сессия */ }
 			m.calls += patch.calls ?? 0;
 			m.tokens += patch.tokens ?? 0;
+			m.graftTurns += patch.graftTurns ?? 0;
+			m.reportedTurns += patch.reportedTurns ?? 0;
 			m.ts = Date.now();
 			mkdirSync(dirname(p), { recursive: true });
 			writeFileSync(p, JSON.stringify(m));
@@ -212,6 +214,9 @@ export default function graftExtension(pi: ExtensionAPI) {
 		row("7 дней", Date.now() - 7 * 86_400_000);
 		row("30 дней", Date.now() - 30 * 86_400_000);
 		row("Всего", 0);
+		const turns = files.reduce((s2, m) => s2 + (m.graftTurns ?? 0), 0);
+		const reported = files.reduce((s2, m) => s2 + (m.reportedTurns ?? 0), 0);
+		if (turns > 0) lines.push(`  🌱-отчёт в ответе: ${reported} из ${turns} graft-ходов`);
 		if (files.length === 0) lines.push("  (метрики ещё не записаны — появятся после первых graft-вызовов)");
 	};
 
@@ -416,7 +421,21 @@ export default function graftExtension(pi: ExtensionAPI) {
 			}) ??
 			null;
 		const scopeFiles = scopeKey ? new Set(scopes[scopeKey]) : null;
-		const results = makeQueries(root).askJson(prompt).results;
+		const ask = makeQueries(root).askJson(prompt);
+		const results = ask.results;
+		// Coverage-гейт (детерминированный, $0): сильный матч — по имени/сигнатуре топ-хита,
+		// слабый — только нудж (граф может знать больше), пусто — тишина.
+		if (results.length === 0) return null;
+		const strong = ask.coverageStrong ?? 0;
+		const broad = ask.coverage ?? 0;
+		const STRONG_FLOOR = 0.3;
+		const HIGH_FLOOR = 0.5;
+		if (strong < STRONG_FLOOR && broad < HIGH_FLOOR) {
+			const nudged: boolean = (globalThis as Record<string, unknown>).__graftPushNudged ?? false;
+			(globalThis as Record<string, unknown>).__graftPushNudged = true;
+			if (nudged) return null;
+			return `## Граф не дал сильного совпадения по этому промпту — если нужен код, начни с graft_ask «задача» (детерминированный поиск).`;
+		}
 		const inScope = scopeFiles ? results.filter((r) => scopeFiles.has(r.path)) : results;
 		const seen: Set<string> = ((globalThis as Record<string, unknown>).__graftPushSeen as Set<string> | undefined) ?? new Set<string>();
 		(globalThis as Record<string, unknown>).__graftPushSeen = seen;
@@ -427,8 +446,10 @@ export default function graftExtension(pi: ExtensionAPI) {
 			seen.add(idOf(r));
 			if (seen.size > 400) seen.clear();
 		}
-		const lines = fresh.slice(0, 6).map((r) => `  ${r.score}  ${r.name}  ${r.path}:L${r.start}-L${r.end}  ${r.snippet}`);
-		return `## Top-хиты графа под текущий промпт${scopeKey ? ` (scope: ${scopeKey})` : ""}\n${lines.join("\n")}`;
+		// Формат: указатели без кода (топ-3) — свежая инъекция стоит full-price на каждый
+		// промпт; код модель заберёт сама через graft_ask, когда укажатель зацепит.
+		const lines = fresh.slice(0, 3).map((r) => `  ${r.path}:L${r.start}-L${r.end}  ${r.name}`);
+		return `## Указатели графа под текущий промпт${scopeKey ? ` (scope: ${scopeKey})` : ""}\n${lines.join("\n")}`;
 	};
 
 	// ---------- Хуки ----------
@@ -517,8 +538,8 @@ export default function graftExtension(pi: ExtensionAPI) {
 		}
 		return note ? { content: [...event.content, { type: "text", text: note }] } : undefined;
 	});
-	// Compliance: в ходе были graft-тулы с экономией, а в ответе нет «🌱» → напомнить в след. секции.
-	pi.on("turn_end", async (event, _ctx) => {
+	// Compliance: в ходе были graft-тулы с экономией — счётчики tally; нет «🌱» → напомнить в след. секции.
+	pi.on("turn_end", async (event, ctx) => {
 		try {
 			const trs = (event.toolResults ?? []) as Array<{ toolName?: string; content?: Array<{ type?: string; text?: string }> }>;
 			let savingsInTurn = 0;
@@ -531,7 +552,9 @@ export default function graftExtension(pi: ExtensionAPI) {
 			if (savingsInTurn === 0) return;
 			const msg = event.message as { content?: Array<{ type?: string; text?: string }> } | undefined;
 			const reply = (msg?.content ?? []).map((c) => (c.type === "text" ? c.text ?? "" : "")).join(" ");
-			if (!/🌱/.test(reply)) complianceReminder = true;
+			const reported = /🌱/.test(reply);
+			trackMetrics(ctx, { graftTurns: 1, reportedTurns: reported ? 1 : 0 });
+			if (!reported) complianceReminder = true;
 		} catch {
 			// тихо
 		}

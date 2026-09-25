@@ -207,6 +207,8 @@ const noUiCtx = {
 	await check("graft: /graft-команда и флаги", () => {
 		if (!pi.commands.some((c) => c.name === "graft")) throw new Error("нет /graft");
 		if (!pi.flags.some((f) => f.name === "graft-push")) throw new Error("нет --graft-push");
+		const push = pi.flags.find((f) => f.name === "graft-push");
+		if (push.def.default !== true) throw new Error("push должен быть включён по умолчанию (parity с always-on после init)");
 	});
 	await check("graft: без графа — подсказка о graft build", async () => {
 		const tool = pi.tools.find((t) => t.name === "graft_map");
@@ -287,10 +289,12 @@ const ctxGraph = { ...noUiCtx, cwd: fixture };
 	await check("graft push: дедуп по сессии (второй раз — только новые id)", async () => {
 		const sections1 = {};
 		await piPush.handlers.before_agent_start({ prompt: "fix the auth bug in handler", systemPromptOptions: { sections: sections1 } }, ctxGraph);
-		if (!sections1.graft || !sections1.graft.includes("Top-хиты графа")) throw new Error("нет пакета: " + JSON.stringify(sections1.graft ?? null).slice(0, 200));
+		if (!sections1.graft || !sections1.graft.includes("Указатели графа")) throw new Error("нет пакета: " + JSON.stringify(sections1.graft ?? null).slice(0, 200));
+		if (!/a\.ts:L\d+-L\d+\s+auth/.test(sections1.graft)) throw new Error("нет указателя file:line: " + sections1.graft.slice(0, 300));
+		if (sections1.graft.includes("export function")) throw new Error("сниппет в пакете (должен быть только указатель): " + sections1.graft.slice(0, 300));
 		const sections2 = {};
 		await piPush.handlers.before_agent_start({ prompt: "fix the auth bug in handler", systemPromptOptions: { sections: sections2 } }, ctxGraph);
-		if (sections2.graft && sections2.graft.includes("Top-хиты графа")) throw new Error("повторный пакет: " + sections2.graft.slice(0, 200));
+		if (sections2.graft && sections2.graft.includes("Указатели графа")) throw new Error("повторный пакет: " + sections2.graft.slice(0, 200));
 	});
 
 	await check("graft compliance: turn_end без 🌱 → напоминание в след. секции", async () => {
@@ -355,6 +359,36 @@ const ctxGraph = { ...noUiCtx, cwd: fixture };
 		if (!week || week[1] !== "15" || week[2] !== "6,000") throw new Error("неверные 7 дней: " + (week ? week.join(" ") : notified.slice(0, 300)));
 		const total = notified.match(/Всего: (\d+) вызов[а-я]*, ≈([\d,]+) токенов/);
 		if (!total || total[1] !== "65" || total[2] !== "96,000") throw new Error("неверный итог: " + (total ? total.join(" ") : notified.slice(0, 300)));
+	});
+
+	await check("graft push: coverage-гейт — слабые хиты дают нудж один раз, дальше тишина", async () => {
+		// "toUpperCase" есть в сниппете handler → хиты есть, но в имени/пути их нет → weak.
+		const s1 = {};
+		await piPush.handlers.before_agent_start({ prompt: "toUpperCase in a.ts file", systemPromptOptions: { sections: s1 } }, ctxGraph);
+		if (!s1.graft || !s1.graft.includes("не дал сильного совпадения")) throw new Error("нет нуджа: " + JSON.stringify(s1.graft ?? null).slice(0, 200));
+		const s2 = {};
+		await piPush.handlers.before_agent_start({ prompt: "toUpperCase again near the request path", systemPromptOptions: { sections: s2 } }, ctxGraph);
+		if (s2.graft && s2.graft.includes("не дал сильного совпадения")) throw new Error("нудж повторился: " + s2.graft.slice(0, 200));
+	});
+
+	await check("graft tally: 🌱-доля пишется в метрики на turn_end", async () => {
+		const { mkdtempSync } = await import("node:fs");
+		const { tmpdir: tmpd } = await import("node:os");
+		const state = mkdtempSync(tmpd + "/pi-graft-tally-");
+		const prev = process.env.GRFT_STATE_DIR;
+		process.env.GRFT_STATE_DIR = state;
+		const ctxSid = { ...ctxGraph, sessionManager: { getSessionId: () => "tally-sid" } };
+		try {
+			const ev = (text) => ({ turnIndex: 0, message: { content: [{ type: "text", text }] }, toolResults: [{ toolName: "graft_ask", content: [{ type: "text", text: "[graft] tokens saved ≈ 900\ngraft ask: x" }] }] });
+			await pi.handlers.turn_end(ev("готово, без эмодзи"), ctxSid);
+			await pi.handlers.turn_end(ev("готово. 🌱 graft saved ~900 tokens (1 call)"), ctxSid);
+			const { readFileSync: rf2 } = await import("node:fs");
+			const m = JSON.parse(rf2(state + "/tally-sid.json", "utf8"));
+			if (m.graftTurns !== 2 || m.reportedTurns !== 1) throw new Error("tally неверный: " + JSON.stringify(m));
+		} finally {
+			if (prev === undefined) delete process.env.GRFT_STATE_DIR;
+			else process.env.GRFT_STATE_DIR = prev;
+		}
 	});
 
 	await check("graft mcp: initialize отдаёт instructions с экономикой", async () => {

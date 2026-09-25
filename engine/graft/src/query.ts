@@ -7,6 +7,18 @@ import { readDeep, readGraph } from "./store.js";
 import { langOf, listRepoPaths } from "./scan.js";
 import type { Graph, GraphNode } from "./types.js";
 
+/** Лексическая релевантность: доля ключевых слов запроса, найденных в текстах. */
+const KEYWORD_RE = /[a-zA-Zа-яё][a-zA-Zа-яё0-9_-]{3,}/g;
+function coverageScore(query: string, ...texts: Array<string | null | undefined>): number {
+	const kws = [...new Set(query.toLowerCase().match(KEYWORD_RE) ?? [])];
+	if (!kws.length) return 0;
+	const hay = texts.map((t) => (t ?? "").toLowerCase()).join(" ");
+	if (!hay) return 0;
+	let hit = 0;
+	for (const k of kws) if (hay.includes(k)) hit++;
+	return hit / kws.length;
+}
+
 function nodeLabel(n: GraphNode): string {
 	return `${n.name} · ${n.path}:L${n.span.start}` + (n.span.end > n.span.start ? `-L${n.span.end}` : "");
 }
@@ -33,7 +45,7 @@ export interface Queries {
 	check: () => Promise<{ text: string; json: Record<string, unknown> }>;
 	blast: (base?: string) => Promise<string>;
 	blastFile: (path: string) => string;
-	askJson: (query: string) => { query: string; count: number; results: Array<{ name: string; kind: string; path: string; start: number; end: number; score: number; snippet: string; summary?: string }> };
+	askJson: (query: string) => { query: string; count: number; coverage: number; coverageStrong: number; results: Array<{ name: string; kind: string; path: string; start: number; end: number; score: number; snippet: string; summary?: string }> };
 	blastData: (base?: string, opts?: { owners?: boolean }) => Promise<{ base: string | null; files: Array<{ path: string; owner: string | null; symbols: Array<{ name: string; start: number; dependents: string[] }> }> }>;
 }
 
@@ -266,9 +278,13 @@ export function makeQueries(root: string): Queries {
 	const askJson: Queries["askJson"] = (query) => {
 		const scored = askScore(query);
 		const top = scored.slice(0, 12);
+		const topN = top[0]?.n;
 		return {
 			query,
 			count: top.length,
+			// Релевантность топ-хита: strong — в имени/сигнатуре, broad — + путь и сниппет.
+			coverageStrong: topN ? coverageScore(query, topN.name, topN.signature) : 0,
+			coverage: topN ? coverageScore(query, topN.name, topN.path, topN.signature) : 0,
 			results: top.map(({ n, score }) => {
 				const content = src.get(n.path);
 				const snippet = content ? (content.split("\n")[n.span.start - 1] ?? "").trim().slice(0, 100) : "";
