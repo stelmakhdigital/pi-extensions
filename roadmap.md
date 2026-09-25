@@ -151,3 +151,12 @@
          накопитель в бейдже (`· ≈N tok saved`); guideline «🌱 graft сэкономил ~N» в конце
          ответа, 3) скилл skills/graft (scenario-таблица, правила экономики, отчёт
          об экономии, CLI/MCP) в pi.skills[]; unit 31/31
+- [x] v2.6 (2026-09-25, пост-A–E, пункты 2–6 надстройки): push-режим —
+      relevance-гейт (короткий/не-кодовый промпт → skip), scope-хинт (упоминание
+      scope-ключа → фильтр askJson), сессионный dedup по id нод (retract: только новые,
+      пусто → пакет не инжектится); сессионные метрики на диске
+      (~/.local/state/pi-graft/metrics/<sid>.json, override GRFT_STATE_DIR) + строка в
+      /graft; compliance — turn_end: graft-тулы с экономией без «🌱» в ответе → одноразовое
+      напоминание в след. секции; MCP instructions (контракт + экономика); фоновый
+      ensureFresh + бейдж в agent_end (guard параллельности); banner свежести (кач 30с)
+      в заголовке секции; smoke 57 (5 новых)

@@ -444,3 +444,32 @@ D языки+монорепо, E CLI/init). tmux НЕДОСТУПЕН (unknown f
 Живые числа (репо pi-extensions): ask makeQueries ≈ 5,060; grep makeQueries ≈ 24,775;
 skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 узлов / 495 рёбер.
 Коммит — по команде пользователя.
+
+### v2.6 (пункты 2–6 надстройки) ГОТОВО, smoke 57 (2026-09-25)
+- Push (before_agent_start, --graft-push): гейт `len>=15 && слова>=4букв`;
+  scope-хинт — `prompt.includes(scopeKey)` или совпадение хвоста scope с словом промпта;
+  dedup: `globalThis.__graftPushSeen` Set<`path#name@Lstart`>, cap 400 → clear;
+  результаты через askJson (структура), рендер top-6 сам (score/name/path/L/snippet).
+  Пусто новых → пакет НЕ инжектится (это и есть retract).
+- Метрики: `graft/.engine` НЕ используем (это репо-кэш) — `~/.local/state/pi-graft/metrics/<sid>.json`
+  (env GRFT_STATE_DIR для тестов). `ctx.sessionManager.getSessionId()`. trackMetrics
+  вызывается в каждом execute (calls) + recordSavings (tokens). /graft печатает строку.
+- Compliance: turn_end парсит СОБСТВЕННЫЕ toolResults хода: сумма [graft] tokens saved >0
+  и в тексте assistant-сообщения нет «🌱» → complianceReminder=true → одноразово
+  дописывается в head следующей секции. (Парсим toolResults, а не просто факт вызова —
+  иначе ложные напоминания, когда экономии реально не было.)
+- agent_end: fire-and-forget ensureFresh + refreshBadge, guard bgSyncRunning;
+  ensureFresh дёшев без дрейфа (fingerprint).
+- Banner: checkStatus с кэшем 30с (freshCache) в head секции: «синхронен» / «⚠ дрейф…».
+- MCP: instructions в initialize — был один (корень), стал полный контракт
+  (какой тул когда + правило 🌱-отчёта + «не резать выходы»).
+
+Баги/уроки:
+- Smoke-стаб getFlag: () => false выключает расширение (enabled: `--graft === false`);
+  в graft-блоке smoke есть makePi2 (дефолты из registerFlag) — новые стабы должны
+  делать то же (makePiFlags наследует дефолты).
+- event.systemPromptOptions.sections — объект sections ПЕРЕДАЁМ, не сам options
+  ({ sections: s }, не { s }).
+- MCP root — env GRFT_MCP_ROOT (не --root).
+- Функциональный MCP-тест в smoke: spawn stdio, JSON-RPC initialize, парсим строку с
+  instructions (2 этапа ожидания: первый \n — приветствие, потом 'instructions').

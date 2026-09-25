@@ -294,3 +294,20 @@ summary без crux); crux валидируется дословно по исх
   map→ask→skeleton→read(span), правила экономики (не резать выводы head/tail, не гадать
   номера строк по старому графу, scope в монорепо, когда графа не хватает), отчёт
   об экономии, CLI/MCP-поверхность.
+
+### 2p. v2.6 (надстройка: push-качество, метрики, compliance, фон-синк, banner)
+- **Push**: гейт релевантности (промпт ≥15 символов и ≥1 слово ≥4 букв), scope-хинт
+  (упоминание scope-ключа/хвоста → фильтр askJson-результатов), сессионный dedup
+  (`globalThis.__graftPushSeen`, id `path#name@Lstart`, cap 400) — старые пакеты не
+  повторяются, без новых хитов пакет не инжектится (retract).
+- **Метрики на диске**: `~/.local/state/pi-graft/metrics/<sessionId>.json`
+  `{calls, tokens, ts}` (env `GRFT_STATE_DIR`); обновляются каждым вызовом тула
+  (calls) и строками savings (tokens); строка «Сессия: …» в выводе `/graft`.
+- **Compliance**: `turn_end` суммирует `[graft] tokens saved` в toolResults хода;
+  сумма >0 и в assistant-ответе нет «🌱» → одноразовое напоминание в head следующей
+  `<graft>`-секции (не через continue — только пассивный hint, циклов нет).
+- **Фон-синк**: `agent_end` → `ensureFresh` + refreshBadge (fire-and-forget, guard
+  одного параллельного rebuild).
+- **Banner**: head секции — строка свежести (checkStatus, кэш 30с).
+- **MCP**: `instructions` в initialize — полный контракт (карта тулов, 🌱-отчёт,
+  запрет резать выходы).
