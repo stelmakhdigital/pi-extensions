@@ -189,7 +189,7 @@ Live-интеграция v2 (tmux 3.6, локальная LLM): doctor — вс
 sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог событий.
 
 ## GRAFT-ENGINE (задача от 2026-09-24: свой движок вместо @nanonets/graft)
-**v1–v1.3 ГОТОВО (2026-09-24). Коммиты: ef48083 (v1), 092ca7c (v1.1), 4f3399b (v1.2); v1.3 — pending.**
+**v1–v1.4 ГОТОВО (2026-09-24). Коммиты: ef48083 (v1), 092ca7c (v1.1), 4f3399b (v1.2), 7f3c48a (v1.3); v1.4 — pending.**
 
 ### Что есть
 - `engine/graft/` (TS, tsc strict, 14 модулей): scan (git ls-files + untracked; языки:
@@ -209,7 +209,7 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
   корень = env `GRFT_MCP_ROOT` ?? cwd; ноль внешних зависимостей (jiti + движок).
 - `extensions/graft`: тонкий адаптер (jiti, без spawn): 7 тулзов, `<graft>` (TTL 120 с,
   map без deep), blast-хук (diff-ориентированный, по write/edit + 60 с), бейдж, `/graft build [deep]`.
-- Репо-граф: 32 файла / 433 узла / 412 рёбер (после v1.3); deep v1 (cat-vllm) сохранён в deep.json
+- Репо-граф: 32 файла / 435 узлов / 414 рёбер (после v1.4); deep v1 (cat-vllm) сохранён в deep.json
   (crux пересоберутся при следующем deep-прогоне по-новому).
 
 ### Баги/факты (уроки)
@@ -232,6 +232,14 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
     (иначе qualified = null). ruby: callee вызова `obj.helper` — ПОСЛЕДНИЙ identifier.
 12. TS arrow с expression-body: поле body arrow_function = само выражение (new_expression) —
     для inferred return тянуть childForFieldName("body") с arrow, а не с declarator.
+13. **web-tree-sitter: child-обёртки — НОВЫЕ объекты** (namedChildren без кэша) — indexOf по
+    ссылке = -1; искать по node.id (Set<id> для skipped — id стабилен).
+14. dart-грамматика: function_body — SIBLING метод_signature (не child) — caller-цепочка рвётся;
+    фикс pairedBody (walk тела с caller=метод, skip в родительском цикле).
+15. lua: self:helper — function_call [method_index_expression, arguments]; имя метода ВНУТРИ
+    index-ноды (lastIdent обязан спускаться в method/dot_index_expression).
+16. re.sub-удаление строк с trailing-newline в python-патчах склеивает код (//-коммент глотает
+    следующее) — удалять построчно (list of lines), не регуляркой по тексту.
 
 ### v1.2 (беклог, 2026-09-24)
 1. **Type inference v1**: `extract.fnReturns` — явные return-типы TS/JS (function_declaration и
@@ -263,7 +271,14 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
    enclosing class: class_declaration/object_declaration/class (ruby).
 3. Движок: **15 языков** (ts/tsx/js/mjs/cjs/py + go/rust/c/cpp/sh/java/csharp/kotlin/ruby/php/swift).
 
+### v1.4 (беклог 3, 2026-09-24)
+1. **Return-вызовы**: `firstReturnCall` (первое «return g()») + транзитивное разрешение
+   fnReturns до 3 хопов (wrap → base → new Foo).
+2. **Языки +3**: Dart (pairedBody! bare-ident вызовы), Scala (def qualified, call_expression),
+   Lua (function_declaration с dot/method index, function_call, self:m()).
+3. Движок: **18 языков**.
+
 ### Осталось
-- Live smoke v1.3 (быстрый) + коммит v1.3 (по команде пользователя).
-- Бэклог дальше: full type inference (return-вызовы, дженерики), авто-refresh deep
-  (фактически уже: bodyHash-кэш + build deep), прочие языки (100+ грамматик в tree-sitter-wasm).
+- Live smoke v1.4 (быстрый) + коммит v1.4 (по команде пользователя).
+- Бэклог дальше: дженерики/return-цепи >3, прочие языки (100+ грамматик), авто-refresh deep
+  (фактически уже: bodyHash-кэш + build deep).

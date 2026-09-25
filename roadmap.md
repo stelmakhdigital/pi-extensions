@@ -121,3 +121,6 @@
 - [x] v1.3 (2026-09-24, бэклог 2): возвратные выражения (return new X, incl. => new X),
       языки +3 (Ruby/PHP/Swift; callNodes[], calleeFrom lastIdent, bareIdentCall);
       unit 20/20 (fixtures rb/php/swift, inferred return)
+- [x] v1.4 (2026-09-24, бэклог 3): return-вызовы (транзитивно до 3 хопов),
+      языки +3 (Dart/Scala/Lua; pairedBody для dart, lastIdent + index-ноды для lua);
+      18 языков; unit 20/20 (fixtures dart/scala/lua, transitive fnReturns)
