@@ -246,7 +246,7 @@ function fakeRunner(handlers) {
 	return { runner, calls };
 }
 
-await check("tmux: createSurface — split-window из $TMUX_PANE + rename", async () => {
+await check("tmux: createSurface — split-window из $TMUX_PANE + rename + select-layout tiled", async () => {
 	const { runner, calls } = fakeRunner({
 		"split-window": "@7 %42",
 	});
@@ -256,6 +256,7 @@ await check("tmux: createSurface — split-window из $TMUX_PANE + rename", asy
 	assert(calls[0][0] === "split-window" && calls[0].includes("-d") && calls[0].includes("-h"), "split -d -h");
 	assert(calls[0][calls[0].indexOf("-t") + 1] === "%1", "target = панель родителя");
 	assert(calls[1][0] === "rename-window" && calls[1].includes("scout"), "rename");
+	assert(calls[2].join(" ") === "select-layout -t @7 tiled", "tiled: " + calls[2].join(" "));
 });
 
 await check("tmux: createSurface вне tmux -> ошибка", async () => {
@@ -284,6 +285,7 @@ await check("tmux: sendCommand / sendEscape / close / captureTail", async () => 
 	const { runner, calls } = fakeRunner({
 		"list-panes": "%42",
 		"capture-pane": "line1\n__SUBAGENT_EXIT_1__",
+		"display-message": "@7",
 	});
 	const be = createTmuxBackend({ runner, env: { TMUX: "x", TMUX_PANE: "%1" } });
 	const s = { kind: "pane", target: "%42" };
@@ -296,7 +298,10 @@ await check("tmux: sendCommand / sendEscape / close / captureTail", async () => 
 	const tail = await be.captureTail(s, 5);
 	assert(tail.includes("__SUBAGENT_EXIT_1__"), "capture");
 	await be.close(s);
-	assert(calls[calls.length - 1].join(" ") === "kill-pane -t %42", "close pane");
+	const last3 = calls.slice(-3).map((c) => c.join(" "));
+	assert(last3[0] === "display-message -p -t %42 #{window_id}", "window_id до kill: " + last3[0]);
+	assert(last3[1] === "kill-pane -t %42", "close pane");
+	assert(last3[2] === "select-layout -t @7 tiled", "rebalance после kill: " + last3[2]);
 });
 
 await check("tmux: isAlive=false при мёртвой панели, close мёртвой не роняет", async () => {
@@ -584,6 +589,24 @@ await check("nextStallAction: first / reping по интервалу / 0=оди�
 	const once = { watchdog: { stallRepingTicks: 0 }, watch: { intervalMs: 1000 } };
 	assert(nextStallAction({ stallPingSent: true, lastStallPingTs: now }, now + 999_999, once) === "none", "0 = один раз");
 	assert(nextStallAction({ stallPingSent: true }, now + 999_999, cfg) === "reping", "нет lastStallPingTs — репинг");
+});
+
+// ── widget ──
+
+await check("widget: рамка — все строки одной ширины (любой count)", () => {
+	const mk = (i) => ({
+		id: `id${i}`, name: `agent-${i}`, agent: "scout", task: "t",
+		surface: { kind: "pane", target: `%${i}` }, sessionFile: "/s", activityFile: "/a", launchScript: "/l",
+		startTime: i, autoExit: true, interactive: false, phase: "active", stallPingSent: false, finished: false,
+	});
+	const widthOf = (s) => [...s].length;
+	for (const n of [1, 2, 3, 5]) {
+		const lines = ext.widgetLines(Array.from({ length: n }, (_, i) => mk(i)));
+		assert(lines && lines.length === n + 2, `lines for ${n}: ${lines?.length}`);
+		const widths = lines.map(widthOf);
+		assert(widths.every((w) => w === widths[0]), `uniform width for ${n}: ${widths.join(",")}`);
+		assert(widths[0] === 64, `width 64: ${widths[0]}`);
+	}
 });
 
 // ── cleanup ──

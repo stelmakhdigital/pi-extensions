@@ -52,6 +52,17 @@ const REPORT_CUSTOM_TYPE = "subagents.report";
 const HANDOFF_GUARD_ENV = "PI_SUBAGENTS_TMUX_HANDOFF";
 const EXIT_SENTINEL_RE = /__SUBAGENT_EXIT_(\d+)__/;
 
+/**
+ * Completion protocol appended to non-auto-exit (interactive) children: they
+ * close only via agent_done/agent_ping, and nothing else tells the model to
+ * call it — without this prompt the parent waits forever after a finished
+ * turn (idle snapshot is "waiting", not "stalled").
+ */
+const COMPLETION_PROTOCOL_PROMPT =
+	"COMPLETION PROTOCOL: You are a sub-agent in an interactive session. When the task is fully complete, you MUST call the agent_done tool (no arguments): your last assistant message is delivered to the parent agent and the session closes. " +
+	"If you are blocked on a decision or missing information, call the agent_ping tool with a message describing what you need. " +
+	"Do not end a turn expecting the task to be picked up later — call one of these tools when done or blocked.";
+
 /** Default system prompt for /iterate without an explicit agent definition. */
 const ITERATE_PROMPT =
 	"You are an iteration sub-agent running in a FORKED copy of the parent session: the full parent conversation is your context. " +
@@ -235,23 +246,22 @@ function activityLabel(r: RunningSubagent): string {
 	return r.phase === "starting" ? "starting…" : r.phase;
 }
 
-function widgetLines(): string[] | undefined {
-	const config = configRef;
-	if (!config?.widget.enabled) return undefined;
-	const list = [...running.values()].filter((r) => !r.finished);
-	if (list.length === 0) return undefined;
-	list.sort((a, b) => a.startTime - b.startTime);
+export function widgetLines(list: RunningSubagent[]): string[] | undefined {
+	const rows = list.filter((r) => !r.finished);
+	if (rows.length === 0) return undefined;
+	rows.sort((a, b) => a.startTime - b.startTime);
 	const width = 64;
-	const title = ` Subagents — ${list.length} running `;
-	const top = `╭─${title}${"─".repeat(Math.max(1, width - title.length - 1))}╮`;
+	const title = ` Subagents — ${rows.length} running `;
+	// Top border must be exactly `width` chars: "╭─" (2) + title + dashes + "╮" (1).
+	const top = `╭─${title}${"─".repeat(Math.max(1, width - title.length - 3))}╮`;
 	const lines = [top];
-	for (const r of list) {
+	for (const r of rows) {
 		const label = `${r.name}${r.agent ? ` (${r.agent})` : ""}`;
 		const state = activityLabel(r);
 		const usage = formatUsage(r) ?? "";
 		const clock = formatClock(r.startTime);
 		const row = ` ${clock}  ${truncateToWidth(label, Math.max(8, width - 14 - state.length - usage.length - 2))}  ${state}${usage}`;
-		lines.push(truncateToWidth(row, width));
+		lines.push(truncateToWidth(row.padEnd(width), width));
 	}
 	lines.push(`╰${"─".repeat(width - 2)}╯`);
 	return lines;
@@ -259,8 +269,8 @@ function widgetLines(): string[] | undefined {
 
 function updateWidget(): void {
 	const ui = latestCtx?.ui;
-	if (!ui) return;
-	const lines = widgetLines();
+	if (!ui || !configRef?.widget.enabled) return;
+	const lines = widgetLines([...running.values()]);
 	const key = JSON.stringify(lines);
 	if (key === lastWidgetJson) return;
 	lastWidgetJson = key;
@@ -627,7 +637,9 @@ export async function spawnAgentInternal(params: SpawnParams, pi: ExtensionAPI):
 	const name = params.name?.trim() || def?.name || "subagent";
 	const childCwd = resolveChildCwd(def, params.cwd, ctx.cwd);
 	const mode: SessionMode = resolveSessionMode(def, params.fork);
-	const autoExit = def?.autoExit ?? false;
+	// Auto-exit is the default contract ("result is delivered automatically").
+	// Interactive agents (auto-exit: false) rely on agent_done instead.
+	const autoExit = def?.autoExit ?? true;
 	const interactive = params.interactive ?? def?.interactive ?? !autoExit;
 
 	const branchEntries =
@@ -681,7 +693,9 @@ export async function spawnAgentInternal(params: SpawnParams, pi: ExtensionAPI):
 	r.surface = surface;
 
 	let systemPromptFile: string | undefined;
-	const systemPrompt = def?.body || params.systemPrompt;
+	const systemPrompt = [def?.body || params.systemPrompt, autoExit ? undefined : COMPLETION_PROTOCOL_PROMPT]
+		.filter(Boolean)
+		.join("\n\n");
 	if (systemPrompt) {
 		systemPromptFile = join(dir, `${slugify(name)}-${id}.systemprompt.md`);
 		writeFileSync(systemPromptFile, systemPrompt, "utf8");

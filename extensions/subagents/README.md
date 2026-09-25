@@ -113,8 +113,8 @@ thinking: minimal
 tools: read, bash
 skills: some-skill
 session-mode: lineage-only   # standalone | lineage | fork
-auto-exit: true              # самозакрытие после хода; ручной ввод отключает
-interactive: false           # по умолчанию ¬auto-exit
+auto-exit: true              # самозакрытие после хода; ручной ввод отключает; дефолт при отсутствии дефа — true
+interactive: false           # по умолчанию ¬auto-exit; интерактивным агентам дописывается completion-протокол (обязательный agent_done/agent_ping)
 cwd: subdir                  # rel к проекту или abs
 deny-tools: edit, write      # добавляется к --exclude-tools (запрет конкретных тулзов)
 spawning: false              # true = агенту разрешён рекурсивный спавн

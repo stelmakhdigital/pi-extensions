@@ -69,6 +69,13 @@ export function createTmuxBackend(options: TmuxBackendOptions = {}): MuxBackend 
 			} catch {
 				// Cosmetic; surface is usable regardless.
 			}
+			try {
+				// Re-splitting the same parent pane yields 50/25/25/… sizes;
+				// tiled re-equalizes all panes in the window.
+				tmux("select-layout", "-t", windowId, "tiled");
+			} catch {
+				// Cosmetic; surface is usable regardless.
+			}
 			return { kind: "pane", target: paneId };
 		},
 
@@ -112,7 +119,18 @@ export function createTmuxBackend(options: TmuxBackendOptions = {}): MuxBackend 
 		async close(surface) {
 			try {
 				if (surface.kind === "pane") {
+					// Capture the window first: after kill-pane the pane target is gone.
+					let windowId = "";
+					try {
+						windowId = tmux("display-message", "-p", "-t", surface.target, "#{window_id}");
+					} catch {}
 					tmux("kill-pane", "-t", surface.target);
+					if (windowId) {
+						// Rebalance remaining panes (no-op if the window died).
+						try {
+							tmux("select-layout", "-t", windowId, "tiled");
+						} catch {}
+					}
 				} else {
 					tmux("kill-window", "-t", surface.target);
 				}
