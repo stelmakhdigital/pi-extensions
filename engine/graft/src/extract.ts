@@ -25,7 +25,7 @@ export interface FileImport {
 	names: string[];
 }
 
-export type PendingVia = { kind: "new" | "call" | "ident"; name: string };
+export type PendingVia = { kind: "new" | "call" | "ident" | "type"; name: string };
 export interface PendingMemberCall {
 	caller: GraphNode | null;
 	method: string;
@@ -46,6 +46,57 @@ export interface ExtractedFile {
 	fnReturns: Map<string, string>;
 	/** Нерезолвленные member-вызовы (obj.m()) — резолвятся в build.ts по глобальным индексам. */
 	pending: PendingMemberCall[];
+}
+
+/** Типизированные параметры функции (name → type): для member-вызовов o.m() по o: Foo. */
+function collectParamTypes(fnNode: TsNode): Array<{ name: string; type: string | null }> {
+	const out: Array<{ name: string; type: string | null }> = [];
+	const params = fnNode.childForFieldName?.("parameters") ?? fnNode.namedChildren.find((c) => c.type === "formal_parameters");
+	if (!params) return out;
+	for (const p of params.namedChildren) {
+		if (p.type !== "formal_parameter" && p.type !== "required_parameter" && p.type !== "optional_parameter") continue;
+		const nm = p.namedChildren.find((c) => c.type === "identifier");
+		if (!nm) continue;
+		const ty = p.namedChildren.find((c) => c.type === "type_annotation");
+		let t: string | null = null;
+		if (ty) {
+			for (const c of ty.namedChildren)
+				if (c.type === "type_identifier" || c.type === "identifier") {
+					t = c.text;
+					break;
+				}
+		}
+		out.push({ name: nm.text, type: t });
+	}
+	return out;
+}
+
+const PRIMITIVE_TYPES = new Set(["string", "number", "boolean", "void", "null", "undefined", "never", "unknown", "any", "bigint", "symbol"]);
+
+/** Тип внутри type_annotation/return_type: первый type_identifier; Promise<T>/PromiseLike<T> → T (не-примитив). */
+function typeOfAnnotation(rt: TsNode): string | null {
+	let head: string | null = null;
+	let args: TsNode | null = null;
+	for (const c of rt.namedChildren) {
+		if (c.type === "type_identifier" || c.type === "identifier") {
+			if (!head) head = c.text;
+		} else if (c.type === "type_arguments" || c.type === "type_parameters") {
+			args = c;
+		} else {
+			const inner = typeOfAnnotation(c);
+			if (inner && !head) head = inner;
+		}
+	}
+	if (!head) return null;
+	// дженерики: Promise<Foo> / PromiseLike<Foo> → Foo (первый не-примитивный аргумент)
+	if (head === "Promise" || head === "PromiseLike") {
+		if (args) {
+			for (const a of args.namedChildren)
+				if ((a.type === "type_identifier" || a.type === "identifier") && !PRIMITIVE_TYPES.has(a.text)) return a.text;
+		}
+		return null; // Promise<примитив>/без аргументов — не класс
+	}
+	return head;
 }
 
 /** Возвратное выражение: первое «return new X» в теле → X (нет аннотации типа). */
@@ -113,17 +164,6 @@ function firstReturnCall(node: TsNode): string | null {
 		return null;
 	};
 	return walk(body, 0);
-}
-
-/** Явный возвратный тип: первый type_identifier/identifier (Foo, Foo<T> → Foo). */
-function returnTypeOf(rt: TsNode, depth = 0): string | null {
-	if (depth > 3) return null;
-	for (const c of rt.namedChildren) {
-		if (c.type === "type_identifier" || c.type === "identifier") return c.text;
-		const r = returnTypeOf(c, depth + 1);
-		if (r) return r;
-	}
-	return null;
 }
 
 function nameChild(node: TsNode, types: string[]): string | null {
@@ -241,9 +281,10 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 				const name = nameChild(node, ["identifier"]);
 				if (name) {
 					nextCaller = addSymbol(node, name, "function", isExportedAncestor(node));
+					for (const pt of collectParamTypes(node)) if (pt.type) vars.set(pt.name, { kind: "type", name: pt.type });
 					const rt = node.childForFieldName?.("return_type");
 					if (rt) {
-						const t = returnTypeOf(rt);
+						const t = typeOfAnnotation(rt);
 						if (t) fnReturns.set(name, t);
 					}
 					if (!fnReturns.has(name)) {
@@ -261,6 +302,7 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 				const name = nameChild(node, ["property_identifier", "private_property_identifier", "string"]);
 				if (name && className) {
 					nextCaller = addSymbol(node, name, "method", isExportedAncestor(node), `${className}.${name}`);
+					for (const pt of collectParamTypes(node)) if (pt.type) vars.set(pt.name, { kind: "type", name: pt.type });
 				}
 				break;
 			}
@@ -273,12 +315,14 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 			}
 			case "variable_declarator": {
 				const name = nameChild(node, ["identifier", "object_pattern"]);
-				const value = node.childForFieldName?.("value");
+				let value = node.childForFieldName?.("value");
+				// const p = await f() → тип аргумента await
+				if (value?.type === "await_expression") value = value.namedChildren[0];
 				if (name && value && (value.type === "arrow_function" || value.type === "function_expression")) {
 					nextCaller = addSymbol(node, name, "function", isExportedAncestor(node));
 					const rt = value.childForFieldName?.("return_type");
 					if (rt) {
-						const t = returnTypeOf(rt);
+						const t = typeOfAnnotation(rt);
 						if (t) fnReturns.set(name, t);
 					}
 					if (!fnReturns.has(name)) {
@@ -289,6 +333,7 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 							if (rc) returnCalls.set(name, rc);
 						}
 					}
+					for (const pt of collectParamTypes(value)) if (pt.type) vars.set(pt.name, { kind: "type", name: pt.type });
 				}
 				// Тип-подсказка для member-вызовов: const x = new Foo(...) / Foo(...) / y
 				if (name && typeof name === "string" && value) {
@@ -302,6 +347,17 @@ function extractJsTs(file: RepoFile, tree: Tree): ExtractedFile {
 						if (f?.type === "identifier") vars.set(name, { kind: "call", name: f.text });
 					} else if (value.type === "identifier") {
 						vars.set(name, { kind: "ident", name: value.text });
+					}
+				}
+								// Тип-аннотация: const x: Foo — авторитетнее инференса из value (перекрывает new/call)
+				if (name && typeof name === "string") {
+					const ty = node.childForFieldName?.("type");
+					if (ty) {
+						for (const c of ty.namedChildren)
+							if (c.type === "type_identifier" || c.type === "identifier") {
+								vars.set(name, { kind: "type", name: c.text });
+								break;
+							}
 					}
 				}
 				break;

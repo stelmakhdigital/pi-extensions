@@ -52,7 +52,7 @@ export async function buildGraph(root: string): Promise<Graph> {
 	const resolveVia = (via: { kind: string; name: string }, ex: (typeof extracted)[number], seen: Set<string>): string | null => {
 		if (seen.has(via.name)) return null;
 		seen.add(via.name);
-		if (via.kind === "new") return via.name;
+		if (via.kind === "new" || via.kind === "type") return via.name; // type: явная аннотация
 		if (via.kind === "call") {
 			// возвратный тип функции (явная аннотация): const x = f(); x.m() → Foo.m
 			const ret = ex.fnReturns.get(via.name);

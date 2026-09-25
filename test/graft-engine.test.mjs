@@ -56,6 +56,11 @@ export function usePair2(): string { const p2 = mkPair2(); return p2.get(); }
 export function pairBase(): Pair { return new Pair(); }
 export function pairWrap(): Pair { return pairBase(); }
 export function usePair3(): string { const p3 = pairWrap(); return p3.get(); }
+export function mkAsyncPair(): Promise<Pair> { return Promise.resolve(new Pair()); }
+export async function useAsyncPair(): Promise<Pair> { const pa = await mkAsyncPair(); return pa; }
+export class Greeter { hi(): string { return "hi"; } }
+export function greet(g: Greeter): string { return g.hi(); }
+export function typedGreet(): string { const g: Greeter = new Greeter(); return g.hi(); }
 `);
 mkfile("main.mjs", `import { start, Engine } from "./src/app.js";
 export function go() { return start(); }
@@ -224,6 +229,11 @@ await check("edges: импорты + references + calls", () => {
 		assert(edge("svc.lua#Service.run", "svc.lua#Service.helper"), "lua self:helper");
 		// return-вызов: pairWrap → return pairBase() → Pair
 		assert(edge("src/util.ts#usePair3", "src/util.ts#Pair.get"), "transitive: usePair3→Pair.get");
+		// дженерики: Promise<Pair> → Pair; await mkAsyncPair() → Pair
+		assert(!edge("src/util.ts#useAsyncPair", "src/util.ts#Pair.get"), "без .m() — нет ребра");
+		// типизированные: параметр g: Greeter / const g: Greeter
+		assert(edge("src/util.ts#greet", "src/util.ts#Greeter.hi"), "param g: Greeter → g.hi");
+		assert(edge("src/util.ts#typedGreet", "src/util.ts#Greeter.hi"), "const g: Greeter → g.hi");
 	});
 
 const q = engine.makeQueries(root);

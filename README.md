@@ -125,8 +125,9 @@ blast radius после write/edit, бейдж свежести и команд�
 Вне репо с построенным графом расширение молчит.
 
 **Graft-движок встроён в пакет** (`engine/graft/`): собственный движок кодового графа
-(web-tree-sitter + wasm-грамматики, 15 языков: TS/JS/Python — полная двухпроходная экстракция
-с member-цепочками и возвратными типами/выражениями, Go/Rust/C/C++/Shell/Java/C#/Kotlin/Ruby/PHP/Swift —
+(web-tree-sitter + wasm-грамматики, 18 языков: TS/JS/Python — полная двухпроходная экстракция
+с member-цепочками, возвратными типами/выражениями/вызовами, дженериками (Promise<T>) и
+типизированными локальными; Go/Rust/C/C++/Shell/Java/C#/Kotlin/Ruby/PHP/Swift/Dart/Scala/Lua —
 структура + именованные вызовы), LLM-обогащение (deep: summaries + crux,
 только по явной конфигурации), concept-темы, собственное хранилище
 (`graft/.engine/`, `graft/cards/`, `graft/index.md`) и CLI (`engine/graft/bin/graft.mjs`:

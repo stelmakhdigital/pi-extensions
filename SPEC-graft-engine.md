@@ -102,7 +102,20 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
   показывает `+N файлов/+M символов (кэш a/b)`.
 - Semантика: auto-deep — «тихое» обновление по дрейфу; `build deep` остаётся явным
   (первый запуск / полный аудит). Концепты при auto-deep пересобираются (кэш по hash summaries).
-- Остаток беклога: дженерики/return-цепи >3 хопов, прочие языки (100+ грамматик).
+### 2g. v1.6 (2026-09-24, бэклог-итерация 5: дженерики — финальная)
+- **Дженерики в возвратных типах**: `typeOfAnnotation` — `Promise<T>`/`PromiseLike<T>` →
+  первый не-примитивный аргумент T (`Promise<string>` → null, `Foo<T>` → Foo как и раньше).
+- **Типизированные локальные**: `const x: Foo = …` — аннотация переменной (authoritative,
+  перекрывает инференс из value); параметры функций/методов/стрелок `function f(o: Foo)` →
+  `collectParamTypes` (required/optional/formal_parameter, type_annotation child);
+  PendingVia + kind "type" (resolveVia: сразу класс).
+- **await**: `const p = await f()` — value-unwrap await_expression → вызов под ним
+  (f → fnReturns, т.е. Promise-unwrapped тип).
+- Сценарии: `async function use(): Promise<Pair> { const p = await mkPair(); p.get(); }`
+  → edge use→Pair.get; `function greet(g: Greeter) { g.hi(); }` → greet→Greeter.hi.
+- Ограничения (осознанные): vars — file-уровень (не per-function scope); return-цепи ≤3 хопов;
+  Array/Map-элементы не инферятся (semантика: значение выражения — не элемент).
+- **Бэклог графта закрыт** (итерации v1.1–v1.6); остаток — только «ещё языки» по спросу.
 - `parse/` — загрузка web-tree-sitter + wasm (deps: `web-tree-sitter`, `tree-sitter-wasm`);
   парсинг → дерево; кэш парсинга в памяти на сессию.
 - `symbols.ts` — узлы: функции/классы/методы/типы/константы-экспорты, span, signature,
