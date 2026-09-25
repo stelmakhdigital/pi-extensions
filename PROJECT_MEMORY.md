@@ -473,3 +473,11 @@ skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 уз
 - MCP root — env GRFT_MCP_ROOT (не --root).
 - Функциональный MCP-тест в smoke: spawn stdio, JSON-RPC initialize, парсим строку с
   instructions (2 этапа ожидания: первый \n — приветствие, потом 'instructions').
+
+### v2.7 (/graft stats) ГОТОВО, smoke 58 (2026-09-25)
+- Сводка: readAllMetrics() (readdir по metricsDir, битые .json → пропуск) +
+  aggregateMetrics(files, fromTs); «Сегодня» — с 00:00 локального, остальное — скользящее.
+  /graft stats → notify-отчёт (4 строки); обычный /graft — строка «Сводка за 7 дней»,
+  только если calls>0. Описания команды расширено.
+- Урок: smoke-стаб registerCommand сохраняет {name, def} — вызов через
+  `pi.commands.find(...).def.handler`, не `.handler`.
