@@ -45,7 +45,7 @@ const TOOLS = [
 		description: "Предвычисленные рёбра графа: кто зависит от символа (in) / на что ссылается (out), глубина.",
 		inputSchema: {
 			type: "object",
-			properties: { symbol: { type: "string" }, direction: { enum: ["in", "out"] }, depth: { type: "number" } },
+			properties: { symbol: { type: "string" }, direction: { enum: ["in", "out"] }, depth: { anyOf: [{ type: "number" }, { const: "all" }], description: "transitive depth; all = full closure" } },
 			required: ["symbol"],
 		},
 	},

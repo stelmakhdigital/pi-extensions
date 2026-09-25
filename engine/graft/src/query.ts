@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeSavings } from "./savings.js";
 import { readDeep, readGraph } from "./store.js";
 import { langOf, listRepoPaths } from "./scan.js";
 import type { Graph, GraphNode } from "./types.js";
@@ -25,7 +26,7 @@ function resolveSymbol(g: Graph, name: string): GraphNode | null {
 
 export interface Queries {
 	skeleton: (file: string) => string;
-	callers: (symbol: string, opts?: { direction?: "in" | "out"; depth?: number }) => string;
+	callers: (symbol: string, opts?: { direction?: "in" | "out"; depth?: number | "all" }) => string;
 	map: (opts?: { maxDirs?: number; deep?: boolean }) => string;
 	ask: (query: string) => string;
 	grep: (pattern: string, opts?: { scope?: string; fixed?: boolean; ignoreCase?: boolean }) => string;
@@ -54,6 +55,7 @@ class SourceCache {
 
 export function makeQueries(root: string): Queries {
 	const g = readGraph(root);
+	const sav = makeSavings(root);
 	const deep = readDeep(root);
 	const src = new SourceCache(root);
 	const inDegree = new Map<string, number>();
@@ -84,7 +86,9 @@ export function makeQueries(root: string): Queries {
 			const sum = d && d.hash === s.bodyHash ? `  ${d.summary}` : "";
 			return `- L${s.span.start}-L${s.span.end}  ${s.kind} ${s.name}  ${s.signature ?? ""}${sum}`;
 		});
-		return `graft skeleton: ${target.path}\n${lines.join("\n")}`;
+		const body = `graft skeleton: ${target.path}\n${lines.join("\n")}`;
+		const s = sav.line([target.path], body);
+		return s ? `${s}\n${body}` : body;
 	};
 
 	const walkEdges = (id: string, direction: "in" | "out", depth: number, includeImports = false): Array<{ id: string; via: string[] }> => {
@@ -112,21 +116,25 @@ export function makeQueries(root: string): Queries {
 
 	const callers: Queries["callers"] = (symbol, opts = {}) => {
 		const direction = opts.direction ?? "in";
-		const depth = Math.max(1, Math.min(opts.depth ?? 1, 10));
+		const depth = opts.depth === "all" ? Infinity : Math.max(1, Math.min(opts.depth ?? 1, 10));
+		const depthLabel = depth === Infinity ? "all" : String(depth);
 		const node = resolveSymbol(g, symbol);
 		if (!node) return `graft callers: символ «${symbol}» не найден в графе`;
 		const hits = walkEdges(node.id, direction, depth);
 		const head =
 			direction === "in"
-				? `graft callers (in, depth ${depth}): ${nodeLabel(node)} — кто зависит`
-				: `graft callees (out, depth ${depth}): ${nodeLabel(node)} — на что ссылается`;
+				? `graft callers (in, depth ${depthLabel}): ${nodeLabel(node)} — кто зависит`
+				: `graft callees (out, depth ${depthLabel}): ${nodeLabel(node)} — на что ссылается`;
 		if (hits.length === 0) return head + "\n— (не найдено)";
 		const lines = hits.map((h) => {
 			const n = nodeById.get(h.id)!;
 			const deg = direction === "in" ? inDegree.get(n.id) ?? 0 : outDegree.get(n.id) ?? 0;
 			return `← ${n.name} (${n.path}:L${n.span.start}) [in:${deg}]`.replace(/^←/, direction === "in" ? "←" : "→");
 		});
-		return [head, ...lines].join("\n");
+		const body = [head, ...lines].join("\n");
+		const covered = [...new Set(hits.map((h) => nodeById.get(h.id)!.path))];
+		const s = sav.line(covered, body);
+		return s ? `${s}\n${body}` : body;
 	};
 
 	const map: Queries["map"] = (opts = {}) => {
@@ -250,7 +258,10 @@ export function makeQueries(root: string): Queries {
 			}
 			return out;
 		});
-		return `graft ask: «${query}»\n${lines.join("\n")}`;
+		const body = `graft ask: «${query}»\n${lines.join("\n")}`;
+		const covered = [...new Set(top.map(({ n }) => n.path))];
+		const s = sav.line(covered, body);
+		return s ? `${s}\n${body}` : body;
 	};
 	const askJson: Queries["askJson"] = (query) => {
 		const scored = askScore(query);
@@ -320,7 +331,9 @@ export function makeQueries(root: string): Queries {
 				lines.push(`    L${h.line}  ${h.text}${h.sym ? `  [in ${h.sym.name}]` : ""}`);
 			}
 		}
-		return lines.join("\n");
+		const body = lines.join("\n");
+		const s = sav.line(files, body);
+		return s ? `${s}\n${body}` : body;
 	};
 
 	const check = async () => {

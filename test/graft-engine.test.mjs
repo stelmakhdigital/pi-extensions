@@ -61,6 +61,10 @@ export async function useAsyncPair(): Promise<Pair> { const pa = await mkAsyncPa
 export class Greeter { hi(): string { return "hi"; } }
 export function greet(g: Greeter): string { return g.hi(); }
 export function typedGreet(): string { const g: Greeter = new Greeter(); return g.hi(); }
+export function f1(): number { return 1; }
+export function f2(): number { return f1(); }
+export function f3(): number { return f2(); }
+export function f4(): number { return f3(); }
 `);
 mkfile("main.mjs", `import { start, Engine } from "./src/app.js";
 export function go() { return start(); }
@@ -167,13 +171,17 @@ end
 function Service:helper()
 end
 `);
+// savings-фикстуры: большой файл (>4KB) и крошечный (<100 tok)
+const biglibSrc = `export function giant(x: string): string {\n\t// ${"pad".repeat(1000)}\n\treturn x;\n}`;
+mkfile("biglib.ts", biglibSrc);
+mkfile("tiny.ts", `export function tiny(): number { return 1; }\n`);
 execFileSync("git", ["add", "-A"], { cwd: root });
 execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: root });
 
 // ── build ──
 const report = await engine.build(root);
 await check("build: базовые счётчики", () => {
-	assert(report.files === 16, `files=${report.files}`);
+	assert(report.files === 18, `files=${report.files}`);
 	assert(report.nodes > 10, `nodes=${report.nodes}`);
 	assert(report.edges >= 5, `edges=${report.edges}`);
 });
@@ -270,9 +278,25 @@ await check("callers in/out/depth", () => {
 	assert(missing.includes("не найден"), missing);
 });
 
+await check("callers depth all — полное замыкание", () => {
+	const d1 = q.callers("f1");
+	assert(d1.includes("f2") && !d1.includes("f3"), "depth1: только f2: " + d1);
+	const dall = q.callers("f1", { depth: "all" });
+	assert(dall.includes("f2") && dall.includes("f3") && dall.includes("f4"), "all: f2/f3/f4: " + dall);
+});
+
+await check("savings: [graft] tokens saved на больших файлах, тишина на малых", () => {
+	const big = q.skeleton("biglib.ts");
+	assert(big.startsWith("[graft] tokens saved"), "big: " + big.slice(0, 80));
+	const ask = q.ask("giant");
+	assert(ask.startsWith("[graft] tokens saved"), "ask: " + ask.slice(0, 80));
+	const tiny = q.skeleton("tiny.ts");
+	assert(!tiny.includes("tokens saved"), "tiny без строки: " + tiny);
+});
+
 await check("map", () => {
 	const out = q.map();
-	assert(out.startsWith("repo map — 16 files"), out);
+	assert(out.startsWith("repo map — 18 files"), out);
 	assert(out.includes("hubs (in-degree):"), out);
 	assert(out.includes("run_task"), out);
 });

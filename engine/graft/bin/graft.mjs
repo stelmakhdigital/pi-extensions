@@ -127,7 +127,7 @@ switch (cmd) {
 		await engine.ensureFresh(root);
 		const q = engine.makeQueries(root);
 		const d = optVal("-d") ?? optVal("--depth");
-		console.log(q.callers(symbol, { direction: optVal("--direction") ?? "in", depth: d ? Number(d) : undefined }));
+		console.log(q.callers(symbol, { direction: optVal("--direction") ?? "in", depth: d === "all" ? "all" : Number(d) }));
 		break;
 	}
 	case "skeleton": {

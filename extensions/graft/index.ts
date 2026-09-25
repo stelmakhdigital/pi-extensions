@@ -115,12 +115,25 @@ export default function graftExtension(pi: ExtensionAPI) {
 			}
 			const cov = Math.round(deepCoverage(root) * 100);
 			const deepPart = cov > 0 ? ` · ${cov}% deep` : "";
-			if (!st.ok) ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `graft: ⚠ ${st.stale} stale${st.added ? ` +${st.added} new` : ""}${deepPart}`));
-			else ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", `graft: synced${deepPart}`));
+			const savedPart = savingsSession.tokens > 0 ? ` · ≈${fmtTok(savingsSession.tokens)} tok saved` : "";
+			if (!st.ok) ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", `graft: ⚠ ${st.stale} stale${st.added ? ` +${st.added} new` : ""}${deepPart}${savedPart}`));
+			else ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", `graft: synced${deepPart}${savedPart}`));
 		} catch {
 			// тихо
 		}
 	}
+
+	/** Сессионный накопитель «tokens saved» (строка [graft] tokens saved ≈ в выводах тулов). */
+	interface SavingsSession { tokens: number; calls: number }
+	const savingsSession: SavingsSession = (globalThis as Record<string, unknown>).__graftSavings ??= { tokens: 0, calls: 0 };
+	const recordSavings = (out: string): void => {
+		const m = /\[graft\] tokens saved ≈ ([\d,]+)/.exec(out);
+		if (m) {
+			savingsSession.tokens += parseInt(m[1].replace(/,/g, ""), 10);
+			savingsSession.calls++;
+		}
+	};
+	const fmtTok = (n: number): string => (Math.round(n / 1000) >= 100 ? `${Math.round(n / 1000)}k` : n.toLocaleString("en-US"));
 
 	/** «syncing…» на время тихой пересборки (сбрасывается в refreshBadge). */
 	function setSyncingBadge(ctx: ExtensionContext): void {
@@ -134,7 +147,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 		label: "graft_ask",
 		description:
 			"Ранжированный запрос к графу Graft: подходящие символы/ноды с точными file:line и кодом (детерминированный поиск, без LLM). Для понимания «как это работает / где это лежит». Для исчерпывающего «все вхождения» используй graft_grep.",
-		promptSnippet: "Ranked lookup in the local Graft code graph (nodes with file:line, $0, deterministic).",
+		promptSnippet: "Ranked lookup in the local Graft code graph (nodes with file:line, $0, deterministic). Retrieval outputs open with a [graft] tokens saved ≈ N line; when you used graft tools in a turn, close your reply with one line: 🌱 graft saved ~N tokens this turn (M calls) — the sum of those lines. Never pipe graft output through head/tail/sed.",
 		parameters: Type.Object({
 			query: Type.String({ description: "Вопрос или набор идентификаторов (символ, строка ошибки, имя файла)" }),
 			source: Type.Optional(Type.Boolean({ description: "(унаследованный флаг; выдача и так включает сниппеты) Включить кодовые пролёты" })),
@@ -147,6 +160,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			try {
 				await ensureFresh(root);
 				let out = makeQueries(root).ask(params.query);
+				recordSavings(out);
 				if (params.scope) {
 					const prefix = params.scope.endsWith("/") ? params.scope : `${params.scope}/`;
 					out = out.split("\n").filter((l) => !l.includes(prefix) || l.includes("graft ask")).join("\n");
@@ -176,6 +190,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			try {
 				await ensureFresh(root);
 				const out = makeQueries(root).grep(params.pattern, { scope: params.scope, fixed: params.fixed, ignoreCase: params.ignoreCase });
+				recordSavings(out);
 				return toolResult(cap(out, maxOut()), { cmd: `graft grep ${params.pattern}` });
 			} catch (e) {
 				return toolResult(`graft grep: ${(e as Error).message}`, { error: "query" });
@@ -187,12 +202,12 @@ export default function graftExtension(pi: ExtensionAPI) {
 		name: "graft_callers",
 		label: "graft_callers",
 		description:
-			'Точные предвычисленные рёбра графа Graft: кто вызывает/использует символ (direction: "in", по умолчанию) или на что сам ссылается (direction: "out"). depth — транзитивное обхождение (blast radius).',
+			'Точные предвычисленные рёбра графа Graft: кто вызывает/использует символ (direction: "in", по умолчанию) или на что сам ссылается (direction: "out"). depth — транзитивное обхождение (blast radius), depth: "all" — полное замыкание (для refactoring/rename).',
 		promptSnippet: "Exact dependency edges from the Graft graph (callers/callees, transitive depth).",
 		parameters: Type.Object({
 			symbol: Type.String({ description: "Имя символа (функция, класс, метод)" }),
 			direction: Type.Optional(Type.Union([Type.Literal("in"), Type.Literal("out")], { description: "in (по умолчанию): кто зависит; out: на что зависит" })),
-			depth: Type.Optional(Type.Number({ description: "Глубина транзитивного обхода (blast radius)" })),
+			depth: Type.Optional(Type.Union([Type.Number({ minimum: 1, maximum: 10 }), Type.Literal("all")], { description: "Глубина транзитивного обхода (blast radius); all — полное замыкание (для refactoring/rename)" })), 
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const root = rootOf(ctx);
@@ -200,6 +215,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			try {
 				await ensureFresh(root);
 				const out = makeQueries(root).callers(params.symbol, { direction: params.direction, depth: params.depth });
+				recordSavings(out);
 				return toolResult(cap(out, maxOut()), { cmd: `graft callers ${params.symbol}` });
 			} catch (e) {
 				return toolResult(`graft callers: ${(e as Error).message}`, { error: "query" });
@@ -222,6 +238,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			try {
 				await ensureFresh(root);
 				const out = makeQueries(root).skeleton(params.file);
+				recordSavings(out);
 				return toolResult(cap(out, maxOut()), { cmd: `graft skeleton ${params.file}` });
 			} catch (e) {
 				return toolResult(`graft skeleton: ${(e as Error).message}`, { error: "query" });
