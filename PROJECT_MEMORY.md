@@ -189,7 +189,7 @@ Live-интеграция v2 (tmux 3.6, локальная LLM): doctor — вс
 sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог событий.
 
 ## GRAFT-ENGINE (задача от 2026-09-24: свой движок вместо @nanonets/graft)
-**v1 + v1.1 + v1.2 ГОТОВО (2026-09-24). Коммиты: ef48083 (v1), 092ca7c (v1.1); v1.2 — pending.**
+**v1–v1.3 ГОТОВО (2026-09-24). Коммиты: ef48083 (v1), 092ca7c (v1.1), 4f3399b (v1.2); v1.3 — pending.**
 
 ### Что есть
 - `engine/graft/` (TS, tsc strict, 14 модулей): scan (git ls-files + untracked; языки:
@@ -209,7 +209,7 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
   корень = env `GRFT_MCP_ROOT` ?? cwd; ноль внешних зависимостей (jiti + движок).
 - `extensions/graft`: тонкий адаптер (jiti, без spawn): 7 тулзов, `<graft>` (TTL 120 с,
   map без deep), blast-хук (diff-ориентированный, по write/edit + 60 с), бейдж, `/graft build [deep]`.
-- Репо-граф: 32 файла / 431 узел / 410 рёбер (после v1.2); deep v1 (cat-vllm) сохранён в deep.json
+- Репо-граф: 32 файла / 433 узла / 412 рёбер (после v1.3); deep v1 (cat-vllm) сохранён в deep.json
   (crux пересоберутся при следующем deep-прогоне по-новому).
 
 ### Баги/факты (уроки)
@@ -228,6 +228,10 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
    namedChildren[0] (this идёт первым).
 10. short-name fallback: базовое имя вызова (helper) резолвится в qualified-метод того же
    файла (иначе byName с ключом «T.m» никогда не попадается по имени «m»).
+11. php: имя класса/метода = нода типа «name»; enclosingClassName должна учитывать её
+    (иначе qualified = null). ruby: callee вызова `obj.helper` — ПОСЛЕДНИЙ identifier.
+12. TS arrow с expression-body: поле body arrow_function = само выражение (new_expression) —
+    для inferred return тянуть childForFieldName("body") с arrow, а не с declarator.
 
 ### v1.2 (беклог, 2026-09-24)
 1. **Type inference v1**: `extract.fnReturns` — явные return-типы TS/JS (function_declaration и
@@ -249,7 +253,17 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
   viz; MCP spawn roundtrip (3 запроса).
 - 52 smoke, 36 subagents — без регрессов. tsc strict — чисто.
 
+### v1.3 (беклог 2, 2026-09-24)
+1. **Возвратные выражения**: `inferredReturn` — первое «return new X» в теле (и expression-body
+   `=> new X()`); без аннотации. Только new-конструкторы (надежно).
+2. **Языки +3**: Ruby (class/method, call + bare identifier в body_statement, calleeFrom
+   lastIdent), PHP (class/method qualified, function_call/member_call expression, имя-нода «name»),
+   Swift (class/func qualified, call_expression: simple_identifier | navigation_expression —
+   последний ident). Механика extractOther: callNodes[], calleeFrom, bareIdentCall;
+   enclosing class: class_declaration/object_declaration/class (ruby).
+3. Движок: **15 языков** (ts/tsx/js/mjs/cjs/py + go/rust/c/cpp/sh/java/csharp/kotlin/ruby/php/swift).
+
 ### Осталось
-- Live smoke v1.2 (быстрый, через pi -p или tmux) + коммит v1.2 (по команде пользователя).
-- Бэклог дальше: full type inference (возвратные выражения, дженерики), авто-refresh deep,
-  другие языки (ruby/php/swift — грамматики в tree-sitter-wasm есть, 100+).
+- Live smoke v1.3 (быстрый) + коммит v1.3 (по команде пользователя).
+- Бэклог дальше: full type inference (return-вызовы, дженерики), авто-refresh deep
+  (фактически уже: bodyHash-кэш + build deep), прочие языки (100+ грамматик в tree-sitter-wasm).

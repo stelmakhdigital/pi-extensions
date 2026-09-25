@@ -118,3 +118,6 @@
 - [x] v1.2 (2026-09-24, бэклог): type inference v1 (возвратные типы TS/JS → f().m()),
       языки +3 (Java/C#/Kotlin), concepts-fallback без LLM (root по языку, каталоги, «прочее»);
       unit 20/20 (fixtures java/cs/kt, fnReturns, fallback)
+- [x] v1.3 (2026-09-24, бэклог 2): возвратные выражения (return new X, incl. => new X),
+      языки +3 (Ruby/PHP/Swift; callNodes[], calleeFrom lastIdent, bareIdentCall);
+      unit 20/20 (fixtures rb/php/swift, inferred return)
