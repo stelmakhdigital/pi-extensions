@@ -501,7 +501,9 @@ async function watchTick(): Promise<void> {
 		// Stale-but-alive panes: check the terminal sentinel occasionally (crash fallback).
 		// shouldCheckSentinel also covers children that died before writing any snapshot.
 		if (shouldCheckSentinel(r, now, config) && tickCount % 5 === 0) {
-			const tail = await ensureBackend().captureTail(r.surface, 6);
+			// The pane's visible area is taller than the sentinel's offset from the bottom
+			// (prompt block + empty lines below it), so capture the whole visible area.
+			const tail = await ensureBackend().captureTail(r.surface, 100);
 			const match = tail.match(EXIT_SENTINEL_RE);
 			if (match) {
 				const code = Number(match[1]);
