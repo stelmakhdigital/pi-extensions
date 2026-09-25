@@ -202,3 +202,10 @@
       и сети: последняя сессия по ts, доля графа, токены сэкономлено/прочитано,
       🌱-доля) — parity с их `graft stats` (local session JSON, no network)
       unit 38, smoke 64
+- [x] v2.13 (2026-09-25, сабмодули): `graft build --follow-submodules`
+      сворачивает инициализированные gitlink'и в один граф с префиксом путей
+      (deps/parser/src/index.ts), уважая .gitignore самого сабмодуля
+      (git ls-files внутри); `--no-follow-submodules` — дефолт; выбор
+      персистится в graft/.engine/config.json (авто-рефреш/MCP/build без флага
+      ведут себя одинаково); drift-report тоже следует за конфигом
+      unit 39 (тест на реальном git submodule)

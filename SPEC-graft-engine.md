@@ -371,3 +371,13 @@ Push-пакет = топ-3 указателя `path:Lstart-Lend  name`, без �
 - `/graft stats` — строка Usage mix (если были source-reads).
 - CLI `graft stats [--json]` — без графа и сети (локальный JSON последней
   сессии): вызовы/экономия, source-reads/прочитано, usage mix, 🌱-доля.
+
+### 2x. v2.13 (сабмодули: --follow-submodules)
+- `graft build --follow-submodules`: инициализированные gitlink'и
+  (mode 160000 из `git ls-files -s`) сворачиваются в граф с префиксом путей
+  (`deps/parser/src/index.ts`); tracked+untracked берутся внутри сабмодуля
+  (его индекс и его `.gitignore`). `--no-follow-submodules` — дефолт.
+  Выбор персистится в `graft/.engine/config.json`; build без флага,
+  drift-отчёт и авто-рефреш читают сохранённое — поведение не разъезжается.
+  Незаинициализированные сабмодули не участвуют. Рёбра «я ↔ субмодуль»
+  разрешаются как обычные (пути с префиксом в knownPaths).

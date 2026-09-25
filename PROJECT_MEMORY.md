@@ -568,3 +568,26 @@ skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 уз
   tokensSaved/sourceReads/sourceTokensRead/graphSharePct/graftTurns/reportedTurns.
 - /graft stats: строка «Usage mix: N% граф / M% прямой source-read (K read, ≈T tok)»
   только если sr>0 (не шуметь, пока модель не читала напрямую).
+
+### v2.13 (follow-submodules) ГОТОВО, engine 39 (2026-09-25)
+- scan.ts: submodulePaths(root) — gitlink'и из `git ls-files -s` (рега
+  ^160000 <sha> N\tpath$); listRepoPaths(root, follow) — для каждого сабмодуля
+  git ls-files (+untracked) внутри его корня с префиксом <sub>/ (его индекс и
+  ЕГО .gitignore — «honor each submodule's own Git ignore rules»).
+  Незаинициализированный сабмодуль: git в пустом каталоге ошибается → gitLines
+  [] → не участвует.
+- Конфиг: graft/.engine/config.json {followSubmodules} (gitignored с кэшем).
+  readBuildConfig/writeBuildConfig (scan.ts, реэкспорт из index.ts).
+  Семантика: opts.followSubmodules !== undefined → ЯВНЫЙ выбор → персистится;
+  undefined → читать сохранённое (дефолт false). driftReport (refresh.ts)
+  читает конфиг — иначе fingerprint-дрейф «качёл бы» между ручным и
+  auto-сборкой.
+- buildGraph(root, {followSubmodules}) → scanRepo + detectScopes (scope'ы
+  сабмодулей видны маркерами их package.json и т.п.).
+- Уроки:
+  * `git commit -am` НЕ стейдит новые (untracked) файлы — в тестах git add -A.
+  * Git ≥2.38.1: `git submodule add` с локальным путём падает «transport 'file'
+    not allowed» — нужен -c protocol.file.allow=always (в тесте и в
+    инструкциях пользователю).
+  * Ассерты по grep-выдаче: snippet строки кода содержит подстроки путей
+    из импортов — проверять ПОЛНЫЙ путь файла (…/index.ts), не префикс.

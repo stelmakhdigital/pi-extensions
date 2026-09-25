@@ -36,6 +36,7 @@
 | Лимит результатов | `graft ask … -n N` / `graft_ask.limit` / MCP `n`: 1–50, дефолт 12 |
 | Проза-ноды | `graft build --deep` генерирует нарратив «как это устроено» (10–20 строк, LLM, кэш по hash файлов темы) в `graft/prose/<slug>.md`; `ask` сам подсовывает совпавшие ноды; `graft prose` — список |
 | Usage mix | Счётчик прямых source-reads (тул `read`; читы `graft/*` не считаются): строка «Usage mix: N% граф / M% прямой source-read» в `/graft stats` и в CLI `graft stats [--json]` (без графа и сети — локальный JSON последней сессии) |
+| Сабмодули | `graft build --follow-submodules` — инициализированные gitlink'и в одном графе с префиксом путей (`deps/parser/src/index.ts`), `.gitignore` сабмодуля уважается; `--no-follow-submodules` — дефолт; выбор персистится (`graft/.engine/config.json`), авто-рефреш и MCP следуют за ним. Примечание: git ≥2.38 — `submodule add` с локальным путём требует `-c protocol.file.allow=always` |
 | Сессионные метрики | `~/.local/state/pi-graft/metrics/<sessionId>.json` (calls/tokens; env `GRFT_STATE_DIR`); строка «Сессия: …» в `/graft`; если в ходе были savings без отчёта «🌱» — одноразовое напоминание в секции |
 | Сводка экономии | `/graft stats` — по всем сессиям: сегодня / 7 дней / 30 дней / всего (вызовы + ≈токены); строка «Сводка за 7 дней» в обычный `/graft` |
 | Compliance-tally | `/graft stats` показывает «🌱-отчёт в ответе: X из Y graft-ходов» (доля ходов, где модель отчиталась об экономии) |
