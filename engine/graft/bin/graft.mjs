@@ -2,7 +2,7 @@
 /**
  * graft (pi-graft-engine) — CLI для рук.
  *
- *   node engine/graft/bin/graft.mjs build [--deep] [dir]
+ *   node engine/graft/bin/graft.mjs build [--deep] [--follow-submodules | --no-follow-submodules] [dir]
  *   node engine/graft/bin/graft.mjs map [dir]
  *   node engine/graft/bin/graft.mjs ask <query> [dir]
  *   node engine/graft/bin/graft.mjs grep <pattern> [--scope <p>] [--fixed] [-i] [dir]
@@ -86,10 +86,14 @@ const root = resolve(process.cwd(), optVal("--dir") ?? ".");
 switch (cmd) {
 	case "build": {
 		const withDeep = optFlag("--deep") || optFlag("--deep-llm") || rest.includes("deep");
-		console.log(`graft build: ${root}${withDeep ? " (+deep LLM)" : ""}`);
+		// Сабмодули: явный флаг персистится в graft/.engine/config.json (авто-рефреш
+		// и MCP будут вести себя так же); без флага — сохранённое (дефолт: выкл).
+		const follow = optFlag("--follow-submodules") ? true : optFlag("--no-follow-submodules") ? false : undefined;
+		console.log(`graft build: ${root}${withDeep ? " (+deep LLM)" : ""}${follow ? " (+сабмодули)" : ""}`);
 		const t0 = Date.now();
 		const rep = await engine.build(root, {
 			deep: withDeep ? deepConfig() : undefined,
+			followSubmodules: follow,
 			onProgress: (m) => console.log("  …", m),
 		});
 		console.log(

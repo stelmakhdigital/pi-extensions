@@ -11,6 +11,7 @@
 import { buildGraph } from "./build.js";
 import { deepBuild, deepCfgFromEnv } from "./deep.js";
 import { proseBuild } from "./prose.js";
+import { readBuildConfig, writeBuildConfig } from "./scan.js";
 import { conceptsBuild } from "./concepts.js";
 import { serveViz, writeViz } from "./viz.js";
 import { writeFingerprint } from "./refresh.js";
@@ -30,7 +31,7 @@ export { lspStatus, lspSync, LSP_SERVERS } from "./lsp.js";
 export { makeQueries } from "./query.js";
 export type { Queries } from "./query.js";
 export type { DeepConfig, Graph, GraphNode, DeepStore } from "./types.js";
-export { scanRepo } from "./scan.js";
+export { readBuildConfig, writeBuildConfig, scanRepo, type BuildConfig } from "./scan.js";
 export { ensureFresh, driftReport, enableAutoRebuild, isRebuilding } from "./refresh.js";
 export { initWiring, uninstallWiring, mcpServerPath } from "./wiring.js";
 export { llmChat } from "./deep.js";
@@ -40,6 +41,8 @@ export interface BuildOptions {
 	onProgress?: (msg: string) => void;
 	/** Auto-refresh deep при структурном build (по умолчанию true; false или GRFT_AUTO_DEEP=0 — выкл). */
 	autoDeep?: boolean;
+	/** Явный выбор по сабмодулям (true/false — и персистится в graft/.engine/config.json); undefined — читать сохранённое. */
+	followSubmodules?: boolean;
 }
 
 export interface BuildReport {
@@ -52,7 +55,9 @@ export interface BuildReport {
 
 /** Пересобрать граф: структурный слой (+ deep при opts.deep). */
 export async function build(root: string, opts: BuildOptions = {}): Promise<BuildReport> {
-	const { graph: g, unresolved } = await buildGraph(root);
+	const follow = opts.followSubmodules ?? readBuildConfig(root).followSubmodules;
+	if (opts.followSubmodules !== undefined) writeBuildConfig(root, { followSubmodules: opts.followSubmodules });
+	const { graph: g, unresolved } = await buildGraph(root, { followSubmodules: follow });
 	writeUnresolved(root, unresolved);
 	writeGraph(root, g);
 	await writeFingerprint(root, g.meta.files.map((f) => f.path), Object.fromEntries(g.meta.files.map((f) => [f.path, f.hash])));

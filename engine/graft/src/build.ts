@@ -9,8 +9,8 @@ export interface BuildGraphResult {
 	unresolved: LspCandidate[];
 }
 
-export async function buildGraph(root: string): Promise<BuildGraphResult> {
-	const files = await scanRepo(root);
+export async function buildGraph(root: string, opts: { followSubmodules?: boolean } = {}): Promise<BuildGraphResult> {
+	const files = await scanRepo(root, opts.followSubmodules === true);
 	if (files.length === 0) {
 		throw new Error("graft-engine: нет файлов для индексации (git ls-files пуст или git недоступен)");
 	}
@@ -126,7 +126,7 @@ export async function buildGraph(root: string): Promise<BuildGraphResult> {
 	});
 
 	void fileById;
-	const rawPaths = await listRepoPaths(root);
+	const rawPaths = await listRepoPaths(root, opts.followSubmodules === true);
 	const scopes = detectScopes(rawPaths);
 	return {
 		graph: {

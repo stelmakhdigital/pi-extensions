@@ -339,6 +339,42 @@ await check("scopeOfPath: имя скоупа по пути", () => {
 	if (scopeOfPath(undefined, "a.ts") !== null) throw new Error("undefined scopes");
 });
 
+await check("submodules: follow-submodules сворачивает gitlink'и (префикс путей, персист, откат)", async () => {
+	const { execFileSync: gf } = await import("node:child_process");
+	const sub = mkdtempSync(join(tmpdir(), "grft-submod-"));
+	const main = join(sub, "main");
+	const subRepo = join(sub, "parser-repo");
+	mkdirSync(join(main, "src"), { recursive: true });
+	mkdirSync(join(subRepo, "src"), { recursive: true });
+	writeFileSync(join(subRepo, "src", "index.ts"), "export function subFn() { return 42; }\n");
+	gf("git", ["init", "-q", "."], { cwd: subRepo });
+	gf("git", ["add", "-A"], { cwd: subRepo });
+	gf("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "sub"], { cwd: subRepo });
+	writeFileSync(join(main, "src", "a.ts"), 'import { subFn } from "../deps/parser/src/index";\nexport function use() { return subFn(); }\n');
+	gf("git", ["init", "-q", "."], { cwd: main });
+	gf("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init", "--allow-empty"], { cwd: main });
+	gf("git", ["-c", "protocol.file.allow=always", "submodule", "add", subRepo, "deps/parser"], { cwd: main });
+	try {
+		const rep0 = await engine.build(main);
+		let q = engine.makeQueries(main);
+		if (q.grep("subFn").includes("deps/parser/src/index.ts")) throw new Error("без follow файл сабмодуля вне графа: " + q.grep("subFn").slice(0, 300));
+		const rep1 = await engine.build(main, { followSubmodules: true });
+		if (rep1.files <= rep0.files) throw new Error("с follow файлов больше: " + rep0.files + " -> " + rep1.files);
+		q = engine.makeQueries(main);
+		const g = q.grep("subFn");
+		if (!g.includes("deps/parser/src/index.ts")) throw new Error("префикс пути: " + g.slice(0, 300));
+		const skel = q.skeleton("deps/parser/src/index.ts");
+		if (!skel.includes("subFn")) throw new Error("skeleton сабмодульного файла: " + skel.slice(0, 200));
+		if (engine.readBuildConfig(main).followSubmodules !== true) throw new Error("конфиг персистится (true)");
+		await engine.build(main, { followSubmodules: false });
+		if (engine.readBuildConfig(main).followSubmodules !== false) throw new Error("конфиг персистится (false)");
+		q = engine.makeQueries(main);
+		if (q.grep("subFn").includes("deps/parser/src/index.ts")) throw new Error("после no-follow файл сабмодуля вне графа: " + q.grep("subFn").slice(0, 300));
+	} finally {
+		rmSync(sub, { recursive: true, force: true });
+	}
+});
+
 await check("ensureFresh: timeout → stale + фоновая докрутка, single-flight", async () => {
 	const { ensureFresh, driftReport } = engine;
 	const fs = await import("node:fs");

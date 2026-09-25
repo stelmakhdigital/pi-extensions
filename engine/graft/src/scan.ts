@@ -1,7 +1,7 @@
 /** Обход репо: git ls-files (+ untracked), фильтрация, языки. */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Lang, RepoFile } from "./types.js";
 
@@ -79,19 +79,86 @@ export function isIndexablePath(path: string): boolean {
 	return true;
 }
 
-/** Список путей исходников (tracked + untracked, не ignored). */
-export async function listRepoPaths(root: string): Promise<string[]> {
+/** Путь конфигурации build (gitignored вместе с graft/.engine/). */
+const buildConfigPath = (root: string) => join(root, "graft", ".engine", "config.json");
+
+export interface BuildConfig {
+	followSubmodules: boolean;
+}
+
+export function readBuildConfig(root: string): BuildConfig {
+	try {
+		const c = JSON.parse(readFileSync(buildConfigPath(root), "utf8")) as Partial<BuildConfig>;
+		return { followSubmodules: c.followSubmodules === true };
+	} catch {
+		return { followSubmodules: false };
+	}
+}
+
+export function writeBuildConfig(root: string, cfg: BuildConfig): void {
+	try {
+		const p = buildConfigPath(root);
+		const dir = p.slice(0, p.lastIndexOf("/"));
+		// mkdirSync лениво (node:fs уже импортирован readFileSync-модулем — добавим явно ниже)
+		ensureDir(dir);
+		writeFileSync(p, JSON.stringify(cfg));
+	} catch {
+		// тихо: конфиг опционален
+	}
+}
+
+function ensureDir(dir: string): void {
+	try {
+		mkdirSync(dir, { recursive: true });
+	} catch {
+		/* уже есть */
+	}
+}
+
+/** Инициализированные сабмодули (gitlink'и): пути из `git ls-files -s` (mode 160000). */
+export async function submodulePaths(root: string): Promise<string[]> {
+	return new Promise<string[]>((res) => {
+		execFile("git", ["-C", root, "ls-files", "-s"], { maxBuffer: 16 * 1024 * 1024 }, (err: Error | null, stdout: string) => {
+			if (err) return res([]);
+			const out: string[] = [];
+			for (const line of stdout.split("\n")) {
+				const m = line.match(/^160000 [0-9a-f]{40} \d+\t(.+)$/);
+				if (m) out.push(m[1].trim());
+			}
+			res(out);
+		});
+	});
+}
+
+/**
+ * Список путей исходников (tracked + untracked, не ignored).
+ * follow=true: инициализированные сабмодули сворачиваются с префиксом пути
+ * (deps/parser/src/index.ts), уважая .gitignore САМОГО сабмодуля
+ * (git ls-files внутри него — его индекс и его ignore-правила).
+ * Незаинициализированный сабмодуль (пустой каталог) — git не даст файлов, [] .
+ */
+export async function listRepoPaths(root: string, follow = false): Promise<string[]> {
 	const tracked = await gitLines(root, []);
 	const untracked = await gitLines(root, ["--others", "--exclude-standard"]);
-	return [...new Set([...tracked, ...untracked])];
+	const base = [...new Set([...tracked, ...untracked])];
+	if (!follow) return base;
+	const subs = await submodulePaths(root);
+	const out = new Set(base);
+	for (const sub of subs) {
+		const subRoot = join(root, sub);
+		const subTracked = await gitLines(subRoot, []);
+		const subUntracked = await gitLines(subRoot, ["--others", "--exclude-standard"]);
+		for (const p of new Set([...subTracked, ...subUntracked])) out.add(sub + "/" + p);
+	}
+	return [...out];
 }
 
 /**
  * Файлы для индексации. `git ls-files` (tracked) + `--others --exclude-standard` (untracked,
  * не ignored). git недоступен — пустой список (build отвалится с понятной ошибкой).
  */
-export async function scanRepo(root: string): Promise<RepoFile[]> {
-	const paths = await listRepoPaths(root);
+export async function scanRepo(root: string, followSubmodules = false): Promise<RepoFile[]> {
+	const paths = await listRepoPaths(root, followSubmodules);
 	const seen = new Set<string>();
 	const tracked: string[] = paths;
 	void tracked;

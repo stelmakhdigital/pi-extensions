@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { engineDir, hasGraph } from "./store.js";
-import { isIndexablePath, listRepoPaths } from "./scan.js";
+import { isIndexablePath, listRepoPaths, readBuildConfig } from "./scan.js";
 
 const FP_NAME = "fingerprint.json";
 const sha1 = (s: string) => createHash("sha1").update(s).digest("hex");
@@ -61,7 +61,7 @@ export async function driftReport(
 	const fp = readFp(root);
 	if (!fp) return { drifted: true, reason: "нет fingerprint (пересборка)", added: 0, removed: 0, changed: 0 };
 	const useHash = process.env.GRFT_REFRESH === "hash";
-	const list = await listRepoPaths(root);
+	const list = await listRepoPaths(root, readBuildConfig(root).followSubmodules);
 	if (list.length === 0) return { drifted: false, reason: "git недоступен — пропуск", added: 0, removed: 0, changed: 0 };
 	const current = list.filter(isIndexablePath);
 	const curSet = new Set(current);
