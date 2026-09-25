@@ -17,7 +17,7 @@
  * Активно только в репозиториях с построенным графом (graft/.engine/graph.json).
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Type } from "typebox";
@@ -174,6 +174,46 @@ export default function graftExtension(pi: ExtensionAPI) {
 	const GRAFT_TOOL_NAMES = new Set(["graft_ask", "graft_grep", "graft_callers", "graft_skeleton", "graft_map", "graft_check", "graft_blast"]);
 	/** Compliance: был ли graft-тул в ходе сессии с экономией, но без «🌱» в ответе. */
 	let complianceReminder = false;
+	/** Сводка по всем файлам метрик: за период (дни) calls/tokens; 0 = «сегодня с 00:00». */
+	const readAllMetrics = (): MetricsFile[] => {
+		try {
+			const dir = metricsDir();
+			return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
+				try {
+					return [JSON.parse(readFileSync(join(dir, f), "utf8")) as MetricsFile];
+				} catch {
+					return [];
+				}
+			});
+		} catch {
+			return [];
+		}
+	};
+	const aggregateMetrics = (files: MetricsFile[], fromTs: number): { calls: number; tokens: number } => {
+		const agg = { calls: 0, tokens: 0 };
+		for (const m of files) {
+			if ((m.ts ?? 0) >= fromTs) {
+				agg.calls += m.calls ?? 0;
+				agg.tokens += m.tokens ?? 0;
+			}
+		}
+		return agg;
+	};
+	const statsReport = (lines: string[]): void => {
+		const files = readAllMetrics();
+		const dayStart = new Date();
+		dayStart.setHours(0, 0, 0, 0);
+		const row = (label: string, fromTs: number): void => {
+			const agg = aggregateMetrics(files, fromTs);
+			lines.push(`  ${label}: ${agg.calls} вызовов, ≈${fmtTok(agg.tokens)} токенов`);
+		};
+		lines.push(`Сводка экономии (метрики: ${metricsDir()}):`);
+		row("Сегодня", dayStart.getTime());
+		row("7 дней", Date.now() - 7 * 86_400_000);
+		row("30 дней", Date.now() - 30 * 86_400_000);
+		row("Всего", 0);
+		if (files.length === 0) lines.push("  (метрики ещё не записаны — появятся после первых graft-вызовов)");
+	};
 
 	/** «syncing…» на время тихой пересборки (сбрасывается в refreshBadge). */
 	function setSyncingBadge(ctx: ExtensionContext): void {
@@ -516,7 +556,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 	// ---------- Команда /graft ----------
 
 	pi.registerCommand("graft", {
-		description: "Статус Graft: /graft — сводка; /graft build [, deep] — пересобрать граф",
+		description: "Статус Graft: /graft — сводка; /graft stats — экономия по периодам; /graft build [, deep] — пересобрать граф",
 		handler: async (args: string, ctx) => {
 			const root = rootOf(ctx);
 			const parts: string[] = [`Graft: pi-graft-engine (engine/graft, свой движок)`];
@@ -535,7 +575,16 @@ export default function graftExtension(pi: ExtensionAPI) {
 			const m = readMetrics(ctx);
 			if (m) parts.push(`Сессия: ${m.calls} вызовов graft-тулов, ≈${fmtTok(m.tokens)} токенов сэкономлено (метрика на диске, ~/.local/state/pi-graft).`);
 
+			const w7 = aggregateMetrics(readAllMetrics(), Date.now() - 7 * 86_400_000);
+			if (w7.calls > 0) parts.push(`Сводка за 7 дней: ${w7.calls} вызовов, ≈${fmtTok(w7.tokens)} токенов (подробно: /graft stats)`);
+
 			const arg = args.trim();
+			if (arg === "stats" || arg.startsWith("stats ")) {
+				const lines: string[] = [];
+				statsReport(lines);
+				ctx.ui.notify(lines.join("\n"), "info");
+				return;
+			}
 			if (arg.startsWith("build")) {
 				const withDeep = arg.includes("deep");
 				const deepCfg = withDeep ? deepConfigFromEnv() : undefined;

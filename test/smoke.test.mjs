@@ -329,6 +329,34 @@ const ctxGraph = { ...noUiCtx, cwd: fixture };
 		}
 	});
 
+	await check("graft stats: /graft stats — сводка экономии по периодам", async () => {
+		const { mkdtempSync, writeFileSync: wf3 } = await import("node:fs");
+		const { tmpdir: tmpd } = await import("node:os");
+		const state = mkdtempSync(tmpd + "/pi-graft-stats-");
+		const now = Date.now();
+		const D = 86_400_000;
+		wf3(state + "/t0.json", JSON.stringify({ calls: 5, tokens: 1000, ts: now }));
+		wf3(state + "/t6.json", JSON.stringify({ calls: 10, tokens: 5000, ts: now - 6 * D }));
+		wf3(state + "/t40.json", JSON.stringify({ calls: 50, tokens: 90000, ts: now - 40 * D }));
+		wf3(state + "/bad.json", "{не json");
+		const prev = process.env.GRFT_STATE_DIR;
+		process.env.GRFT_STATE_DIR = state;
+		let notified = "";
+		const ctxCap = { ...ctxGraph, ui: { ...noUiCtx.ui, notify: (m) => { notified += m + "\n"; } } };
+		const cmd = pi.commands.find((c) => c.name === "graft").def;
+		try {
+			await cmd.handler("stats", ctxCap);
+		} finally {
+			if (prev === undefined) delete process.env.GRFT_STATE_DIR;
+			else process.env.GRFT_STATE_DIR = prev;
+		}
+		if (!notified.includes("Сводка экономии")) throw new Error("нет заголовка: " + notified.slice(0, 300));
+		const week = notified.match(/7 дн[а-я]*: (\d+) вызов[а-я]*, ≈([\d,]+) токенов/);
+		if (!week || week[1] !== "15" || week[2] !== "6,000") throw new Error("неверные 7 дней: " + (week ? week.join(" ") : notified.slice(0, 300)));
+		const total = notified.match(/Всего: (\d+) вызов[а-я]*, ≈([\d,]+) токенов/);
+		if (!total || total[1] !== "65" || total[2] !== "96,000") throw new Error("неверный итог: " + (total ? total.join(" ") : notified.slice(0, 300)));
+	});
+
 	await check("graft mcp: initialize отдаёт instructions с экономикой", async () => {
 		const { spawn } = await import("node:child_process");
 		const bin = new URL("../engine/graft/bin/graft-mcp.mjs", import.meta.url).pathname;
