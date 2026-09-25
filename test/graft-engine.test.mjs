@@ -308,6 +308,62 @@ await check("ask", () => {
 	assert(none.includes("нет совпадений"), none);
 });
 
+await check("scope/limit: ask {scope, limit}, callers {scope} (--in, -n)", () => {
+	const one = q.ask("helper", { limit: 1 });
+	const hits1 = one.split("\n").filter((l) => /^  \d/.test(l));
+	assert(hits1.length <= 1, "limit=1: " + one.slice(0, 200));
+	const scoped = q.ask("helper", { scope: "src/util.ts" });
+	assert(scoped.includes("src/util.ts"), "хит в scope: " + scoped.slice(0, 200));
+	const noneScope = q.ask("helper", { scope: "no_such_dir_xyz" });
+	assert(noneScope.includes("нет совпадений"), "пустой scope: " + noneScope.slice(0, 150));
+	const cScope = q.callers("helper", { scope: "no_such_dir_xyz" });
+	assert(cScope.includes("в scope") && cScope.includes("вне фильтра"), "callers scope пуст: " + cScope.slice(0, 200));
+	const jScope = q.askJson("helper", { scope: "no_such_dir_xyz" });
+	assert(jScope.count === 0, "askJson scope: count=0");
+});
+
+await check("ask --source: inline-код хитов (≤8 строк span'а)", () => {
+	const out = q.ask("Engine run", { source: true });
+	if (!out.includes("code L")) throw new Error("нет code-блока: " + out.slice(0, 300));
+	if (!out.includes("this.track")) throw new Error("нет кода тела run: " + out.slice(0, 300));
+	const plain = q.ask("Engine run");
+	if (plain.includes("code L")) throw new Error("без source не должно быть кода");
+});
+
+await check("scopeOfPath: имя скоупа по пути", () => {
+	const { scopeOfPath } = engine;
+	const scopes = { backend: ["backend/a.ts", "backend/b/c.ts"], front: ["front/x.ts"] };
+	if (scopeOfPath(scopes, "backend/b/c.ts") !== "backend") throw new Error("вложенный путь");
+	if (scopeOfPath(scopes, "front/x.ts") !== "front") throw new Error("второй скоуп");
+	if (scopeOfPath(scopes, "other/z.ts") !== null) throw new Error("чужой путь должен быть null");
+	if (scopeOfPath(undefined, "a.ts") !== null) throw new Error("undefined scopes");
+});
+
+await check("ensureFresh: timeout → stale + фоновая докрутка, single-flight", async () => {
+	const { ensureFresh, driftReport } = engine;
+	const fs = await import("node:fs");
+	const { execFileSync: gf } = await import("node:child_process");
+	const p = join(root, "fresh-probe.ts"); // scratch-файл: untracked (drift ловит его), индекс НЕ трогаем
+	try {
+		fs.writeFileSync(p, "export const freshMarker42: number = 42;\n");
+		const r1 = await ensureFresh(root, { timeoutMs: 1 });
+		if (r1.refreshed || !r1.stale) throw new Error("ожидался stale (rebuild дольше 1ms): " + JSON.stringify(r1));
+		// ждём фоновую докрутку: дрейф должен уйти
+		let ok = false;
+		for (let i = 0; i < 50 && !ok; i++) {
+			await new Promise((r) => setTimeout(r, 100));
+			ok = !(await driftReport(root)).drifted;
+		}
+		if (!ok) throw new Error("фоновый rebuild не докрутился (дрейф остался)");
+	} finally {
+		// полное восстановление: файл и граф (индекс не трогался)
+		fs.rmSync(p, { force: true });
+		await ensureFresh(root);
+		const dr = await driftReport(root);
+		if (dr.drifted) throw new Error("тест оставил дрейф: " + JSON.stringify(dr.reason));
+	}
+});
+
 await check("askJson: coverage/coverageStrong (coverage-гейт push)", () => {
 	const hit = q.askJson("helper function in util");
 	assert(hit.coverageStrong > 0.5, `strong для точного имени: ${hit.coverageStrong}`);
@@ -368,6 +424,7 @@ const server = http.createServer((req, res) => {
 		llmCalls.push(prompt);
 		let reply;
 		if (prompt.includes("Опиши ОДНИМ предложением (≤40 слов)")) reply = "Файл делает X.";
+		else if (prompt.includes("аналитик кодовой базы")) reply = "Проза: ядро делает Z (src/app.ts:L1).";
 		else if (prompt.includes("топик")) {
 			const files = [...prompt.matchAll(/^- (\S+):/gm)].map((x) => x[1]);
 			reply = JSON.stringify({ topics: [{ name: "Ядро", summary: "Одна тема для всего.", files: [files[0]] }] });
@@ -398,6 +455,24 @@ await check("concepts: LLM-темы + полное покрытие файлов
 	assert(deep.concepts?.topics?.length, "темы есть");
 	const covered = new Set(deep.concepts.topics.flatMap((tp) => tp.files));
 	for (const f of ["src/app.ts", "src/util.ts", "main.mjs", "pytool.py", "app.go", "tool.rs", "run.sh", "svc.java", "svc.cs", "svc.kt", "svc.rb", "svc.php", "svc.swift", "svc.dart", "svc.scala", "svc.lua"]) assert(covered.has(f), "файл в теме: " + f);
+});
+
+await check("prose: LLM-нарратив по теме + кэш + retrieval в ask", async () => {
+	const deepP = JSON.parse(readFileSync(join(root, "graft", ".engine", "deep.json"), "utf8"));
+	const prose = deepP.prose ?? {};
+	const node = Object.values(prose)[0];
+	assert(node, "проза-нода создана (топ-тема «Ядро»): " + JSON.stringify(Object.keys(prose)));
+	assert(node.text.includes("Проза"), "текст прозы: " + node.text.slice(0, 80));
+	assert(existsSync(join(root, node.file)), "md-файл прозы: " + node.file);
+	assert(readFileSync(join(root, node.file), "utf8").includes("# Ядро"), "заголовок в md");
+	const proseCalls = () => llmCalls.filter((p) => p.includes("аналитик кодовой базы")).length;
+	const before = proseCalls();
+	await engine.build(root, { deep: deepCfg });
+	assert(proseCalls() === before, "кэш: 0 LLM-вызовов на повторной сборке");
+	const q3 = engine.makeQueries(root);
+	const out = q3.ask("Ядро track");
+	assert(out.includes("prose (нарратив"), "проза в ask: " + out.slice(0, 300));
+	assert(out.includes("graft/prose/"), "путь к прозе в ask");
 });
 
 await check("concepts: fallback без LLM (каталог + язык для root + прочее)", async () => {

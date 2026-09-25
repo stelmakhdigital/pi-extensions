@@ -29,8 +29,10 @@ import {
 	enableAutoRebuild,
 	ensureFresh,
 	findGraphRoot,
+	isRebuilding,
 	makeQueries,
 	readGraph,
+	scopeOfPath,
 	type DeepConfig,
 } from "../../engine/graft/src/index.js";
 
@@ -88,6 +90,9 @@ export default function graftExtension(pi: ExtensionAPI) {
 	let freshCache: { at: number; st: Awaited<ReturnType<typeof checkStatus>> } | null = null;
 	const FRESH_TTL_MS = 30_000;
 	let bgSyncRunning = false;
+	/** Бюджет синхронного rebuild'а: дольше — отвечаем по старому графу, rebuild докручивается фоном. */
+	const FRESH_TIMEOUT_MS = (() => { const v = Number(process.env.GRFT_REFRESH_TIMEOUT_MS); return Number.isFinite(v) && v > 0 ? v : 10_000; })();
+	let lastEditedPath: string | null = null;
 
 	function enabled(ctx: ExtensionContext): boolean {
 		if (pi.getFlag("--graft") === false) return false;
@@ -235,7 +240,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 		promptSnippet: "Ranked lookup in the local Graft code graph (nodes with file:line, $0, deterministic). Retrieval outputs open with a [graft] tokens saved ≈ N line; when you used graft tools in a turn, close your reply with one line: 🌱 graft saved ~N tokens this turn (M calls) — the sum of those lines. Never pipe graft output through head/tail/sed.",
 		parameters: Type.Object({
 			query: Type.String({ description: "Вопрос или набор идентификаторов (символ, строка ошибки, имя файла)" }),
-			source: Type.Optional(Type.Boolean({ description: "(унаследованный флаг; выдача и так включает сниппеты) Включить кодовые пролёты" })),
+			source: Type.Optional(Type.Boolean({ description: "true — в вывод каждого хита встроить код span (≤8 строк): результат и есть код, без доп. чтения файла" })),
 			full: Type.Optional(Type.Boolean({ description: "(унаследованный флаг; без эффекта в v1) Полные определения вместо crux" })),
 			scope: Type.Optional(Type.String({ description: "Ограничить подпроектом монорепо (префикс пути)" })),
 		}),
@@ -244,8 +249,11 @@ export default function graftExtension(pi: ExtensionAPI) {
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			trackMetrics(ctx, { calls: 1 });
 			try {
-				await ensureFresh(root);
-				let out = makeQueries(root).ask(params.query);
+				await (async () => {
+					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					if (fr.stale) setSyncingBadge(ctx);
+				})();
+				let out = makeQueries(root).ask(params.query, { source: params.source });
 				recordSavings(out, ctx);
 				if (params.scope) {
 					const prefix = params.scope.endsWith("/") ? params.scope : `${params.scope}/`;
@@ -275,7 +283,10 @@ export default function graftExtension(pi: ExtensionAPI) {
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			trackMetrics(ctx, { calls: 1 });
 			try {
-				await ensureFresh(root);
+				await (async () => {
+					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					if (fr.stale) setSyncingBadge(ctx);
+				})();
 				const out = makeQueries(root).grep(params.pattern, { scope: params.scope, fixed: params.fixed, ignoreCase: params.ignoreCase });
 				recordSavings(out, ctx);
 				return toolResult(cap(out, maxOut()), { cmd: `graft grep ${params.pattern}` });
@@ -294,15 +305,19 @@ export default function graftExtension(pi: ExtensionAPI) {
 		parameters: Type.Object({
 			symbol: Type.String({ description: "Имя символа (функция, класс, метод)" }),
 			direction: Type.Optional(Type.Union([Type.Literal("in"), Type.Literal("out")], { description: "in (по умолчанию): кто зависит; out: на что зависит" })),
-			depth: Type.Optional(Type.Union([Type.Number({ minimum: 1, maximum: 10 }), Type.Literal("all")], { description: "Глубина транзитивного обхода (blast radius); all — полное замыкание (для refactoring/rename)" })), 
+			depth: Type.Optional(Type.Union([Type.Number({ minimum: 1, maximum: 10 }), Type.Literal("all")], { description: "Глубина транзитивного обхода (blast radius); all — полное замыкание (для refactoring/rename)" })),
+			scope: Type.Optional(Type.String({ description: "Показать только зависимости в скоупе (имя скоупа из [scope/] или префикс пути)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const root = rootOf(ctx);
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			trackMetrics(ctx, { calls: 1 });
 			try {
-				await ensureFresh(root);
-				const out = makeQueries(root).callers(params.symbol, { direction: params.direction, depth: params.depth });
+				await (async () => {
+					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					if (fr.stale) setSyncingBadge(ctx);
+				})();
+				const out = makeQueries(root).callers(params.symbol, { direction: params.direction, depth: params.depth, scope: params.scope });
 				recordSavings(out, ctx);
 				return toolResult(cap(out, maxOut()), { cmd: `graft callers ${params.symbol}` });
 			} catch (e) {
@@ -325,7 +340,10 @@ export default function graftExtension(pi: ExtensionAPI) {
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			trackMetrics(ctx, { calls: 1 });
 			try {
-				await ensureFresh(root);
+				await (async () => {
+					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					if (fr.stale) setSyncingBadge(ctx);
+				})();
 				const out = makeQueries(root).skeleton(params.file);
 				recordSavings(out, ctx);
 				return toolResult(cap(out, maxOut()), { cmd: `graft skeleton ${params.file}` });
@@ -349,7 +367,10 @@ export default function graftExtension(pi: ExtensionAPI) {
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			trackMetrics(ctx, { calls: 1 });
 			try {
-				await ensureFresh(root);
+				await (async () => {
+					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					if (fr.stale) setSyncingBadge(ctx);
+				})();
 				const out = makeQueries(root).map({ maxDirs: params.maxDirs });
 				mapCache = { text: out, at: Date.now() };
 				return toolResult(cap(out, maxOut()), { cmd: "graft map" });
@@ -394,7 +415,10 @@ export default function graftExtension(pi: ExtensionAPI) {
 			if (!root || !enabled(ctx)) return toolResult(noGraphHint, { error: "no-graph" });
 			trackMetrics(ctx, { calls: 1 });
 			try {
-				await ensureFresh(root);
+				await (async () => {
+					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					if (fr.stale) setSyncingBadge(ctx);
+				})();
 				const out = await makeQueries(root).blast(params.base);
 				return toolResult(cap(out, maxOut()), { cmd: `graft blast ${params.base ?? ""}`.trim() });
 			} catch (e) {
@@ -406,7 +430,10 @@ export default function graftExtension(pi: ExtensionAPI) {
 	/** Push: топ-хиты графа под промпт (askJson) + scope-хинт + сессионный dedup (retract:
 	 *  старые пакеты не повторять — только новые id; пусто → пакет не инжектится). */
 	const pushHits = async (root: string, prompt: string, words: string[]): Promise<string | null> => {
-		await ensureFresh(root);
+		await (async () => {
+			const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+			if (fr.stale) setSyncingBadge(ctx);
+		})();
 		let scopes: Record<string, string[]> = {};
 		try {
 			scopes = readGraph(root).meta.scopes ?? {};
@@ -471,7 +498,10 @@ export default function graftExtension(pi: ExtensionAPI) {
 		if (wantMap) {
 			if (!mapCache || Date.now() - mapCache.at > MAP_TTL_MS) {
 				try {
-					await ensureFresh(root);
+					await (async () => {
+						const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+						if (fr.stale) setSyncingBadge(ctx);
+					})();
 					const out = makeQueries(root).map();
 					mapCache = { text: out, at: Date.now() };
 				} catch {

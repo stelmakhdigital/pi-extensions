@@ -27,7 +27,7 @@ const TOOLS = [
 		description: "Ранжированный запрос к графу Graft: символы/ноды с file:line, summary (deep) и crux-кодом.",
 		inputSchema: {
 			type: "object",
-			properties: { query: { type: "string" }, scope: { type: "string" } },
+			properties: { query: { type: "string" }, scope: { type: "string" }, source: { type: "boolean" } },
 			required: ["query"],
 		},
 	},
@@ -45,7 +45,7 @@ const TOOLS = [
 		description: "Предвычисленные рёбра графа: кто зависит от символа (in) / на что ссылается (out), глубина.",
 		inputSchema: {
 			type: "object",
-			properties: { symbol: { type: "string" }, direction: { enum: ["in", "out"] }, depth: { anyOf: [{ type: "number" }, { const: "all" }], description: "transitive depth; all = full closure" } },
+			properties: { symbol: { type: "string" }, scope: { type: "string" }, direction: { enum: ["in", "out"] }, depth: { anyOf: [{ type: "number" }, { const: "all" }], description: "transitive depth; all = full closure" } },
 			required: ["symbol"],
 		},
 	},
@@ -77,7 +77,7 @@ async function callTool(name, args = {}) {
 	const q = engine.makeQueries(r);
 	switch (name) {
 		case "graft_ask":
-			return q.ask(args.query ?? "");
+			return q.ask(args.query ?? "", { source: args.source === true });
 		case "graft_grep":
 			return q.grep(args.pattern ?? "", { scope: args.scope, fixed: args.fixed, ignoreCase: args.ignoreCase });
 		case "graft_callers":

@@ -19,6 +19,22 @@ function coverageScore(query: string, ...texts: Array<string | null | undefined>
 	return hit / kws.length;
 }
 
+/** Предикат пути для --in/scope: именованный скоуп (meta.scopes) или префикс/хвост пути. */
+function scopePred(scopes: Record<string, string[]> | undefined, scope: string | undefined | null): (p: string) => boolean {
+	if (!scope) return () => true;
+	const key = scope.replace(/\/$/, "");
+	const named = scopes?.[key];
+	if (named) return (p) => named.includes(p);
+	return (p) => p === key || p.startsWith(key + "/") || p.endsWith("/" + key);
+}
+
+/** Scope по пути: имя скоупа, если путь входит в его набор (иначе null). */
+export function scopeOfPath(scopes: Record<string, string[]> | undefined | null, path: string): string | null {
+	if (!scopes) return null;
+	for (const [name, paths] of Object.entries(scopes)) if (paths.includes(path)) return name;
+	return null;
+}
+
 function nodeLabel(n: GraphNode): string {
 	return `${n.name} · ${n.path}:L${n.span.start}` + (n.span.end > n.span.start ? `-L${n.span.end}` : "");
 }
@@ -38,14 +54,14 @@ function resolveSymbol(g: Graph, name: string): GraphNode | null {
 
 export interface Queries {
 	skeleton: (file: string) => string;
-	callers: (symbol: string, opts?: { direction?: "in" | "out"; depth?: number | "all" }) => string;
+	callers: (symbol: string, opts?: { direction?: "in" | "out"; depth?: number | "all"; scope?: string }) => string;
 	map: (opts?: { maxDirs?: number; deep?: boolean }) => string;
-	ask: (query: string) => string;
+	ask: (query: string, opts?: { source?: boolean; scope?: string; limit?: number }) => string;
 	grep: (pattern: string, opts?: { scope?: string; fixed?: boolean; ignoreCase?: boolean }) => string;
 	check: () => Promise<{ text: string; json: Record<string, unknown> }>;
 	blast: (base?: string) => Promise<string>;
 	blastFile: (path: string) => string;
-	askJson: (query: string) => { query: string; count: number; coverage: number; coverageStrong: number; results: Array<{ name: string; kind: string; path: string; start: number; end: number; score: number; snippet: string; summary?: string }> };
+	askJson: (query: string, opts?: { scope?: string; limit?: number }) => { query: string; count: number; coverage: number; coverageStrong: number; results: Array<{ name: string; kind: string; path: string; start: number; end: number; score: number; snippet: string; summary?: string }> };
 	blastData: (base?: string, opts?: { owners?: boolean }) => Promise<{ base: string | null; files: Array<{ path: string; owner: string | null; symbols: Array<{ name: string; start: number; dependents: string[] }> }> }>;
 }
 
@@ -128,16 +144,21 @@ export function makeQueries(root: string): Queries {
 
 	const callers: Queries["callers"] = (symbol, opts = {}) => {
 		const direction = opts.direction ?? "in";
-		const depth = opts.depth === "all" ? Infinity : Math.max(1, Math.min(opts.depth ?? 1, 10));
+		const depthN = Number.isFinite(opts.depth) && (opts.depth as number) > 0 ? (opts.depth as number) : 1;
+		const depth = opts.depth === "all" ? Infinity : Math.max(1, Math.min(depthN, 10));
 		const depthLabel = depth === Infinity ? "all" : String(depth);
 		const node = resolveSymbol(g, symbol);
 		if (!node) return `graft callers: символ «${symbol}» не найден в графе`;
-		const hits = walkEdges(node.id, direction, depth);
+		const all = walkEdges(node.id, direction, depth);
+		const keep = scopePred(g.meta.scopes, opts.scope);
+		const hits = all.filter((h) => keep(nodeById.get(h.id)!.path));
+		const scopeTag = opts.scope ? ` · scope ${opts.scope}` : "";
 		const head =
 			direction === "in"
-				? `graft callers (in, depth ${depthLabel}): ${nodeLabel(node)} — кто зависит`
-				: `graft callees (out, depth ${depthLabel}): ${nodeLabel(node)} — на что ссылается`;
-		if (hits.length === 0) return head + "\n— (не найдено)";
+				? `graft callers (in, depth ${depthLabel}${scopeTag}): ${nodeLabel(node)} — кто зависит`
+				: `graft callees (out, depth ${depthLabel}${scopeTag}): ${nodeLabel(node)} — на что ссылается`;
+		if (all.length === 0) return head + "\n— (не найдено)";
+		if (hits.length === 0) return head + `\n— (в scope «${opts.scope}» зависимых нет; всего вне фильтра: ${all.length})`;
 		const lines = hits.map((h) => {
 			const n = nodeById.get(h.id)!;
 			const deg = direction === "in" ? inDegree.get(n.id) ?? 0 : outDegree.get(n.id) ?? 0;
@@ -237,10 +258,31 @@ export function makeQueries(root: string): Queries {
 				scored.sort((a, b) => b.score - a.score);
 		return scored;
 	};
-	const ask: Queries["ask"] = (query) => {
+	/** Проза-ноды, чья тема/файлы совпали с ключевыми словами запроса (топ-3). */
+	const proseBlock = (query: string): string => {
+		const prose = deep.prose ?? {};
+		const entries = Object.values(prose).filter((n) => n.file);
+		if (!entries.length) return "";
+		const kws = query.toLowerCase().match(KEYWORD_RE) ?? [];
+		const matched = entries
+			.map((n) => {
+				const hay = `${n.topic} ${n.summary ?? ""} ${n.files.join(" ")}`.toLowerCase();
+				return { n, hits: kws.filter((k) => hay.includes(k)).length };
+			})
+			.filter((x) => x.hits > 0)
+			.sort((a, b) => b.hits - a.hits)
+			.slice(0, 3);
+		if (!matched.length) return "";
+		return "prose (нарратив «как устроено» — читать файл):\n" + matched.map((x) => `  - ${x.n.file} — ${x.n.topic}`).join("\n") + "\n";
+	};
+
+	const ask: Queries["ask"] = (query, opts = {}) => {
 		const scored = askScore(query);
-		let top: Array<{ n: GraphNode; score: number }> = scored.slice(0, 12);
-		if (Object.keys(scopes).length) {
+		const limit = Math.max(1, Math.min(opts.limit ?? 12, 50));
+		const keep = scopePred(scopes, opts.scope);
+		const pool = opts.scope ? scored.filter((x) => keep(x.n.path)) : scored;
+		let top: Array<{ n: GraphNode; score: number }> = pool.slice(0, limit);
+		if (!opts.scope && Object.keys(scopes).length) {
 			// Scope-fusion: глобальный топ-6 + топ-3 каждого скоупа (сабпроект не тонет в крупном).
 			const picked = scored.slice(0, 6);
 			const ids = new Set(picked.map((x) => x.n.id));
@@ -263,6 +305,14 @@ export function makeQueries(root: string): Queries {
 				snippet = (ls[n.span.start - 1] ?? "").trim().slice(0, 100);
 			}
 			const out = [`  ${score.toFixed(1)}  ${n.name}  ${n.path}${scopeLabel(n.path)}:L${n.span.start}-L${n.span.end}  ${snippet}`];
+			// --source: inline-код хита (≤8 строк span'а) — результат и есть код, без доп. round-trip.
+			if (opts.source && content) {
+				const ls = content.split("\n");
+				const shown = ls.slice(n.span.start - 1, Math.min(n.span.end, n.span.start + 7));
+				out.push(`    code L${n.span.start}-${n.span.end}:`);
+				for (const l of shown) out.push(`      ${l}`);
+				if (n.span.end > n.span.start + 7) out.push(`      … (полный span: read L${n.span.start}-L${n.span.end})`);
+			}
 			const d = deep.symbols[n.id];
 			if (d && d.hash === n.bodyHash) {
 				out.push(`    ↳ ${d.summary}`);
@@ -270,14 +320,16 @@ export function makeQueries(root: string): Queries {
 			}
 			return out;
 		});
-		const body = `graft ask: «${query}»\n${lines.join("\n")}`;
+		const body = `graft ask: «${query}»\n${proseBlock(query)}${lines.join("\n")}`;
 		const covered = [...new Set(top.map(({ n }) => n.path))];
 		const s = sav.line(covered, body);
 		return s ? `${s}\n${body}` : body;
 	};
-	const askJson: Queries["askJson"] = (query) => {
+	const askJson: Queries["askJson"] = (query, opts = {}) => {
 		const scored = askScore(query);
-		const top = scored.slice(0, 12);
+		const limit = Math.max(1, Math.min(opts.limit ?? 12, 50));
+		const keep = scopePred(scopes, opts.scope);
+		const top = (opts.scope ? scored.filter((x) => keep(x.n.path)) : scored).slice(0, limit);
 		const topN = top[0]?.n;
 		return {
 			query,

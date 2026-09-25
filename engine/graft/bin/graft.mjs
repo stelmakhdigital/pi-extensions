@@ -106,11 +106,13 @@ switch (cmd) {
 	}
 	case "ask": {
 		const query = rest.find((a) => !a.startsWith("-"));
-		if (!query) throw new Error("usage: graft ask <query>");
+		if (!query) throw new Error("usage: graft ask <query> [--source] [--in <scope>] [-n N] [--json]");
 		await engine.ensureFresh(root);
 		const q = engine.makeQueries(root);
-		if (optFlag("--json")) console.log(JSON.stringify(q.askJson(query), null, 2));
-		else console.log(q.ask(query));
+		const scope = optVal("--in") ?? optVal("--scope");
+		const n = Number(optVal("-n")) || undefined;
+		if (optFlag("--json")) console.log(JSON.stringify(q.askJson(query, { scope, limit: n }), null, 2));
+		else console.log(q.ask(query, { source: optFlag("--source"), scope, limit: n }));
 		break;
 	}
 	case "grep": {
@@ -118,7 +120,7 @@ switch (cmd) {
 		if (!pattern) throw new Error("usage: graft grep <pattern>");
 		await engine.ensureFresh(root);
 		const q = engine.makeQueries(root);
-		console.log(q.grep(pattern, { scope: optVal("--scope"), fixed: optFlag("--fixed"), ignoreCase: optFlag("-i") }));
+		console.log(q.grep(pattern, { scope: optVal("--in") ?? optVal("--scope"), fixed: optFlag("--fixed"), ignoreCase: optFlag("-i") }));
 		break;
 	}
 	case "callers": {
@@ -127,7 +129,8 @@ switch (cmd) {
 		await engine.ensureFresh(root);
 		const q = engine.makeQueries(root);
 		const d = optVal("-d") ?? optVal("--depth");
-		console.log(q.callers(symbol, { direction: optVal("--direction") ?? "in", depth: d === "all" ? "all" : Number(d) }));
+		const scope = optVal("--in") ?? optVal("--scope");
+		console.log(q.callers(symbol, { direction: optVal("--direction") ?? "in", depth: d === "all" ? "all" : d ? Number(d) : undefined, scope }));
 		break;
 	}
 	case "skeleton": {
@@ -198,6 +201,15 @@ switch (cmd) {
 		});
 		console.log(`graft watch: слежу за ${root} (дебаунс 1.5s; auto-deep при дрейфе — если задан GRFT_LLM_BASE_URL/MODEL). Ctrl+C — стоп.`);
 		await new Promise(() => {});
+		break;
+	}
+	case "prose": {
+		await engine.ensureFresh(root);
+		const deep = engine.readDeep(root);
+		const items = Object.values(deep.prose ?? {});
+		if (!items.length) { console.log("Проза-нод нет (создаются `graft build --deep`: LLM-нарратив по топ-темам концептов)."); break; }
+		console.log(`graft prose: ${items.length} нод(ы)`);
+		for (const n of items.sort((x, y) => y.at - x.at)) console.log(`  ${n.file} — ${n.topic} (${new Date(n.at).toISOString().slice(0, 10)})`);
 		break;
 	}
 	case "viz": {

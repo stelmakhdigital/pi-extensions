@@ -85,11 +85,24 @@ export interface LspCandidate {
 	caller: string;
 }
 
+export interface ProseNode {
+	hash: string;
+	topic: string;
+	summary?: string;
+	files: string[];
+	text: string;
+	/** Путь к markdown-файлу прозы (относительно root). */
+	file: string;
+	at: number;
+}
+
 export interface DeepStore {
 	files: Record<string, { hash: string; summary: string }>;
 	symbols: Record<string, DeepSymbolEntry>;
 	/** Темы + типизованные связи между ними (part_of через files, uses — по рёбрам графа). */
 	concepts?: { hash: string; topics: DeepConcept[]; links?: ConceptLink[] };
+	/** Проза-ноды: нарратив «как это устроено» по теме (LLM deep), файл graft/prose/<slug>.md. */
+	prose?: Record<string, ProseNode>;
 }
 
 /** Конфиг LLM для deep-прохода (openai-chat-формат). */

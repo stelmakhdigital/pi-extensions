@@ -10,6 +10,7 @@
  */
 import { buildGraph } from "./build.js";
 import { deepBuild, deepCfgFromEnv } from "./deep.js";
+import { proseBuild } from "./prose.js";
 import { conceptsBuild } from "./concepts.js";
 import { serveViz, writeViz } from "./viz.js";
 import { writeFingerprint } from "./refresh.js";
@@ -17,8 +18,9 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { readGraph } from "./store.js";
 
-export { conceptsBuild, serveViz, writeViz };
+export { conceptsBuild, proseBuild, serveViz, writeViz };
 export { readGraph, readDeep, writeCards, writeDeep } from "./store.js";
+export { scopeOfPath } from "./query.js";
 import { hasDeep, hasGraph, readDeep, writeCards, writeGraph, writeIndex, writeUnresolved } from "./store.js";
 import { makeQueries } from "./query.js";
 import type { DeepConfig, Graph } from "./types.js";
@@ -29,7 +31,7 @@ export { makeQueries } from "./query.js";
 export type { Queries } from "./query.js";
 export type { DeepConfig, Graph, GraphNode, DeepStore } from "./types.js";
 export { scanRepo } from "./scan.js";
-export { ensureFresh, driftReport, enableAutoRebuild } from "./refresh.js";
+export { ensureFresh, driftReport, enableAutoRebuild, isRebuilding } from "./refresh.js";
 export { initWiring, uninstallWiring, mcpServerPath } from "./wiring.js";
 export { llmChat } from "./deep.js";
 
@@ -59,7 +61,9 @@ export async function build(root: string, opts: BuildOptions = {}): Promise<Buil
 	if (opts.deep) {
 		const rep = await deepBuild(root, g, opts.deep, opts.onProgress);
 		deepReport = rep;
-		await conceptsBuild(root, g, opts.deep, opts.onProgress);
+		const topics = await conceptsBuild(root, g, opts.deep, opts.onProgress);
+		const prose = await proseBuild(root, g, opts.deep, topics, opts.onProgress);
+		if (prose.done || prose.cached) opts.onProgress?.(`prose: ${prose.done} новых / ${prose.cached} в кэше`);
 		// deep.json уже записан внутри deepBuild/conceptsBuild; пересобираем карточки/index.
 	} else if (opts.autoDeep !== false) {
 		// Auto-refresh: если deep уже запускали (deep.json не пуст) и env-конфиг есть —
@@ -69,7 +73,9 @@ export async function build(root: string, opts: BuildOptions = {}): Promise<Buil
 		if (envCfg && hasDeep(root)) {
 			opts.onProgress?.("auto-deep: инкрементальный deep (env-конфиг)");
 			deepReport = await deepBuild(root, g, envCfg, opts.onProgress);
-			await conceptsBuild(root, g, envCfg, opts.onProgress);
+			const topics = await conceptsBuild(root, g, envCfg, opts.onProgress);
+			const prose = await proseBuild(root, g, envCfg, topics, opts.onProgress);
+			if (prose.done || prose.cached) opts.onProgress?.(`prose: ${prose.done} новых / ${prose.cached} в кэше`);
 		}
 	}
 	const deep = readDeep(root);

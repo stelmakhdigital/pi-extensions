@@ -130,11 +130,49 @@ export function enableAutoRebuild(fn: () => Promise<void>, debounceMs = 4000): v
  * Тихая пересборка при дрейфе. In-process TTL (3s) против повторных git-вызовов в одном ходе.
  * GRFT_NO_REFRESH=1 — всегда пропуск. Возврат: {refreshed, files?, skipped?, reason?}.
  */
-export async function ensureFresh(root: string): Promise<{ refreshed: boolean; files?: number; skipped?: string; reason?: string }> {
+/** Single-flight rebuild по root: не запускать вторую пересборку поверх идущей. */
+const rebuildInflight = new Map<string, Promise<number>>();
+export const isRebuilding = (root: string): boolean => rebuildInflight.has(root);
+
+/**
+ * Тихая пересборка при дрейфе. In-process TTL (3s) против повторных git-вызовов в одном ходе.
+ * GRFT_NO_REFRESH=1 — всегда пропуск.
+ * opts.timeoutMs: если пересборка дольше бюджета — ответить по старому графу (stale:true)
+ * и докрутить rebuild фоном (prompt/тул не блокируются). Возврат: {refreshed, stale?, files?, skipped?, reason?}.
+ */
+export async function ensureFresh(
+	root: string,
+	opts: { timeoutMs?: number } = {},
+): Promise<{ refreshed: boolean; stale?: boolean; files?: number; skipped?: string; reason?: string }> {
 	if (process.env.GRFT_NO_REFRESH === "1") return { refreshed: false, skipped: "GRFT_NO_REFRESH=1" };
 	const dr = await driftReport(root);
 	if (!dr.drifted) return { refreshed: false, reason: dr.reason ?? undefined };
+	if (rebuildInflight.has(root)) return { refreshed: false, reason: "rebuild уже идёт (фоновый)" };
 	const { build } = await import("./index.js");
-	const rep = await build(root, {});
-	return { refreshed: true, files: rep.files, reason: dr.reason ?? undefined };
+	const job = (async (): Promise<number> => {
+		try {
+			return (await build(root, {})).files;
+		} finally {
+			rebuildInflight.delete(root);
+		}
+	})();
+	job.catch(() => {
+		/* после тайм-аута докрутка фоновая — ошибки не роняют сессию */
+	});
+	rebuildInflight.set(root, job);
+	if (!opts.timeoutMs) {
+		const files = await job;
+		return { refreshed: true, files, reason: dr.reason ?? undefined };
+	}
+	const donePromise = job.then((files) => ({ t: "done" as const, files }));
+	donePromise.catch(() => {
+		/* build упал после тайм-аута — фоновая история, не роняем запрос */
+	});
+	const timeoutPromise = new Promise<{ t: "timeout" }>((res) => {
+		const timer = setTimeout(() => res({ t: "timeout" }), opts.timeoutMs);
+		(timer as { unref?: () => void }).unref?.();
+	});
+	const winner = await Promise.race([donePromise, timeoutPromise]);
+	if (winner.t === "done") return { refreshed: true, files: winner.files, reason: dr.reason ?? undefined };
+	return { refreshed: false, stale: true, reason: "rebuild в фоне (тайм-аут)" };
 }

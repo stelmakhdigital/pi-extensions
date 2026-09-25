@@ -247,6 +247,25 @@ const ctxGraph = { ...noUiCtx, cwd: fixture };
 		const text = res.content[0].text;
 		if (!text.includes("auth")) throw new Error("нет 'auth': " + text.slice(0, 200));
 	});
+	await check("graft: graft_ask source=true встраивает код хита", async () => {
+		const tool = pi.tools.find((t2) => t2.name === "graft_ask");
+		const res = await tool.execute("id", { query: "where is auth", source: true }, new AbortController().signal, () => {}, ctxGraph);
+		const text = res.content[0].text;
+		if (!text.includes("code L")) throw new Error("нет code-блока: " + text.slice(0, 300));
+		if (!text.includes("ok-")) throw new Error("нет кода тела auth: " + text.slice(0, 300));
+	});
+	await check("graft: graft_ask limit=1 — не больше одного хита", async () => {
+		const tool = pi.tools.find((t2) => t2.name === "graft_ask");
+		const res = await tool.execute("id", { query: "where is auth", limit: 1 }, new AbortController().signal, () => {}, ctxGraph);
+		const lines = res.content[0].text.split("\n").filter((l) => /^  \d/.test(l));
+		if (lines.length > 1) throw new Error("limit=1, хитов: " + lines.length);
+	});
+	await check("graft: graft_callers scope — фильтр по пути", async () => {
+		const tool = pi.tools.find((t) => t.name === "graft_callers");
+		const res = await tool.execute("id", { symbol: "auth", scope: "no_such_dir_xyz" }, new AbortController().signal, () => {}, ctxGraph);
+		const text = res.content[0].text;
+		if (!text.includes("scope") && !text.includes("не найдено")) throw new Error("scope-ответ: " + text.slice(0, 200));
+	});
 	await check("graft: graft_callers находит зависимых", async () => {
 		const tool = pi.tools.find((t) => t.name === "graft_callers");
 		const res = await tool.execute("id", { symbol: "auth" }, new AbortController().signal, () => {}, ctxGraph);

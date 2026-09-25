@@ -5,7 +5,7 @@ import { readDeep, writeDeep } from "./store.js";
 
 const sha1 = (s: string) => createHash("sha1").update(s).digest("hex");
 
-async function llmChat(cfg: DeepConfig, system: string, user: string): Promise<string> {
+export async function llmChat(cfg: DeepConfig, system: string, user: string): Promise<string> {
 	const url = cfg.baseUrl.replace(/\/$/, "") + "/chat/completions";
 	const headers: Record<string, string> = { "content-type": "application/json" };
 	if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;
