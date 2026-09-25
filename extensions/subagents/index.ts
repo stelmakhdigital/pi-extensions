@@ -391,6 +391,21 @@ export function nextStallAction(
 	return "none";
 }
 
+/**
+ * Sentinel crash-fallback gate: fire when the snapshot is stale for >2×staleMs, or when
+ * the child never wrote an activity snapshot (died before the first one, e.g. `pi`
+ * crashed at startup) — the latter only after the startTime gate (staleMs) so we don't
+ * capture-pane on freshly spawned children.
+ */
+export function shouldCheckSentinel(
+	r: { lastSnapshot?: { ts: number }; startTime: number },
+	now: number,
+	config: { watchdog: { snapshotStaleMs: number } },
+): boolean {
+	if (!r.lastSnapshot) return now - r.startTime > config.watchdog.snapshotStaleMs;
+	return now - r.lastSnapshot.ts > config.watchdog.snapshotStaleMs * 2;
+}
+
 async function watchTick(): Promise<void> {
 	tickCount += 1;
 	if (tickCount % 30 === 0) refreshConfig();
@@ -470,7 +485,8 @@ async function watchTick(): Promise<void> {
 		}
 
 		// Stale-but-alive panes: check the terminal sentinel occasionally (crash fallback).
-		if (r.lastSnapshot && now - r.lastSnapshot.ts > config.watchdog.snapshotStaleMs * 2 && tickCount % 5 === 0) {
+		// shouldCheckSentinel also covers children that died before writing any snapshot.
+		if (shouldCheckSentinel(r, now, config) && tickCount % 5 === 0) {
 			const tail = await ensureBackend().captureTail(r.surface, 6);
 			const match = tail.match(EXIT_SENTINEL_RE);
 			if (match) {

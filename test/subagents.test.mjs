@@ -591,6 +591,19 @@ await check("nextStallAction: first / reping по интервалу / 0=оди�
 	assert(nextStallAction({ stallPingSent: true }, now + 999_999, cfg) === "reping", "нет lastStallPingTs — репинг");
 });
 
+await check("watchdog: shouldCheckSentinel — умер до первого снапшота (startTime-гейт) / stale > 2x", () => {
+	const shouldCheckSentinel = ext.shouldCheckSentinel;
+	const cfg = { watchdog: { snapshotStaleMs: 30_000 } };
+	const now = 1_000_000;
+	// Нет снапшота вообще (pi упал сразу, напр. «Model not found»): startTime-гейт.
+	assert(shouldCheckSentinel({ lastSnapshot: undefined, startTime: now - 30_001 }, now, cfg) === true, "нет снапшота, прождал staleMs -> true (sentinel __SUBAGENT_EXIT_1 будет доставлен)");
+	assert(shouldCheckSentinel({ lastSnapshot: undefined, startTime: now - 1_000 }, now, cfg) === false, "только что запущен -> false (не махать capture-pane каждые тики)");
+	assert(shouldCheckSentinel({ lastSnapshot: undefined, startTime: now - 30_000 }, now, cfg) === false, "ровно staleMs — строго >");
+	// Снапшот есть: прежний порог 2x.
+	assert(shouldCheckSentinel({ lastSnapshot: { ts: now - 60_001 }, startTime: 0 }, now, cfg) === true, "stale > 2x -> true");
+	assert(shouldCheckSentinel({ lastSnapshot: { ts: now - 45_000 }, startTime: 0 }, now, cfg) === false, "stale < 2x -> false");
+});
+
 // ── widget ──
 
 await check("widget: рамка — все строки одной ширины (любой count)", () => {
