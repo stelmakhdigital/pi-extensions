@@ -104,6 +104,6 @@ c/cpp — clangd.
 ## MCP-сервер
 
 `node engine/graft/bin/graft-mcp.mjs` (stdio, JSON-RPC 2.0): 7 инструментов (ask, grep,
-callers, skeleton, map, check, blast). Регистрация в pi/Claude:
+callers, skeleton, map, check, blast). Регистрация в pi или другом MCP-хосте:
 `"graft": { "command": "node", "args": ["<путь>/graft-mcp.mjs"], "env": { "GRFT_MCP_ROOT": "<корень репо>" } }`
 (или `graft init` — впишет в `.mcp.json` сам).

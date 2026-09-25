@@ -19,7 +19,7 @@
 
 | Скилл | Назначение |
 |---|---|
-| [session-insights](skills/session-insights/) | Анализ собственных pi-сессий (`~/.pi/agent/sessions`) → отчёт с рекомендациями и черновиками улучшений (новые скиллы, правила для AGENTS.md, каркасы экстеншнов). Read-only, Python 3 stdlib |
+| [session-insights](skills/session-insights/) | Анализ собственных pi-сессий (`~/.pi/agent/sessions`) → отчёт с рекомендациями и черновиками улучшений (новые скиллы, правила для AGENTS.md, каркасы экстеншенов). Read-only, Python 3 stdlib |
 
 ## Установка
 
@@ -125,9 +125,9 @@ blast radius после write/edit, бейдж свежести и команд�
 Вне репо с построенным графом расширение молчит.
 
 **Graft-движок встроён в пакет** (`engine/graft/`): собственный движок кодового графа
-(web-tree-sitter + wasm-грамматики, 18 языков: TS/JS/Python — полная двухпроходная экстракция
+(web-tree-sitter + wasm-грамматики, 25 языков: TS/JS/Python — полная двухпроходная экстракция
 с member-цепочками, возвратными типами/выражениями/вызовами, дженериками (Promise<T>) и
-типизированными локальными; Go/Rust/C/C++/Shell/Java/C#/Kotlin/Ruby/PHP/Swift/Dart/Scala/Lua —
+типизированными локальными; Go/Rust/C/C++/Shell/Java/C#/Kotlin/Ruby/PHP/Swift/Dart/Scala/Lua/R/Elixir/Solidity/OCaml/Zig/Clojure/Nix —
 структура + именованные вызовы), LLM-обогащение (deep: summaries + crux,
 только по явной конфигурации), concept-темы, собственное хранилище
 (`graft/.engine/`, `graft/cards/`, `graft/index.md`) и CLI (`engine/graft/bin/graft.mjs`:
@@ -208,7 +208,7 @@ ln -sfn /tmp/pi-ext/skills/session-insights ~/.pi/agent/skills/session-insights
 ```
 .session-insights/
   report-<YYYYMMDD>.md   # отчёт: находки + рекомендации
-  drafts/                # черновики улучшений (SKILL.md, блок AGENTS.md, TS-экстеншн)
+  drafts/                # черновики улучшений (SKILL.md, блок AGENTS.md, TS-экстеншен)
 ```
 
 Черновиками агент не меняет ничего — только создаёт файлы на проверку.

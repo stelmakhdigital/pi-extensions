@@ -202,7 +202,7 @@ v2-чек-лист (2026-09-24):
 2. `interrupt_agent` — ход прерван, панель жива, статус waiting.
 3. `resume_agent` по файлу сессии — диалог продолжается; ответ на `agent_ping`.
 4. Заполнить `maxConcurrent` — 7-й спавн получает ошибку-лимит.
-5. Килльнеть панели (`tmux kill-pane`) — error-карточка «surface disappeared».
+5. Убить панель (`tmux kill-pane`) — error-карточка «surface disappeared».
 6. Запуск pi вне tmux → handoff-диалог → перезапуск внутри tmux → сплиты работают.
 7. `PI_SUBAGENTS_DISABLED=1` / `--subagents-disabled` — spawn возвращает «disabled».
 

@@ -10,7 +10,7 @@
 
 ## Ключевые требования (от пользователя, 2026-07-24)
 
-1. Управление подагентами: асинхронный spawn в панях терминального мультиплексора, не блокирует
+1. Управление подагентами: асинхронный spawn в панелях терминального мультиплексора, не блокирует
    основную сессию; результат возвращается в основную сессию (steer-сообщение).
 2. Мультиплексор — **только tmux**. Но архитектура — с абстракцией бэкенда и конфигурированием,
    чтобы будущие бэкенды добавлялись конфигурацией/регистрацией, а не переписыванием.
@@ -29,7 +29,7 @@
   `ctx.ui.custom/editor/setWidget`, `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })`.
 - UI-мьютекс для всплывающих окон — глобальный `globalThis.__piSharedUiLock` (см. ask-user-question).
 - Тесты: `test/smoke.test.mjs` — загрузка каждого расширения через jiti со стаб-объектом ExtensionAPI.
-- Правила проекта: код/комментарии — английский в коде, документация — русский; коммиты конвеншн.
+- Правила проекта: код/комментарии — английский в коде, документация — русский; коммиты по конвеншн.
 
 ### pi CLI (проверено: v0.87.0)
 - `pi --session <path>` — точный путь к файлу сессии (детерминированный pre-create файла ребёнка
@@ -84,7 +84,7 @@
    При вводе: удалить сторонний пакет `git:github.com/HazAT/pi-interactive-subagents`
    из `~/.pi/agent/settings.json`.
 2. **Вне tmux**: конфигурируемая стратегия запуска (pane / detached); дефолт: pane, если
-   внутри tmux, иначе авто-создание detached- tmux-сессии (окно подагента, attach по имени).
+   внутри tmux, иначе авто-создание detached-tmux-сессии (окно подагента, attach по имени).
 3. **Объём v1**: 4 инструмента + live-виджет + agent-definitions (.pi/agents + глобальные)
    + команда `/spawn` (быстрый ручной спавн). /iterate, /plan, bundled-агенты — v2 (бэклог).
 4. **Конфигурация**: секция в settings.json (проектная/глобальная) + env-оверрайды — фиксируется в дизайне.
@@ -97,14 +97,14 @@
 2. **Стратегия запуска** (pane/window/detached-session) — конфигурируемая; detached-session
    снимает зависимость «pi обязан работать внутри tmux».
 3. **Один tmux-процесс на тик**: вместо N execFileSync на каждого подагента — один
-   `list-panes -F` для всех паней за раз + fs-wait по снапшотам.
+   `list-panes -F` для всех панелей за раз + fs-wait по снапшотам.
 4. **Структурный steer-результат**: details (status, sessionFile, exitCode, elapsed, cost?)
    + renderResult в основной сессии, а не только текст.
 5. **Стоимость/токены ребёнка** в виджете (считать из jsonl сессии ребёнка — бесплатно,
    данные уже есть).
 6. **Лимиты и безопасность**: max-одновременных подагентов; по умолчанию детям запрещён
    рекурсивный spawn (deny `subagent` инструменту ребёнка, кроме явного `spawning: true`).
-7. **doctor-команда** `/subagents doctor`: версия tmux, csi-u, TMUX_PANE, доступность паней,
+7. **doctor-команда** `/subagents doctor`: версия tmux, csi-u, TMUX_PANE, доступность панелей,
    конфиг — быстрый self-check.
 8. **Тесты**: unit (сборка tmux-команд через injectable exec) + интеграция (echo-агент в
    tmux-сессии в тестовом контейнере/окне) + smoke через jiti-стаб как у остальных.
@@ -241,7 +241,7 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
 16. re.sub-удаление строк с trailing-newline в python-патчах склеивает код (//-коммент глотает
     следующее) — удалять построчно (list of lines), не регуляркой по тексту.
 
-### v1.2 (беклог, 2026-09-24)
+### v1.2 (бэклог, 2026-09-24)
 1. **Type inference v1**: `extract.fnReturns` — явные return-типы TS/JS (function_declaration и
    arrow/function_expression: field `return_type` → первый type_identifier; Foo<T> → Foo).
    `build.resolveVia`: via.kind === "call" → fnReturns → класс в-файле или импорт → Foo.m.
@@ -261,7 +261,7 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
   viz; MCP spawn roundtrip (3 запроса).
 - 52 smoke, 36 subagents — без регрессов. tsc strict — чисто.
 
-### v1.3 (беклог 2, 2026-09-24)
+### v1.3 (бэклог 2, 2026-09-24)
 1. **Возвратные выражения**: `inferredReturn` — первое «return new X» в теле (и expression-body
    `=> new X()`); без аннотации. Только new-конструкторы (надежно).
 2. **Языки +3**: Ruby (class/method, call + bare identifier в body_statement, calleeFrom
@@ -271,14 +271,14 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
    enclosing class: class_declaration/object_declaration/class (ruby).
 3. Движок: **15 языков** (ts/tsx/js/mjs/cjs/py + go/rust/c/cpp/sh/java/csharp/kotlin/ruby/php/swift).
 
-### v1.4 (беклог 3, 2026-09-24)
+### v1.4 (бэклог 3, 2026-09-24)
 1. **Return-вызовы**: `firstReturnCall` (первое «return g()») + транзитивное разрешение
    fnReturns до 3 хопов (wrap → base → new Foo).
 2. **Языки +3**: Dart (pairedBody! bare-ident вызовы), Scala (def qualified, call_expression),
    Lua (function_declaration с dot/method index, function_call, self:m()).
 3. Движок: **18 языков**.
 
-### v1.5 (беклог 4, 2026-09-24): auto-refresh deep
+### v1.5 (бэклог 4, 2026-09-24): auto-refresh deep
 1. **Auto-deep в `build()`** (index.ts): при `!opts.deep` — если `hasDeep(root)` (deep.json
    не пуст) И `deepCfgFromEnv()` (GRFT_LLM_BASE_URL/MODEL) → инкрементальный deepBuild +
    conceptsBuild. Только изменившиеся bodyHash; **без дрейфа — 0 LLM-вызовов**.
@@ -295,17 +295,17 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
 6. **Live auto-deep (cat-vllm, 33 мин)**: дрейф v1.1–v1.4 → 15+109 новых, 17+290 кэш, 6 ошибок;
    8 реальных тем; retry 11с; сходимость 2.2с, 0 ошибок, 404/404 кэш. deep.json репо обновлён.
 
-### v1.6 (беклог 5, 2026-09-24 — финал, БЭКЛОГ ЗАКРЫТ)
+### v1.6 (бэклог 5, 2026-09-24 — финал, БЭКЛОГ ЗАКРЫТ)
 1. **Дженерики**: `typeOfAnnotation` (вместо returnTypeOf) — Promise/PromiseLike<T> → первый
    не-примитивный аргумент (PRIMITIVE_TYPES set); Promise<примитив> → null; Foo<T> → Foo.
 2. **Типизированные локальные**: `collectParamTypes` (required/optional/formal_parameter —
-   граммака TS 0.20+; type_annotation как named child БЕЗ fieldName!) → vars {kind:"type"};
+   грамматика TS 0.20+; type_annotation как named child БЕЗ fieldName!) → vars {kind:"type"};
    аннотация переменной (`const x: Foo`) ставится ПОСЛЕ value-инференса (authoritative).
 3. **await**: variable_declarator value: await_expression → unwrap к argument.
 4. PendingVia + kind "type"; resolveVia: type → сразу класс-имя.
 5. Тесты: 21/21 (mkAsyncPair Promise<Pair>, useAsyncPair await, greet(g: Greeter), typedGreet).
 
-### v2.0 (программа A–E от 2026-09-25, в работе; v2.0 ГОТОВО, тест 23/23)
+### v2.0 (программа A–E от 2026-09-25; v2.0 ГОТОВО, тест 23/23)
 Запрос пользователя: «все: A–E» (A автоматизация, B LSP+full-fidelity, C концепты+viz,
 D языки+монорепо, E CLI/init). tmux НЕДОСТУПЕН (unknown flag -S) — работаю напрямую.
 **v2.0 (A) — сделано:**
@@ -413,7 +413,7 @@ D языки+монорепо, E CLI/init). tmux НЕДОСТУПЕН (unknown f
 
 
 ### v2.5 (пост-A–E, 3 пункта) ГОТОВО, test 31/31 (2026-09-25)
-Пункты 1–3 из gap-анализа Claude-оверлея (SKILL, tokens-saved, callers all):
+Пункты 1–3 из gap-анализа референс-оверлея (SKILL, tokens-saved, callers all):
 1. **`callers --depth all`**: Queries["callers"] depth?: number|"all" → Infinity в
    query.ts; CLI `--depth all` (строка, не NaN); схема тула Type.Union([1..10, "all"]);
    MCP anyOf number/const "all". Head-лэйбл показывает "all".
@@ -496,7 +496,7 @@ skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 уз
 - Tally: MetricsFile += graftTurns/reportedTurns; turn_end пишет при savingsInTurn>0;
   stats-строка только при turns>0. Старые файлы метрик без полей — ?? 0.
 - Тест-фикстура «weak»: слово из сниппета (toUpperCase), отсутствующее в именах/путях —
-  даёт хиты с coverage 0. Промпт без хитов в малом фикстур-репо → 0 результатов,
+  даёт хиты с coverage 0. Промпт без хитов в маленьком фикстур-репо → 0 результатов,
   не «слабые» (нудж не сработает).
 
 ### v2.9 (lean-injection: топ-3 указатели, push by default) (2026-09-25)
@@ -526,10 +526,10 @@ skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 уз
     jiti «Identifier already declared»; tsc на engine-входе это НЕ ловит (другой файл) —
     smoke (jiti-загрузка расширения) — единственный детектор. Паттерн: IIFE-блок на место.
   * git-гигиена тестов: fixture-репо с НЕзакоммеченным graft/ — любой `git add -A`
-    стадии́рует весь graft/ в индекс → поздние blast-тесты (diff по индексу) ломаются.
+    стейдит весь graft/ в индекс → поздние blast-тесты (diff по индексу) ломаются.
     Дрейф для ensureFresh создавать UNTRACKED-файлом (driftReport ловит untracked),
     индекс не трогать.
-  * pyc-ф-строки: литеральные `}` в f-string — удваивать; при сомнениях — конкатенация.
+  * py-ф-строки: литеральные `}` в f-string — удваивать; при сомнениях — конкатенация.
 
 ### v2.11 (scope везде, -n N, проза-ноды) ГОТОВО, engine 37 / smoke 63 (2026-09-25)
 - scopePred(scopes, scope): именованный скоуп (meta.scopes) ИЛИ p===key / key+"/" / "/"+key
@@ -570,7 +570,7 @@ skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 уз
   только если sr>0 (не шуметь, пока модель не читала напрямую).
 
 ### v2.13 (follow-submodules) ГОТОВО, engine 39 (2026-09-25)
-- scan.ts: submodulePaths(root) — gitlink'и из `git ls-files -s` (рега
+- scan.ts: submodulePaths(root) — gitlink'и из `git ls-files -s` (regex
   ^160000 <sha> N\tpath$); listRepoPaths(root, follow) — для каждого сабмодуля
   git ls-files (+untracked) внутри его корня с префиксом <sub>/ (его индекс и
   ЕГО .gitignore — «honor each submodule's own Git ignore rules»).

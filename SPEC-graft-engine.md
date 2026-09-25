@@ -102,7 +102,7 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
   показывает `+N файлов/+M символов (кэш a/b)`.
 - Semантика: auto-deep — «тихое» обновление по дрейфу; `build deep` остаётся явным
   (первый запуск / полный аудит). Концепты при auto-deep пересобираются (кэш по hash summaries).
-### 2g. v1.6 (2026-09-24, бэклог-итерация 5: дженерики — финальная)
+### 2g. v1.6 (2026-09-24, бэклог-итерация 5: дженерики)
 - **Дженерики в возвратных типах**: `typeOfAnnotation` — `Promise<T>`/`PromiseLike<T>` →
   первый не-примитивный аргумент T (`Promise<string>` → null, `Foo<T>` → Foo как и раньше).
 - **Типизированные локальные**: `const x: Foo = …` — аннотация переменной (authoritative,
@@ -120,9 +120,9 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
   парсинг → дерево; кэш парсинга в памяти на сессию.
 - `symbols.ts` — узлы: функции/классы/методы/типы/константы-экспорты, span, signature,
   exported. Импорты: разрешение относительных спецификаторов → file (TS/JS); Python —
-  relative imports (черепов, `from .x import y`).
+  relative imports (`from .x import y`).
 - `edges.ts` — call sites: identifier → разрешение в скоупе файла + по импортам;
-  relation calls/imports. Точность v1: именовые вызовы (не member-chain через this/obj —
+  relation calls/imports. Точность v1: именованные вызовы (не member-chain через this/obj —
   только `name(` и `obj.name(`, где obj-тип разрешим локально; недоразрешённые — не пишем).
 - `store.ts` — запись/чтение graph.json+deep.json+cards+index.md; fingerprint по
   sha1(content) каждого файла.
@@ -158,17 +158,17 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
 - **check exit-code**: дрейф → `process.exitCode = 1` (CI-friendly); `check --json` то же.
 - `scan.ts`: единый `isIndexablePath()` для скана и fingerprint.
 
-### 2i. v2.1 (монорепо-скупы, D10)
+### 2i. v2.1 (монорепо-скоупы, D10)
 - `detectScopes(paths)` — подпроекты по маркерам (package.json, pyproject.toml,
   Cargo.toml, go.mod, pom.xml, build.gradle*); `Graph.meta.scopes` (имя → файлы).
-- ask: scope-fusion — глобальный топ-6 + топ-3 по каждому затронутому скупу, метка
-  `[scope]`; map: блок `scopes:`; grep: фильтр по именованному скупу.
+- ask: scope-fusion — глобальный топ-6 + топ-3 по каждому затронутому скоупу, метка
+  `[scope]`; map: блок `scopes:`; grep: фильтр по именованному скоупу.
 
 ### 2j. v2.2 (+7 языков, D9)
 - R, Elixir, Solidity, OCaml, Zig, Clojure, Nix (итого 25 расширений/семейств).
 - extractOther-правила: R (name = LHS `<-`), Elixir (def/defmodule через call-ноды),
   OCaml (value_name в let_binding, вложенные), Zig (callee — plain identifier),
-  Clojure (head = sym_lit, fn.type), Nix (binding в attrset; top-level в этом wasm-бUILDe
+  Clojure (head = sym_lit, fn.type), Nix (binding в attrset; top-level в этом wasm-билде
   ломается — ERROR-ноды, учитывается только attrset).
 
 ### 2k. v2.3 (full-fidelity B6)
@@ -270,7 +270,7 @@ summary без crux); crux валидируется дословно по исх
 (упавшие легко перепопытать: `build deep` ещё раз — инкрементально).
 
 Проверенный прогон (2026-09-24): cat-vllm `qwen3.8-27b-dflash2`, 28 файлов + 303 символа,
-586s, 3 упавших JSON-ответа перепопало вторым проходом за 6s (итог: 0 ошибок,
+586s, 3 упавших JSON-ответа перепопытаны вторым проходом за 6s (итог: 0 ошибок,
 286 символов с валидным crux). Qwen3-ответы приходят с полем `reasoning` — на парсинг
 не влияет (читается `choices[0].message.content`).
 

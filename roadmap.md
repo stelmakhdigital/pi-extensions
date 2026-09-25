@@ -51,7 +51,7 @@
       definitions), unknown-agent-ошибка, spawn вне tmux → backend-ошибка с командой handoff
 - [x] Ручной чек-лист в tmux (выполнен 2026-09-24): spawn→виджет→steer-карточка ✓; interrupt ✓;
       resume ✓; maxConcurrent=2 ✓; handoff вне tmux ✓ (detached-сессия + явный --session);
-      PI_SUBAGENTS_DISABLED ✓. Pойманы и исправлены 5 интеграционных багов (sessionsRootFor,
+      PI_SUBAGENTS_DISABLED ✓. Пойманы и исправлены 5 интеграционных багов (sessionsRootFor,
       sawAgentStart auto-exit, TOCTOU-лимита, handoff -d, child --no-extensions) — см. PROJECT_MEMORY.md
 
 ## 4. Коммит
@@ -130,7 +130,7 @@
 - [x] v1.6 (2026-09-24, бэклог 5, финал): дженерики (Promise<T> → T; Foo<T> → Foo),
       типизированные локальные (const x: Foo, параметры f(o: Foo)), await-unwrap;
       unit 21/21 (+generics/typed); **бэклог графта закрыт**
-- [x] v2.0 (2026-09-25, A): авто-refresh (fingerprint + ensureFresh во всех query-путих,
+- [x] v2.0 (2026-09-25, A): авто-refresh (fingerprint + ensureFresh во всех query-путях,
       тихий rebuild при дрейфе), auto-rebuild после write/edit (debounce 4c),
       бейдж synced/stale + % deep, check → exit 1 при дрейфе; unit 23/23
 - [x] v2.1 (2026-09-25, D10): monorepo-scope (маркеры сабпроектов, ask scope-fusion,
@@ -158,7 +158,7 @@
       (~/.local/state/pi-graft/metrics/<sid>.json, override GRFT_STATE_DIR) + строка в
       /graft; compliance — turn_end: graft-тулы с экономией без «🌱» в ответе → одноразовое
       напоминание в след. секции; MCP instructions (контракт + экономика); фоновый
-      ensureFresh + бейдж в agent_end (guard параллельности); banner свежести (кач 30с)
+      ensureFresh + бейдж в agent_end (guard параллельности); banner свежести (кэш 30с)
       в заголовке секции; smoke 57 (5 новых)
 - [x] v2.7 (2026-09-25, сводка экономии): /graft stats — агрегация по всем файлам
       сессионных метрик (сегодня/7/30 дней/всего, вызовы + токены), строка «Сводка за
@@ -167,7 +167,7 @@
       1) coverage-гейт push: askJson возвращает coverage/coverageStrong (лексическая
          доля ключевых слов запроса в name+signature / +path топ-хита); сильный
          (strong≥0.3 или broad≥0.5) → указатели; хиты есть но слабые → нудж-строка
-         «графе может быть больше» (одноразово за сессию); хитов нет → тишина;
+         «в графе может быть больше» (одноразово за сессию); хитов нет → тишина;
       2) compliance-доля: turn_end пишет graftTurns/reportedTurns в метрики,
          /graft stats — «🌱-отчёт в ответе: X из Y graft-ходов»;
       unit 32, smoke 60 (3 новых)

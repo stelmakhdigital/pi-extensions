@@ -28,7 +28,7 @@ scan/parse(extractOther: 25 языков)/build/extract/type-inference/deep/conc
 refresh/wiring/lsp/viz/store), CLI `bin/graft.mjs`, MCP `bin/graft-mcp.mjs`,
 тонкое расширение `extensions/graft/` (jiti, без spawn: 7 тулзов + бейдж + /graft).
 Deep — только явный конфиг (env GRFT_LLM_BASE_URL/MODEL/API_KEY). Авто-refresh:
-fingerprint + ensureFresh во всех query-путих + auto-rebuild после write/edit (badge).
+fingerprint + ensureFresh во всех query-путях + auto-rebuild после write/edit (badge).
 **Программа A–E (2026-09-25) ЗАВЕРШЕНА, v2.0–v2.4, unit 29/29:** A — авто-refresh/
 badge/check-exit; B — LSP (lsp-status/lsp-sync, рёбра confidence "lsp") + full-fidelity
 go/java/kotlin/php/swift; C — Notes в карточках + concept-links + viz --serve (live-reload);
@@ -42,7 +42,7 @@ E — ask --json, blast --format/--no-owners/--name/--export-viz, init/uninstall
 - `skills/<name>/SKILL.md` — скиллы, `pi.skills[]` в package.json.
 - `engine/graft/` — движок графа (свой пакет: src/*.ts + bin/), `extensions/graft/` — адаптер.
 - `test/smoke.test.mjs` — загрузка каждого расширения jiti со стаб-объектом ExtensionAPI
-  (новый расширение добавлять сюда); `test/graft-engine.test.mjs` — unit движка;
+  (новое расширение добавлять сюда); `test/graft-engine.test.mjs` — unit движка;
   `test/subagents.test.mjs` — unit subagents.
 - `graft/` — кэш графа (`.engine/`, `cards/`); `.memory/` — память сессий.
 

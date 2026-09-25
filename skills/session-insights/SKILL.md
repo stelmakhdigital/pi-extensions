@@ -66,13 +66,13 @@ tool output, повторяющиеся строки промптов, повт�
   drafts/                 # готовые черновики на проверку пользователю
     <имя>-SKILL.md        # новый скилл: frontmatter + SKILL.md
     agents-md-block.md    # блок текста для вставки в AGENTS.md
-    <имя>-extension.ts    # каркас экстеншн-инструмента (TypeScript, pi API)
+    <имя>-extension.ts    # каркас экстеншен-инструмента (TypeScript, pi API)
 ```
 
 Требования к черновикам:
 - Черновик скилла: frontmatter `name`/`description` + рабочие шаги, не вода.
 - Блок для AGENTS.md: формулировки-правила (imperative), не описания.
-- Каркас экстеншна: `import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'`,
+- Каркас экстеншена: `import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'`,
   зарегистрированный инструмент, TODO-комментарии на местах, где нужна логика.
   Смотри на `extensions/*/index.ts` этого репо как на эталон стиля.
 
