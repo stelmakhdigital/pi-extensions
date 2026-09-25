@@ -334,3 +334,30 @@ Push-пакет = топ-3 указателя `path:Lstart-Lend  name`, без �
 (свежая full-price инъекция не везёт код; retrieval с кодом — `graft_ask`).
 `--graft-push` включён по умолчанию (parity: их push always-on после init);
 гейты не меняются: длина/слова → coverage (0.3/0.5) → nudge (1 раз) → dedup.
+
+### 2t. v2.10 (ask --source, ensureFresh-тайм-аут, scope по правке)
+- `ask(query, {source})`: в вывод каждого хита встраивается код span'а (≤8 строк;
+  при усечении — «полный span: read Lx-Ly»). Тул `graft_ask.source`, CLI
+  `graft ask <q> --source`, MCP `source: boolean`.
+- `ensureFresh(root, {timeoutMs})`: при дрейфе rebuild стартует; если дольше бюджета —
+  возврат `{stale: true}` (ответ по старому графу) и фоновая докрутка. Single-flight:
+  `rebuildInflight: Map<root, Promise>`, `isRebuilding(root)`; auto-rebuild спрашивает
+  guard перед вторым build. `GRFT_REFRESH_TIMEOUT_MS` (дефолт 10000).
+- `scopeOfPath(scopes, path)`: имя скоупа по пути (export). Push: multi-scope +
+  последняя правленая файлом → scope пакета (приоритет над prompt-гейтом), метка
+  «— по последней правке» в заголовке.
+
+### 2u. v2.11 (scope на всех, -n N, проза-ноды)
+- `scopePred(scopes, scope)` (query.ts): именованный скоуп из meta.scopes или
+  префикс/точное/хвост-совпадение пути. Применяется: ask/askJson (фильтр пула,
+  scope-fusion отключается), callers (фильтр обхода; пустой scope — отдельный
+  ответ с числом вне фильтра), grep (был). CLI: `--in <scope>` (алиас `--scope`)
+  на ask/grep/callers. Тулы: `graft_ask.scope`, `graft_callers.scope`; MCP: то же +
+  `graft_ask.n`.
+- `limit` (ask/askJson): 1..50, дефолт 12. CLI ask: `-n N`.
+- Проза-ноды (`prose.ts`): при `build --deep` (и auto-deep) после concepts —
+  топ-6 тем → LLM-нарратив 10–20 строк (plain markdown, только подтверждённое
+  контекстом, факты с file:line) → `graft/prose/<slug>.md` + кэш `deep.prose`
+  (hash по файлам темы; без LLM-конфига — не вызывается). Retrieval: `ask` вставляет
+  блок «prose (…): - graft/prose/x.md — тема» (топ-3 по совпадениям ключевых слов).
+  CLI: `graft prose` — список нод.

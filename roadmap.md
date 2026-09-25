@@ -175,3 +175,23 @@
       указатели file:line + имя, без сниппетов** (свежая инъекция full-price → код
       модель забирает сама через graft_ask); push **включён по умолчанию** (parity с
       always-on после их init; выкл: --graft-push=false); smoke 60 (+assert формата)
+- [x] v2.10 (2026-09-25, догонялка референса 2/3/5):
+      1) ask --source: inline-код хитов (≤8 строк span'а, «полный span: read Lx-Ly» при
+         усечении) — в туле graft_ask (source: true), CLI (graft ask <q> --source),
+         MCP (source); 2) ensureFresh: timeoutMs — rebuild дольше бюджета отвечает по
+         старому графу (stale:true) и докручивается фоном + single-flight guard
+         (isRebuilding; авто-пересборка не гонит вторую); бюджет 10c (GRFT_REFRESH_TIMEOUT_MS),
+         stale → бейдж «syncing…»; 3) scope-хинт push по последней правленой файле
+         (scopeOfPath, multi-scope репо), приоритетнее слов промпта;
+      unit 35, smoke 61
+- [x] v2.11 (2026-09-25, мелочи-полка референса):
+      1) scope (`--in`/`--scope`) на ВСЕХ командах: ask/callers/grep (CLI),
+         тулы graft_ask.scope + graft_callers.scope (движковый фильтр, без text-hack),
+         MCP: scope у callers, n у ask; 2) -n N — лимит результатов ask
+         (тул graft_ask.limit, CLI -n, MCP n; дефолт 12, макс 50);
+      3) проза-ноды graft/prose/<slug>.md: LLM-нарратив «как это устроено»
+         по топ-6 темам концептов (кэш по hash файлов темы, инкрементально),
+         retrieval в ask (совпавшие по ключевым словам — «prose (нарратив…):
+         - graft/prose/x.md»), CLI `graft prose` (список нод);
+      бонус-фикс: depth NaN в заголовке callers (CLI Number(undefined))
+      unit 37, smoke 63

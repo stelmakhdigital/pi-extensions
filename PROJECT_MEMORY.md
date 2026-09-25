@@ -508,3 +508,47 @@ skeleton query.ts ≈ 4,285 tok. Граф после: 36 файлов / 508 уз
   тишина (в маленьком/чистом репе пакет почти никогда не appears).
 - Урок (опять): smoke-стаб registerFlag/registerCommand сохраняют {name, def} —
   значения в `f.def.default` / `cmd.def.handler`.
+
+### v2.10 (ask --source, ensureFresh timeout, scope по правке) ГОТОВО, engine 35 / smoke 61 (2026-09-25)
+- ask --source: ≤8 строк span'а инлайном; усечение — пометка «полный span: read L..-L..».
+  Параметр source в туле был «унаследованный без эффекта» — теперь реальный.
+- ensureFresh timeout: Promise.race(done, timeout); после тайм-аута rebuild докручивается
+  фоном (job.catch подавляет unhandled; single-flight через Map<root, Promise> —
+  повторный ensureFresh и auto-rebuild видят isRebuilding). donePromise СВОИМ catch'ом
+  (иначе race отклоняется на фоновом ошибке build). setTimeout.unref() — не держать цикл.
+- Бюджет: FRESH_TIMEOUT_MS = env GRFT_REFRESH_TIMEOUT_MS || 10_000; при stale —
+  setSyncingBadge (бейдж «syncing…»), ответ по старому графу.
+- lastEditedPath: пишется в tool_result-хуке (write/edit, path из event.input); pushHits:
+  multi-scope (≥2) + scopeOfPath(scopes, lastEditedPath) → ключ приоритетнее prompt-гейта;
+  заголовок пакета: «(scope: X — по последней правке)».
+- Уроки:
+  * `const fresh` ×8 в одном scope (все execute вложен в одну функцию) — ParseError
+    jiti «Identifier already declared»; tsc на engine-входе это НЕ ловит (другой файл) —
+    smoke (jiti-загрузка расширения) — единственный детектор. Паттерн: IIFE-блок на место.
+  * git-гигиена тестов: fixture-репо с НЕзакоммеченным graft/ — любой `git add -A`
+    стадии́рует весь graft/ в индекс → поздние blast-тесты (diff по индексу) ломаются.
+    Дрейф для ensureFresh создавать UNTRACKED-файлом (driftReport ловит untracked),
+    индекс не трогать.
+  * pyc-ф-строки: литеральные `}` в f-string — удваивать; при сомнениях — конкатенация.
+
+### v2.11 (scope везде, -n N, проза-ноды) ГОТОВО, engine 37 / smoke 63 (2026-09-25)
+- scopePred(scopes, scope): именованный скоуп (meta.scopes) ИЛИ p===key / key+"/" / "/"+key
+  — единый для ask/askJson/callers/grep. У graft_ask убран text-фильтр по строкам (был хак:
+  фильтрация готового текста по includes(scope)) — теперь фильтр пула в движке.
+- callers со scope: пустой результат в scope ≠ «не найдено» — отдельное сообщение
+  «(в scope «X» зависимых нет; всего вне фильтра: N)».
+- limit: ask/askJson opts.limit (1..50, дефолт 12); CLI ask -n; MCP n; тул limit.
+- Проза: engine/graft/src/prose.ts. Темы — из conceptsBuild (тот же deep-проход),
+  топ-6 по files.length. hash = sha1(тема|summary|file-hashes) → кэш в deep.prose;
+  повторная сборка — 0 LLM. Контекст: символы тематических файлов (≤8) + deep-summaries,
+  обрезка 7000 зн. Файл graft/prose/<slug>.md (заголовок + цитата «регенерация»).
+  Утилизация: нода, чьи файлы исчезли из графа и не в топ-ранке → delete + unlink.
+  ask: proseBlock(query) — топ-3 ноды по числу совпавших KEYWORD_RE-ключевых слов
+  (кириллица в REGEX есть) → блок «prose (нарратив… — читать файл)» перед хитами.
+  llmChat вынесен в export concepts.ts (ранее private).
+- Бонус-баг: CLI `callers` без -d передавал Number(undefined)=NaN → заголовок «depth NaN».
+  Фикс в CLI (d ? Number(d) : undefined) И в движке (Number.isFinite-гард).
+  Урок: NaN проходит через ?? (он не nullish) — для числовых опций из CLI всегда
+  Number.isFinite-проверка.
+- Тест прозы — на фейк-LLM (ветка «аналитик кодовой базы» → фикс-текст); генерацию
+  реальным LLM не юнит-тестим (позиция та же, что deep).
