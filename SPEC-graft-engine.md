@@ -1,0 +1,99 @@
+# SPEC: собственный движок кодового графа (graft-engine)
+
+Задача: убрать чужой runtime `@nanonets/graft` (npx, 128 МБ, tree-sitter-wasm для 15 языков,
+LLM-SDK, MCP) из цепочки агента. Пишем своё: движок в `engine/graft/` (чистый TS) + тонкий
+адаптер в `extensions/graft/`. Заменённый набор функций: build, map, ask, grep, callers,
+skeleton, check, blast, --deep.
+
+## Решения (согласовано с пользователем, 2026-09-24)
+1. Парсер: **web-tree-sitter + wasm-грамматики** для TS/TSX, JS, Python.
+2. v1 = структурный слой + **свой --deep** (суммаризация файла + per-symbol summary/crux,
+   кэш по body_hash).
+3. Хранилище — **полностью свой формат** (старый `graft/` перезаписывается; он gitignored —
+   миграция = пересборка, git-археологии нет).
+4. Код — локальный пакет `engine/graft/` (без pi-API, юнит-тестится напрямую) + тонкий слой
+   в `extensions/graft/` (только тулзы/UI/хуки). **Никакого spawn CLI** — прямой import (jiti).
+5. Deep: **только явная конфигурация** LLM (env/файл); без неё `build deep` — понятная
+   ошибка, никакого дефолтного адреса.
+
+## Хранилище (новый формат)
+```
+graft/
+  .engine/
+    graph.json       {version:1, meta:{builtAt, root, files:[{path,hash}]}, nodes[], edges[]}
+    deep.json        {files:{path:{hash,summary}}, symbols:{nodeId:{hash,summary,crux:string[]}}}
+  cards/<mirror>/    per-file markdown-карточки (сигнатуры + summary при наличии)
+  index.md           верхнеуровневая карта (автогенерация: кластеры каталогов, хабы, hotspots)
+```
+Node: `{id: "path#symbol"|"path", name, kind: file|function|class|method|type, path,
+span:{start,end}, signature, exported, bodyHash}`.
+Edge: `{source, target, relation: calls|imports|references, confidence:"extracted"}`.
+
+## Движок `engine/graft/` (модули)
+- `scan.ts` — обход репо: `git ls-files` + untracked (fallback fs-walk); языки:
+  .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs/.py; исключения: node_modules, graft/, .git,
+  dist, *.min.js, fixtures/tests-артефакты.
+- `parse/` — загрузка web-tree-sitter + wasm (deps: `web-tree-sitter`, `tree-sitter-wasm`);
+  парсинг → дерево; кэш парсинга в памяти на сессию.
+- `symbols.ts` — узлы: функции/классы/методы/типы/константы-экспорты, span, signature,
+  exported. Импорты: разрешение относительных спецификаторов → file (TS/JS); Python —
+  relative imports (черепов, `from .x import y`).
+- `edges.ts` — call sites: identifier → разрешение в скоупе файла + по импортам;
+  relation calls/imports. Точность v1: именовые вызовы (не member-chain через this/obj —
+  только `name(` и `obj.name(`, где obj-тип разрешим локально; недоразрешённые — не пишем).
+- `store.ts` — запись/чтение graph.json+deep.json+cards+index.md; fingerprint по
+  sha1(content) каждого файла.
+- `query/` —
+  - `skeleton(file)` — сигнатуры файла;
+  - `callers(sym, {direction, depth})` — обход рёбер (out — транзитивно);
+  - `map({maxDirs})` — кластеры каталогов + хабы (in-degree) + hotspots; формат как у
+    текущего `<graft>`-блока (совместимый с промптом модели);
+  - `ask(query)` — ранжирование: точные/частичные имена символов + файла, бонус за
+    связанность (in-degree), топ-N с file:line и snippet;
+  - `grep(pattern, {scope, fixed, ignoreCase})` — regex по исходникам из скана,
+    хиты группированы по замыкающему символу, ранжированы по в-степени файла;
+  - `check()` — дрейф: added/removed/changed (по fingerprint) → JSON {ok, stale…};
+  - `blast(base?)` — `git diff -U0 [base]` → затронутые файлы/строки → nodes в span →
+    транзитивные зависимые (in-рёбра).
+- `deep.ts` — LLM-проход: `build deep`:
+  - конфиг (обязательный): env `GRFT_LLM_BASE_URL`, `GRFT_LLM_MODEL`, `GRFT_LLM_API_KEY`
+    (openai-chat-формат; fetch, без SDK); без baseUrl/model — ошибка с инструкцией;
+  - на файл: prompt «что делает файл» (сkeleton + размер) → summary;
+  - на символ: prompt «summary + crux» (исходник символа) → JSON {summary, crux:[строки
+    дословно из исходника]} — валидация, что crux ⊆ исходника (иначе crux=undefined);
+  - кэш: только символы/файлы с изменившимся bodyHash (инкрементально);
+  - лимиты: таймаут/запрос, retry 1, прогресс в stdout (для CLI-прогона /graft build deep).
+
+## CLI (утилита для рук) — `engine/graft/bin/graft.mjs`
+`build [--deep] [dir]`, `map`, `ask`, `grep`, `callers`, `skeleton`, `check [--json]`,
+`blast`. Тонкая обёртка над API (человеческий вывод). Не обязателен для расширения.
+
+## Расширение `extensions/graft/index.ts` (переписать)
+- `import { engine } from "../../engine/graft/src/index.ts"` (jiti компилирует TS).
+- Те же имена/схемы тулзов: graft_ask, graft_grep, graft_callers, graft_skeleton, graft_map,
+  graft_check, graft_blast (семантика как сейчас; параметры те же).
+- Секция `<graft>`: engine.map(root) на before_agent_start (TTL-кэш 120s, инвалидация
+  после edit/write); push-режим `--graft-push` = engine.ask(prompt), топ-4000.
+- Blast-хук: после write/edit → engine.blastFile(path) → дописанный блок «🌿 blast».
+- Бейдж: engine.check(root) → `graft: synced` / `⚠ N stale` / `нет графа — build`.
+- Корень: ближайший каталог вверх с `graft/.engine/graph.json` (маркер нашего формата).
+- `/graft` — статус; `/graft build` / `/graft build deep` (deep — с конфигом из env;
+  при отсутствии — ошибка с подсказкой).
+- Убирается: runGraft/spawn, resolveGraftCommand, npx, DO_NOT_TRACK (чужого нет).
+
+## Тесты
+- `test/graft-engine.test.mjs` (node, без pi): фикстуры TS/JS/PY → parse (узлы/рёбра),
+  skeleton/callers/map/ask/grep/check/blast на in-memory-скане; deep — с фейк-LLM
+  (локальный http-стаб, openai-chat); store roundtrip; drift.
+- smoke.test.mjs: секция «graft-engine: расширение грузится, тулзы регистрируются,
+  engine импортируется».
+- tsc --strict --noUnusedLocals по engine/ и extensions/graft.
+
+## package.json
+- deps: `web-tree-sitter`, `tree-sitter-wasm` (локально, lock-файл).
+- `pi.extensions[]` без изменений (extensions/graft/*).
+- Удалить упоминания @nanonets/graft (доки, README) после миграции.
+
+## Вне v1 (бэклог)
+- Другие языки (grammaries подкидываются), MCP-сервер, viz, LLM-«концепт-ноды»-группировка
+  (сверх per-file/per-symbol), авто-refresh по watch, scorecard качества.

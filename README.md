@@ -122,9 +122,16 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 Даст инструменты `graft_ask`, `graft_grep`, `graft_callers`, `graft_skeleton`,
 `graft_map`, `graft_check`, `graft_blast`, секцию `<graft>` в системном промпте,
 blast radius после write/edit, бейдж свежести и команду `/graft`.
-Вне репо с построенным графом (`graft build`) расширение молчит.
-CLI ставится отдельно: `npm i -g @nanonets/graft` (без него расширение
-автоматически использует `npx -y @nanonets/graft`).
+Вне репо с построенным графом расширение молчит.
+
+**Graft-движок встроён в пакет** (`engine/graft/`): собственный парсер
+(web-tree-sitter + tree-sitter-wasm, TS/JS/Python), собственный формат
+хранилища (`graft/.engine/`, `graft/cards/`, `graft/index.md`) и
+LLM-«deep»-проход (явный конфиг `GRFT_LLM_BASE_URL`/`GRFT_LLM_MODEL`/
+`GRFT_LLM_API_KEY`, openai-chat-формат). Без внешних CLI-зависимостей:
+граф строится командой `/graft build` (в pi) или
+`node engine/graft/bin/graft.mjs build` (из консоли). Детали — в
+`SPEC-graft-engine.md`.
 
 ### Только sandbox
 
@@ -245,7 +252,7 @@ extensions/
   ask-user-question/
     index.ts
   graft/
-    index.ts                  # интеграция @nanonets/graft (CLI) в pi
+    index.ts                  # тонкий адаптер pi-graft-engine (без spawn)
   sandbox/
     index.ts                  # per-command sandbox (bwrap / sandbox-exec)
   gen-speed/

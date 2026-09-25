@@ -8,7 +8,9 @@
 	"license": "MIT",
 	"type": "module",
 	"dependencies": {
-		"shell-quote": "^1.8.3"
+		"shell-quote": "^1.8.3",
+		"tree-sitter-wasm": "^1.1.6",
+		"web-tree-sitter": "^0.26.13"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
@@ -18,6 +20,7 @@
 	"devDependencies": {
 		"@earendil-works/pi-coding-agent": "^0.87.0",
 		"@earendil-works/pi-tui": "^0.87.0",
+		"@types/node": "^22.20.4",
 		"jiti": "^2.7.0",
 		"typebox": "^1.3.27"
 	},
@@ -27,7 +30,7 @@
 			"extensions/bash-guard/index.ts",
 			"extensions/ask-user-question/index.ts",
 			"extensions/graft/index.ts",
-		"extensions/subagents/index.ts",
+			"extensions/subagents/index.ts",
 			"extensions/sandbox/index.ts",
 			"extensions/gen-speed/index.ts"
 		],

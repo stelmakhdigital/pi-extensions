@@ -95,3 +95,18 @@
 - [x] 4. /plan: 4-я фаза `test` (прогон тестов/сборки после ревью; окно plan: test)
 - [x] Компиляция и тестирование (tsc strict, unit 36, smoke) + live-интеграция v3 в tmux: авто-пинг «без ответа» (⇠ nocase2 ping), явная agent_done → noSummary-карточка, явный agent_ping, stall-репинг (SIGSTOP-ребёнок: first → still stalled … 171s), /plan 4 фазы (plan: test, v3.txt создан). Пойман и отфильтрован pi-плейсхолдер «(no response)»
 - [x] Разрешение на коммит v3 (явная команда) — f443b28, pushed
+
+## graft-engine (итерация от 2026-09-24: полностью своя обёртка/движок вместо @nanonets/graft)
+- [x] Дисквери: факты (состав nanonets 128MB, формат graft/, поверхность CLI, языки репо, cat-vllm)
+- [x] Дизайн: SPEC-graft-engine.md (решения согласованы: tree-sitter-wasm; v1=структура+deep;
+      свой формат хранилища; engine/graft + тонкое расширение; deep — только явный конфиг)
+- [ ] 1. engine/graft: scan + parse (web-tree-sitter: ts/js/py) + nodes/edges
+- [ ] 2. store: graph.json/deep.json/cards/index.md + fingerprint
+- [x] 3. query: skeleton/callers/map/ask/grep/check/blast → +unit-тесты test/graft-engine.test.mjs (15/15)
+- [x] 4. deep: LLM-проход (openai-chat fetch, кэш по bodyHash, явный конфиг, валидация crux) → deep: явный конфиг только (env), без конфига — отказ
+- [x] 5. CLI bin/graft.mjs (ручные прогоны) → bin/graft.mjs (8 команд)
+- [x] 6. Переписать extensions/graft: тулзы через import, <graft>-секция, blast-хук, бейдж, /graft → без spawn: прямой import движка через jiti
+- [x] 7. package.json: +web-tree-sitter, +tree-sitter-wasm; убрать @nanonets/graft из доков; → @nanonets/graft убран из package.json/доков; graft/ репо пересобран (28 файлов/394 узла/355 рёбер)
+      миграция graft/ (пересборка новым движком)
+- [ ] Компиляция и тестирование (tsc strict, unit graft-engine, smoke) + live в pi
+- [ ] Разрешение на коммит (явная команда)

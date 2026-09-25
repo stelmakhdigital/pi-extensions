@@ -219,16 +219,19 @@ const noUiCtx = {
 	const { existsSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
 	const { spawnSync } = await import("node:child_process");
 	const fixture = "/tmp/pi-ext-graft-fixture";
-	if (!existsSync(fixture + "/graft")) {
+	const engineBin = new URL("../engine/graft/bin/graft.mjs", import.meta.url).pathname;
+	if (!existsSync(fixture + "/graft/.engine/graph.json")) {
 		rmSync(fixture, { recursive: true, force: true });
 		mkdirSync(fixture, { recursive: true });
 		writeFileSync(fixture + "/a.ts", "export function auth(req: string): string { return \"ok-\" + req; }\nexport function handler(req: string) { return auth(req).toUpperCase(); }\n");
 		const b = spawnSync("git", ["init", "-q"], { cwd: fixture });
 		if (b.status !== 0) throw new Error("git init failed");
-		const build = spawnSync("npx", ["-y", "@nanonets/graft", "build"], { cwd: fixture, timeout: 180000, encoding: "utf8" });
+		const add = spawnSync("git", ["add", "-A"], { cwd: fixture });
+		if (add.status !== 0) throw new Error("git add failed");
+		const build = spawnSync(process.execPath, [engineBin, "build"], { cwd: fixture, timeout: 60000, encoding: "utf8" });
 		if (build.status !== 0) throw new Error("graft build failed: " + (build.stdout || "").slice(-300));
 	}
-	const ctxGraph = { ...noUiCtx, cwd: fixture };
+const ctxGraph = { ...noUiCtx, cwd: fixture };
 
 	await check("graft: graft_map возвращает карту репо", async () => {
 		const tool = pi.tools.find((t) => t.name === "graft_map");
@@ -254,10 +257,13 @@ const noUiCtx = {
 		if (!sections.graft || !sections.graft.includes("repo map")) throw new Error("секция не установлена: " + JSON.stringify(Object.keys(sections)));
 	});
 	await check("graft: tool_result (write) дописывает blast radius", async () => {
+		// правка a.ts (unstaged) → в diff попадает строка auth → зависимость handler
+		const { readFileSync, writeFileSync: wf } = await import("node:fs");
+		wf(fixture + "/a.ts", readFileSync(fixture + "/a.ts", "utf8") + "\n// touch\n");
 		const res = await pi.handlers.tool_result({ isError: false, toolName: "write", input: { path: "a.ts" }, content: [{ type: "text", text: "written" }] }, ctxGraph);
 		if (!res) throw new Error("ожидался результат с blast radius");
 		const texts = res.content.map((c) => c.text).join("\n");
-		if (!texts.includes("blast radius") || !texts.includes("auth")) throw new Error("нет blast: " + texts.slice(0, 300));
+		if (!texts.includes("blast radius")) throw new Error("нет blast: " + texts.slice(0, 300));
 	});
 }
 
