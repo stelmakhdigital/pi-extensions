@@ -189,44 +189,47 @@ Live-интеграция v2 (tmux 3.6, локальная LLM): doctor — вс
 sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог событий.
 
 ## GRAFT-ENGINE (задача от 2026-09-24: свой движок вместо @nanonets/graft)
+**v1 + v1.1 ГОТОВО (2026-09-24). Коммит v1: ef48083; v1.1 — pending.**
 
-Контекст: расширение extensions/graft (коммит 672dbee) — обёртка над чужим CLI
-@nanonets/graft (NanoNets/Trail; тот же проект, что github.com/trailhq/Graft; npm-кэш 128MB:
-tree-sitter-wasm 15 языков, openai/anthropic SDK, MCP). Задача — полностью своя реализация
-в репо, ноль чужого runtime.
+### Что есть
+- `engine/graft/` (TS, tsc strict, 14 модулей): scan (git ls-files + untracked; языки:
+  ts/tsx/js/mjs/cjs/py — tree-sitter двухпроходная экстракция; go/rust/c/cpp/sh —
+  `extractOther.ts`: tree-sitter + правила по нод-типам) / parse (web-tree-sitter + wasm) /
+  extract (edges calls; local→export; импорты; member-цепочки `new X().m()`, `x.m()` —
+  `globalMethods` + `resolveVia` (new/call/ident)) / build (pending-resolve) / store
+  (`graft/.engine/{graph,deep}.json`, `graft/cards/`, `index.md`) / query (ask — с deep
+  summary+crux; grep; callers; skeleton; map — `{deep:true}`: темы + file-summaries;
+  check — языки через `langOf`; blast) / deep (openai-chat fetch, кэш bodyHash, валидация
+  crux по строкам тела, типы+функции+методы+классы; явный конфиг `GRFT_LLM_BASE_URL/MODEL/API_KEY`) /
+  concepts (LLM-темы 3–8, dir-fallback, кэш `deep.concepts` по hash) / viz (`graft/viz.html`,
+  self-contained SVG: кластеры каталогов, size=degree, клик=соседи, deep-панель) / index.
+- CLI `bin/graft.mjs`: build [--deep|--incremental] (и alias `build deep`), map, ask, grep,
+  callers, skeleton, check, blast, concepts, viz, watch (fs.watch recursive, debounce 1.5 c).
+- MCP `bin/graft-mcp.mjs`: stdio JSON-RPC 2.0 (newline-delimited), 7 инструментов,
+  корень = env `GRFT_MCP_ROOT` ?? cwd; ноль внешних зависимостей (jiti + движок).
+- `extensions/graft`: тонкий адаптер (jiti, без spawn): 7 тулзов, `<graft>` (TTL 120 с,
+  map без deep), blast-хук (diff-ориентированный, по write/edit + 60 с), бейдж, `/graft build [deep]`.
+- Репо-граф: 32 файла / 427 узлов / 404 рёбер; deep v1 (cat-vllm) сохранён в deep.json
+  (crux пересоберутся при следующем deep-прогоне по-новому).
 
-Согласованные решения (2026-09-24):
-1. Парсер — web-tree-sitter + tree-sitter-wasm (грамматики ts/js/python).
-2. v1 = структурный слой (build + 7 query) + свой --deep (summary файла + summary/crux символа,
-   кэш по bodyHash).
-3. Хранилище — полностью свой формат: graft/.engine/{graph.json,deep.json}, graft/cards/,
-   graft/index.md (старый graft/ gitignored → миграция = пересборка).
-4. Код: engine/graft/ (чистый TS, unit-тестится) + тонкий extensions/graft/ (import, без spawn).
-5. Deep — только явный конфиг (env GRFT_LLM_BASE_URL/MODEL/API_KEY; openai-chat; без SDK, fetch).
+### Баги/факты (уроки)
+1. **bash-обёртка инструмента** съедает backticks и `${}` в heredoc/строках — патчить файлы
+   через write-инструмент либо chr(96)/chr(36) в python. (Потерял на этом ~3 цикла.)
+2. pi `registerFlag` — только string/boolean.
+3. MCP: обработчик stdin должен прогнать ВСЕ линии чанка (ранний return/break теряет остаток
+   буфера); catch-all «method not found» — только по флагу `handled`.
+4. go-методы: тип рецивера = `type_identifier` (ptr-рецивер: pointer_type→type_identifier);
+   `identifier` — это переменная (i), не тип.
+5. bash-grammar: имя команды = нода `command_name`.
+6. LLM (cat-vllm qwen) не гарантирует дословность crux — верификация по строкам тела обязательна.
+7. `check()`/`scan` — набор языков всегда через `langOf` (единый источник), не хардкод-списки.
 
-Ключевые факты дисквери: репо = 17 файлов кода (13 ts, 2 mjs, 2 py); старый wiring.json =
-{meta,nodes[300],edges[678]} (node: id/path/span/signature/exported/body_hash; edge:
-source/target/relation/calls/confidence); расширение использует: map, skeleton, callers,
-ask, grep, check --json, blast, build; graft/ в .gitignore (строка 4); cat-vllm endpoint
-(192.168.1.114:8000/v1) — для справки, в конфиг НЕ хардкодим.
+### Тесты
+- 19 unit (`test/graft-engine.test.mjs`): fixtures ts/mjs/py/go/rust/sh; member-chain (new().m,
+  cross-file); deep + concepts через fake-LLM (node:http); viz; MCP spawn roundtrip (3 запроса).
+- 52 smoke, 36 subagents — без регрессов. tsc strict — чисто.
 
-SPEC: SPEC-graft-engine.md. Этапы: roadmap.md §graft-engine.
-
-Статус реализации (2026-09-24, v1 готов, тесты зелёные):
-- `engine/graft/` (src/{types,scan,parse,extract,build,store,query,deep,index}.ts +
-  bin/graft.mjs + package.json). Двухпроходная экстракция JS/TS (pass1: узлы + сайты вызовов
-  со скоупом класса/функции; pass2: резолв рёбер по byName/methodByClass) + Python-аналог.
-  Методы: id `Class.method`; вызовы по имени в пределах класса.
-- Найденные и зафиксированные баги: base-каталог для файлов в корне репо (import `./x` из
-  root), .js→.ts маппинг строится ПОСЛЕ нормализации пути (остаток `./` ломал match),
-  crux-валидация (только дословные строки тела), blast: для file-узлов учитываются
-  imports-рёбра.
-- `extensions/graft/index.ts` — тонкий адаптер: 7 инструментов (те же имена), прямой import
-  движка (без spawn), секция <graft> (TTL 120s, push-режим), blast-хук (diff-базированный),
-  бейдж, /graft + /graft build [deep]. Deep = только env GRFT_LLM_* (без конфига — отказ).
-- Флаг --graft-max-output: string (pi registerFlag не поддерживает number) + env GRFT_MAX_OUTPUT.
-- package.json: +web-tree-sitter ^0.26.13, +tree-sitter-wasm ^1.1.6; @nanonets/graft убран.
-  graft/ репо пересобран новым движком (28 файлов/394 узла/355 рёбер).
-- Тесты: test/graft-engine.test.mjs (15/15, deep — с фейк-LLM http-сервером); smoke §graft —
-  фикстура собирается своим bin; tsc strict чистый.
-- [x] Live-check в pi (2026-09-24): pi update --extensions (ef48083, npm-зависимости встали) → `pi -p` в репо: LLM вызвал graft_map, ответ «28 файлов · 366 узлов» (366 = 394 узла минус 28 file-нод). Коммит ef48083, pushed.
+### Осталось
+- TUI live-чек: бейдж в футере, `/graft build deep` (уведомления), blast-notify, push-mode
+  (headless `pi -p` уже проверен: LLM сам вызывает graft_ask/graft_map).
+- Коммит v1.1 (по команде пользователя).

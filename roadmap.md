@@ -110,3 +110,8 @@
       миграция graft/ (пересборка новым движком)
 - [x] Компиляция и тестирование (tsc strict, unit 15/15, smoke 52) + live в pi (pi -p: LLM вызвал graft_map → «28 файлов · 366 узлов»)
 - [x] Разрешение на коммит → коммит ef48083, pushed
+- [x] v1.1 (2026-09-24): другие языки (go/rust/c/cpp/sh) + member-цепочки вызовов + deep в
+      ask/map (map deep — опционально) + concept-ноды (LLM-темы + dir-fallback, кэш по hash) +
+      viz (graft/viz.html, CLI viz) + MCP-сервер (graft-mcp.mjs, stdio) + watch (fs.watch) +
+      типы в deep; unit 19/19 (fixtures: go/rust/sh, member-chain, concepts, viz, mcp roundtrip)
+- [ ] Live в pi (TUI): бейдж, /graft build deep, blast-notify, push-mode
