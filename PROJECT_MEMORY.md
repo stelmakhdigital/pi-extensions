@@ -189,7 +189,7 @@ Live-интеграция v2 (tmux 3.6, локальная LLM): doctor — вс
 sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — лог событий.
 
 ## GRAFT-ENGINE (задача от 2026-09-24: свой движок вместо @nanonets/graft)
-**v1 + v1.1 ГОТОВО (2026-09-24). Коммит v1: ef48083; v1.1 — pending.**
+**v1 + v1.1 + v1.2 ГОТОВО (2026-09-24). Коммиты: ef48083 (v1), 092ca7c (v1.1); v1.2 — pending.**
 
 ### Что есть
 - `engine/graft/` (TS, tsc strict, 14 модулей): scan (git ls-files + untracked; языки:
@@ -209,7 +209,7 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
   корень = env `GRFT_MCP_ROOT` ?? cwd; ноль внешних зависимостей (jiti + движок).
 - `extensions/graft`: тонкий адаптер (jiti, без spawn): 7 тулзов, `<graft>` (TTL 120 с,
   map без deep), blast-хук (diff-ориентированный, по write/edit + 60 с), бейдж, `/graft build [deep]`.
-- Репо-граф: 32 файла / 427 узлов / 404 рёбер; deep v1 (cat-vllm) сохранён в deep.json
+- Репо-граф: 32 файла / 431 узел / 410 рёбер (после v1.2); deep v1 (cat-vllm) сохранён в deep.json
   (crux пересоберутся при следующем deep-прогоне по-новому).
 
 ### Баги/факты (уроки)
@@ -223,13 +223,33 @@ sidecar — `<childSession>.exit`; `PI_SUBAGENTS_DEBUG_LOG=<file>` у child — 
 5. bash-grammar: имя команды = нода `command_name`.
 6. LLM (cat-vllm qwen) не гарантирует дословность crux — верификация по строкам тела обязательна.
 7. `check()`/`scan` — набор языков всегда через `langOf` (единый источник), не хардкод-списки.
+8. tree-sitter: `Language` — отдельный именованный экспорт web-tree-sitter (не Parser.Language).
+9. java `this.helper()`: callee method_invocation — первая именованная нода, а не
+   namedChildren[0] (this идёт первым).
+10. short-name fallback: базовое имя вызова (helper) резолвится в qualified-метод того же
+   файла (иначе byName с ключом «T.m» никогда не попадается по имени «m»).
+
+### v1.2 (беклог, 2026-09-24)
+1. **Type inference v1**: `extract.fnReturns` — явные return-типы TS/JS (function_declaration и
+   arrow/function_expression: field `return_type` → первый type_identifier; Foo<T> → Foo).
+   `build.resolveVia`: via.kind === "call" → fnReturns → класс в-файле или импорт → Foo.m.
+   Только явные аннотации; full inference (выражения, дженерики) — вне.
+2. **Языки +3**: Java (class_declaration / method_declaration / method_invocation),
+   C# (class_declaration / method_declaration / invocation_expression),
+   Kotlin (class_declaration / function_declaration / call_expression, name = simple_identifier).
+   Qualified-методы через `enclosingClassName` (parent-walk к class_declaration).
+   Расширения: .java, .cs, .kt, .kts; грамматики: java, c_sharp, kotlin.
+3. **Concepts-fallback без LLM**: root — по языковой семье (root/ts-js, root/go, …; при ≥3
+   файлов), каталоги — темы, группы <2 файлов → «прочее».
 
 ### Тесты
-- 19 unit (`test/graft-engine.test.mjs`): fixtures ts/mjs/py/go/rust/sh; member-chain (new().m,
-  cross-file); deep + concepts через fake-LLM (node:http); viz; MCP spawn roundtrip (3 запроса).
+- 20 unit (`test/graft-engine.test.mjs`): fixtures ts/mjs/py/go/rust/sh/java/cs/kt;
+  member-chain (new().m, cross-file); fnReturns (usePair→Pair.get); deep + concepts через
+  fake-LLM (node:http); concepts-fallback (отдельный fixture: root/ts-js, src, «прочее»);
+  viz; MCP spawn roundtrip (3 запроса).
 - 52 smoke, 36 subagents — без регрессов. tsc strict — чисто.
 
 ### Осталось
-- TUI live-чек: бейдж в футере, `/graft build deep` (уведомления), blast-notify, push-mode
-  (headless `pi -p` уже проверен: LLM сам вызывает graft_ask/graft_map).
-- Коммит v1.1 (по команде пользователя).
+- Live smoke v1.2 (быстрый, через pi -p или tmux) + коммит v1.2 (по команде пользователя).
+- Бэклог дальше: full type inference (возвратные выражения, дженерики), авто-refresh deep,
+  другие языки (ruby/php/swift — грамматики в tree-sitter-wasm есть, 100+).

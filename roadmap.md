@@ -115,3 +115,6 @@
       viz (graft/viz.html, CLI viz) + MCP-сервер (graft-mcp.mjs, stdio) + watch (fs.watch) +
       типы в deep; unit 19/19 (fixtures: go/rust/sh, member-chain, concepts, viz, mcp roundtrip)
 - [ ] Live в pi (TUI): бейдж, /graft build deep, blast-notify, push-mode
+- [x] v1.2 (2026-09-24, бэклог): type inference v1 (возвратные типы TS/JS → f().m()),
+      языки +3 (Java/C#/Kotlin), concepts-fallback без LLM (root по языку, каталоги, «прочее»);
+      unit 20/20 (fixtures java/cs/kt, fnReturns, fallback)
