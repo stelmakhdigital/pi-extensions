@@ -92,8 +92,17 @@ Edge: `{source, target, relation: calls|imports|references, confidence:"extracte
     (callee: identifier или метод внутри method/dot_index_expression — lastIdent).
 - Языки движка теперь (18): ts/tsx/js/mjs/cjs/py + go/rust/c/cpp/sh/java/csharp/kotlin/ruby/php/
   swift/dart/scala/lua.
-- Остаток беклога: full type inference (дженерики, return-цепи >3), другие языки
-  (грамматики 100+ в tree-sitter-wasm), авто-refresh deep (фактически уже есть: bodyHash-кэш).
+### 2f. v1.5 (2026-09-24, бэклог-итерация 4: авто-refresh deep)
+- **Auto-deep**: при структурном `build` (без явного `--deep`) движок сам делает
+  **инкрементальный deep-проход**, если: (а) `deep.json` уже не пуст (`hasDeep`), (б) задан
+  env-конфиг `GRFT_LLM_BASE_URL`/`GRFT_LLM_MODEL`. Только изменившиеся bodyHash перечитываются;
+  **без дрейфа — 0 LLM-вызовов** (весь кэш). `deepCfgFromEnv()` в deep.ts, ветка в `build()`
+  index.ts. Отключение: `autoDeep: false` (API) или `GRFT_AUTO_DEEP=0` (env).
+- CLI `watch`: после каждого rebuild auto-deep включён автоматически; строка отчёта
+  показывает `+N файлов/+M символов (кэш a/b)`.
+- Semантика: auto-deep — «тихое» обновление по дрейфу; `build deep` остаётся явным
+  (первый запуск / полный аудит). Концепты при auto-deep пересобираются (кэш по hash summaries).
+- Остаток беклога: дженерики/return-цепи >3 хопов, прочие языки (100+ грамматик).
 - `parse/` — загрузка web-tree-sitter + wasm (deps: `web-tree-sitter`, `tree-sitter-wasm`);
   парсинг → дерево; кэш парсинга в памяти на сессию.
 - `symbols.ts` — узлы: функции/классы/методы/типы/константы-экспорты, span, signature,

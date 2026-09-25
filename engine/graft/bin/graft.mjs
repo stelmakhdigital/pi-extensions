@@ -132,13 +132,14 @@ switch (cmd) {
 			timer = setTimeout(async () => {
 				try {
 					const rep = await engine.build(root);
-					console.log(`[${new Date().toLocaleTimeString()}] rebuild: ${rep.files} файлов, ${rep.nodes} узлов, ${rep.edges} рёбер`);
+					const deepPart = rep.deep ? `, auto-deep: +${rep.deep.filesDone} файлов/+${rep.deep.symbolsDone} символов (кэш ${rep.deep.filesCached}/${rep.deep.symbolsCached})` : "";
+					console.log(`[${new Date().toLocaleTimeString()}] rebuild: ${rep.files} файлов, ${rep.nodes} узлов, ${rep.edges} рёбер${deepPart}`);
 				} catch (e) {
 					console.log("rebuild failed:", e.message);
 				}
 			}, 1500);
 		});
-		console.log(`graft watch: слежу за ${root} (дебаунс 1.5s, структурная пересборка). Ctrl+C — стоп.`);
+		console.log(`graft watch: слежу за ${root} (дебаунс 1.5s; auto-deep при дрейфе — если задан GRFT_LLM_BASE_URL/MODEL). Ctrl+C — стоп.`);
 		await new Promise(() => {});
 		break;
 	}

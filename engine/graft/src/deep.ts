@@ -55,6 +55,14 @@ function parseLlmJson(raw: string): LlmReply | null {
 	}
 }
 
+/** Deep-конфиг из env (GRFT_LLM_BASE_URL/MODEL/API_KEY); null — если нет baseUrl/model. */
+export function deepCfgFromEnv(): DeepConfig | null {
+	const baseUrl = process.env.GRFT_LLM_BASE_URL;
+	const model = process.env.GRFT_LLM_MODEL;
+	if (!baseUrl || !model) return null;
+	return { baseUrl, model, apiKey: process.env.GRFT_LLM_API_KEY };
+}
+
 export interface DeepReport {
 	filesDone: number;
 	filesCached: number;

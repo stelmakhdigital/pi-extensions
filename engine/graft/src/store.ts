@@ -18,6 +18,16 @@ export function readGraph(root: string): Graph {
 	return JSON.parse(readFileSync(join(engineDir(root), "graph.json"), "utf8")) as Graph;
 }
 
+/** Есть ли уже deep-данные (для auto-refresh: deep.json не пустой). */
+export function hasDeep(root: string): boolean {
+	try {
+		const d = readDeep(root);
+		return Object.keys(d.files ?? {}).length > 0 || Object.keys(d.symbols ?? {}).length > 0;
+	} catch {
+		return false;
+	}
+}
+
 export function readDeep(root: string): DeepStore {
 	const p = join(engineDir(root), "deep.json");
 	if (!existsSync(p)) return { files: {}, symbols: {} };

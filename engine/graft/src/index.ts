@@ -9,13 +9,13 @@
  * Движок — чистый TS без pi-API; расширение extensions/graft — тонкий адаптер.
  */
 import { buildGraph } from "./build.js";
-import { deepBuild } from "./deep.js";
+import { deepBuild, deepCfgFromEnv } from "./deep.js";
 import { conceptsBuild } from "./concepts.js";
 import { writeViz } from "./viz.js";
 
 export { conceptsBuild, writeViz };
 export { readGraph } from "./store.js";
-import { hasGraph, readDeep, writeCards, writeGraph, writeIndex } from "./store.js";
+import { hasDeep, hasGraph, readDeep, writeCards, writeGraph, writeIndex } from "./store.js";
 import { makeQueries } from "./query.js";
 import type { DeepConfig, Graph } from "./types.js";
 
@@ -28,6 +28,8 @@ export { scanRepo } from "./scan.js";
 export interface BuildOptions {
 	deep?: DeepConfig;
 	onProgress?: (msg: string) => void;
+	/** Auto-refresh deep при структурном build (по умолчанию true; false или GRFT_AUTO_DEEP=0 — выкл). */
+	autoDeep?: boolean;
 }
 
 export interface BuildReport {
@@ -49,6 +51,16 @@ export async function build(root: string, opts: BuildOptions = {}): Promise<Buil
 		deepReport = rep;
 		await conceptsBuild(root, g, opts.deep, opts.onProgress);
 		// deep.json уже записан внутри deepBuild/conceptsBuild; пересобираем карточки/index.
+	} else if (opts.autoDeep !== false) {
+		// Auto-refresh: если deep уже запускали (deep.json не пуст) и env-конфиг есть —
+		// инкрементальный deep (только изменившиеся файлы/символы; без дрейфа — 0 LLM-вызовов).
+		// Отключение: opts.autoDeep = false или env GRFT_AUTO_DEEP=0.
+		const envCfg = process.env.GRFT_AUTO_DEEP === "0" ? null : deepCfgFromEnv();
+		if (envCfg && hasDeep(root)) {
+			opts.onProgress?.("auto-deep: инкрементальный deep (env-конфиг)");
+			deepReport = await deepBuild(root, g, envCfg, opts.onProgress);
+			await conceptsBuild(root, g, envCfg, opts.onProgress);
+		}
 	}
 	const deep = readDeep(root);
 	const cards = writeCards(root, g, deep);

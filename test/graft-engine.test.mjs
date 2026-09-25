@@ -428,6 +428,54 @@ await check("deep: инкрементальность (кэш по bodyHash)", a
 	assert(rep.deep.symbolsDone === 0 && rep.deep.symbolsCached > 0, JSON.stringify(rep.deep));
 });
 
+await check("auto-deep: инкрементальный при структурном build (env-конфиг, GRFT_AUTO_DEEP=0 — выкл)", async () => {
+	let llmCalls = 0;
+	const srv = http.createServer((req, res) => {
+		let b = "";
+		req.on("data", (d) => (b += d));
+		req.on("end", () => {
+			llmCalls++;
+			const p = JSON.parse(b).messages.map((m) => m.content).join("\n");
+			let reply;
+			if (p.includes("Опиши ОДНИМ предложением (≤40 слов)")) reply = "Авто summary.";
+			else if (p.includes("топик")) {
+				const files = [...p.matchAll(/^- (\S+):/gm)].map((m) => m[1]);
+				reply = JSON.stringify({ topics: [{ name: "Авто", summary: "s", files: files.slice(0, 3) }] });
+			} else reply = JSON.stringify({ summary: "Авто симв.", crux: [] });
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ choices: [{ message: { content: reply } }] }));
+		});
+	});
+	await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+	process.env.GRFT_LLM_BASE_URL = `http://127.0.0.1:${srv.address().port}/v1`;
+	process.env.GRFT_LLM_MODEL = "auto-fake";
+	try {
+		// 1) создаём дрейф → auto-deep перечитывает изменившийся файл
+		writeFileSync(join(root, "src/util.ts"), readFileSync(join(root, "src/util.ts"), "utf8") + "export const extra1 = 1;\n");
+		const rep1 = await engine.build(root);
+		assert(rep1.deep, "auto-deep отчёт в build");
+		assert(rep1.deep.filesDone >= 1, `ис изменился util.ts: filesDone=${rep1.deep?.filesDone}`);
+		assert(llmCalls > 0, "LLM-вызовы были");
+		const before = llmCalls;
+		// 2) дрейфа нет → 0 новых LLM-вызовов (всё кэш)
+		const rep2 = await engine.build(root);
+		assert(rep2.deep && rep2.deep.filesDone === 0, `всё кэш: ${JSON.stringify(rep2.deep)}`);
+		assert(llmCalls === before, "без дрейфа — 0 LLM-вызовов");
+		// 3) GRFT_AUTO_DEEP=0 → auto-deep выключен
+		process.env.GRFT_AUTO_DEEP = "0";
+		writeFileSync(join(root, "src/util.ts"), readFileSync(join(root, "src/util.ts"), "utf8") + "export const extra2 = 2;\n");
+		const rep3 = await engine.build(root);
+		assert(!rep3.deep, "auto-deep выключен (rep.deep undefined)");
+		// возвращаем main-fake summary (карточки-тест ожидает «Файл делает X.»)
+		await engine.build(root, { deep: deepCfg, autoDeep: false });
+	} finally {
+		delete process.env.GRFT_AUTO_DEEP;
+		delete process.env.GRFT_LLM_BASE_URL;
+		delete process.env.GRFT_LLM_MODEL;
+		srv.close();
+	}
+});
+
 await check("карточки и index.md", () => {
 	const card = readFileSync(join(root, "graft", "cards", "src/util.ts.md"), "utf8");
 	assert(card.includes("helper") && card.includes("Файл делает X."), card);
