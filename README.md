@@ -9,6 +9,8 @@
 |---|---|
 | [prompt-snippets](extensions/prompt-snippets/) | Комбинируемые одноцелевые промпт-правила: включаются на каждое сообщение через меню (`alt+s` / `/snippets`), вставляются перед или после вашего текста |
 | [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах |
+| [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/bash вне рабочей директории сессии (realpath + symlink-escape, bash-эвристика по path-токенам), allowlist (`$HOME/.pi`, `--dir-guard-allow`, `.dir-guard.json`), `/dir-guard` + бейдж `DR OFF` |
+| [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/bash, чьи пути уходят вне рабочей директории (CWD) и allowlist'а: realpath-канонизация (symlink-escape блокируется), allowlist — `$HOME/.pi` (дефолт) + `--dir-guard-allow` + `.dir-guard.json` в CWD, `/dir-guard` и бейдж `DR OFF` |
 | [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: задаёт пользователю один вопрос (текст, выбор одного, мультивыбор) и ждёт ответа |
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
 | [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41 t/s · ⌀ 0.8s` (EMA по ответам, на лету при стриминге; TTFT — время до первого токена; aborted/короткие ответы не считаются) |
@@ -50,6 +52,8 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 |---|---|
 | prompt-snippets | `extensions/prompt-snippets/*` |
 | bash-guard | `extensions/bash-guard/*` |
+| dir-guard | `extensions/dir-guard/*` |
+| dir-guard | `extensions/dir-guard/*` |
 | ask-user-question | `extensions/ask-user-question/*` |
 | sandbox | `extensions/sandbox/*` |
 | subagents | `extensions/subagents/*` |
@@ -88,6 +92,24 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 Даст диалог «Выполнить / Отменить» на рискованные bash-команды, `/bash-guard`
 и флаги `--bash-guard-disabled` / `--bash-guard-auto-allow`. Зависимость
 `shell-quote` ставится автоматически (npm install при установке пакета).
+
+### Только dir-guard
+
+```json
+{
+	"packages": [
+		{
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
+			"extensions": ["extensions/dir-guard/*"]
+		}
+	]
+}
+```
+
+Даст жёсткий блок read/write/edit/bash вне рабочей директории (CWD) и allowlist'а
+(дефолт `$HOME/.pi`, плюс `--dir-guard-allow` и `.dir-guard.json` в CWD),
+команду `/dir-guard` и флаги `--dir-guard-disabled` / `--dir-guard-allow`.
+Без зависимостей.
 
 ### Только ask-user-question
 

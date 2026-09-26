@@ -26,6 +26,7 @@
     "extensions": [
       "extensions/prompt-snippets/index.ts",
       "extensions/bash-guard/index.ts",
+      "extensions/dir-guard/index.ts",
       "extensions/ask-user-question/index.ts",
       "extensions/subagents/index.ts",
       "extensions/sandbox/index.ts",
