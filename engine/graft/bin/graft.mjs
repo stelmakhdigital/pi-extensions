@@ -2,7 +2,7 @@
 /**
  * graft (pi-graft-engine) — CLI для рук.
  *
- *   node engine/graft/bin/graft.mjs build [--deep] [--follow-submodules | --no-follow-submodules] [dir]
+ *   node engine/graft/bin/graft.mjs build [--deep] [--follow-submodules | --no-follow-submodules] [--dir <dir>]
  *   node engine/graft/bin/graft.mjs map [dir]
  *   node engine/graft/bin/graft.mjs ask <query> [dir]
  *   node engine/graft/bin/graft.mjs grep <pattern> [--scope <p>] [--fixed] [-i] [dir]
