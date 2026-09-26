@@ -2,7 +2,5 @@ node_modules/
 # локальный чеклист по выносу graft в отдельное репо (pi-graft)
 FOR_REMOVE.md
 
-# graft's local graph cache — regenerable, not committed (run `graft build`).
-/graft/
 __pycache__/
 .memory/
