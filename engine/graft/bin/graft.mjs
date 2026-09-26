@@ -3,16 +3,16 @@
  * graft (pi-graft-engine) — CLI для рук.
  *
  *   node engine/graft/bin/graft.mjs build [--deep] [--follow-submodules | --no-follow-submodules] [--dir <dir>]
- *   node engine/graft/bin/graft.mjs map [dir]
- *   node engine/graft/bin/graft.mjs ask <query> [dir]
- *   node engine/graft/bin/graft.mjs grep <pattern> [--scope <p>] [--fixed] [-i] [dir]
- *   node engine/graft/bin/graft.mjs callers <symbol> [--direction in|out] [-d N] [dir]
- *   node engine/graft/bin/graft.mjs skeleton <file> [dir]
- *   node engine/graft/bin/graft.mjs check [--json] [dir]   # exit 1 при дрейфе (CI)
- *   node engine/graft/bin/graft.mjs blast [base]
- *   node engine/graft/bin/graft.mjs concepts [dir]     # темы (LLM, fallback по каталогам)
- *   node engine/graft/bin/graft.mjs watch [dir]       # авто-пересборка при изменениях
- *   node engine/graft/bin/graft.mjs viz [dir]         # graft/viz.html
+ *   node engine/graft/bin/graft.mjs map [--dir <dir>]
+ *   node engine/graft/bin/graft.mjs ask <query> [--dir <dir>]
+ *   node engine/graft/bin/graft.mjs grep <pattern> [--scope <p>] [--fixed] [-i] [--dir <dir>]
+ *   node engine/graft/bin/graft.mjs callers <symbol> [--direction in|out] [-d N] [--dir <dir>]
+ *   node engine/graft/bin/graft.mjs skeleton <file> [--dir <dir>]
+ *   node engine/graft/bin/graft.mjs check [--json] [--dir <dir>]   # exit 1 при дрейфе (CI)
+ *   node engine/graft/bin/graft.mjs blast [base] [--dir <dir>]
+ *   node engine/graft/bin/graft.mjs concepts [--dir <dir>]     # темы (LLM, fallback по каталогам)
+ *   node engine/graft/bin/graft.mjs watch [--dir <dir>]       # авто-пересборка при изменениях
+ *   node engine/graft/bin/graft.mjs viz [--dir <dir>]         # graft/viz.html
  *
  * Auto-refresh: ask/grep/callers/skeleton/map/blast тихо пересобирают граф при дрейфе
  * (fingerprint: size+mtime; GRFT_REFRESH=hash — sha1; GRFT_NO_REFRESH=1 — выкл).
