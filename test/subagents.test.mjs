@@ -376,6 +376,15 @@ await check("launch script: базовая структура и цитиров�
 	assert(lines[lines.length - 1] === 'echo "__SUBAGENT_EXIT_$?"', "sentinel");
 });
 
+await check("sentinel contract: строка launch-скрипта матчит EXIT_SENTINEL_RE", () => {
+	const script = ext.buildLaunchScript({ r: makeRunning(), def: undefined, params: { task: "x" }, childCwd: "/p", model: undefined, childSessionFile: "/s.jsonl", autoExit: true, childExtensions: "none" });
+	const lastLine = script.trim().split("\n").pop();
+	assert(lastLine === 'echo "__SUBAGENT_EXIT_$?"', "последняя строка скрипта: " + lastLine);
+	// Регрессия: regex и фактическая строка панели (__SUBAGENT_EXIT_1, без хвостовых __) должны совпадать.
+	assert(ext.EXIT_SENTINEL_RE.test("Error: Model nope/ghost not found\n__SUBAGENT_EXIT_1"), "матчит реальную строку");
+	assert(ext.EXIT_SENTINEL_RE.test("__SUBAGENT_EXIT_0"), "матчит exit 0");
+});
+
 await check("launch script: resume — без task, с resumeMessage и allowlist", () => {
 	const def = agents.parseAgentDefinition(AGENT_MD, "s", "project", "/x");
 	const script = buildLaunchScript({

@@ -50,7 +50,7 @@ const WIDGET_KEY = "subagents";
 const RESULT_CUSTOM_TYPE = "subagents.result";
 const REPORT_CUSTOM_TYPE = "subagents.report";
 const HANDOFF_GUARD_ENV = "PI_SUBAGENTS_TMUX_HANDOFF";
-const EXIT_SENTINEL_RE = /__SUBAGENT_EXIT_(\d+)__/;
+export const EXIT_SENTINEL_RE = /__SUBAGENT_EXIT_(\d+)/;
 
 /**
  * Completion protocol appended to non-auto-exit (interactive) children: they
