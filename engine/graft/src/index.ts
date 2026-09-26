@@ -9,9 +9,10 @@
  * Движок — чистый TS без pi-API; расширение extensions/graft — тонкий адаптер.
  */
 import { buildGraph } from "./build.js";
-import { deepBuild, deepCfgFromEnv } from "./deep.js";
+import { deepBuild } from "./deep.js";
+import { resolveDeepConfig } from "./llmConfig.js";
 import { proseBuild } from "./prose.js";
-import { readBuildConfig, writeBuildConfig } from "./scan.js";
+import { readBuildConfig, writeBuildConfig, effectiveRuntime } from "./scan.js";
 import { conceptsBuild } from "./concepts.js";
 import { serveViz, writeViz } from "./viz.js";
 import { writeFingerprint } from "./refresh.js";
@@ -31,7 +32,8 @@ export { lspStatus, lspSync, LSP_SERVERS } from "./lsp.js";
 export { makeQueries } from "./query.js";
 export type { Queries } from "./query.js";
 export type { DeepConfig, Graph, GraphNode, DeepStore } from "./types.js";
-export { readBuildConfig, writeBuildConfig, scanRepo, type BuildConfig } from "./scan.js";
+export { resolveDeepConfig, writeLlmConfig, maskKey, globalLlmConfigPath, projectLlmConfigPath } from "./llmConfig.js";
+export { readBuildConfig, writeBuildConfig, effectiveRuntime, scanRepo, type BuildConfig, type RuntimeConfig } from "./scan.js";
 export { ensureFresh, driftReport, enableAutoRebuild, isRebuilding } from "./refresh.js";
 export { initWiring, uninstallWiring, mcpServerPath } from "./wiring.js";
 export { llmChat } from "./deep.js";
@@ -71,12 +73,13 @@ export async function build(root: string, opts: BuildOptions = {}): Promise<Buil
 		if (prose.done || prose.cached) opts.onProgress?.(`prose: ${prose.done} новых / ${prose.cached} в кэше`);
 		// deep.json уже записан внутри deepBuild/conceptsBuild; пересобираем карточки/index.
 	} else if (opts.autoDeep !== false) {
-		// Auto-refresh: если deep уже запускали (deep.json не пуст) и env-конфиг есть —
-		// инкрементальный deep (только изменившиеся файлы/символы; без дрейфа — 0 LLM-вызовов).
-		// Отключение: opts.autoDeep = false или env GRFT_AUTO_DEEP=0.
-		const envCfg = process.env.GRFT_AUTO_DEEP === "0" ? null : deepCfgFromEnv();
+		// Auto-refresh: если deep уже запускали (deep.json не пуст) и конфиг LLM есть
+		// (env → project → global) — инкрементальный deep (только изменившиеся файлы/символы;
+		// без дрейфа — 0 LLM-вызовов). Отключение: opts.autoDeep = false, env GRFT_AUTO_DEEP=0
+		// или project-конфиг (graft config set --auto-deep off).
+		const envCfg = effectiveRuntime(root).autoDeepDisabled ? null : resolveDeepConfig(root).config;
 		if (envCfg && hasDeep(root)) {
-			opts.onProgress?.("auto-deep: инкрементальный deep (env-конфиг)");
+			opts.onProgress?.("auto-deep: инкрементальный deep (конфиг LLM)");
 			deepReport = await deepBuild(root, g, envCfg, opts.onProgress);
 			const topics = await conceptsBuild(root, g, envCfg, opts.onProgress);
 			const prose = await proseBuild(root, g, envCfg, topics, opts.onProgress);

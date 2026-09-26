@@ -135,7 +135,8 @@ build/deep/map/ask/grep/callers/skeleton/check/blast/concepts/viz/watch).
 Плюс **MCP-сервер** (`engine/graft/bin/graft-mcp.mjs`, stdio JSON-RPC) для внешних агентов
 и **viz** (`graft/viz.html`, self-contained SVG-карта).
 
-Auto-refresh: если deep уже запускали (deep.json не пуст) и задан `GRFT_LLM_BASE_URL/MODEL`,
+Auto-refresh: если deep уже запускали (deep.json не пуст) и есть конфиг LLM
+(env `GRFT_LLM_BASE_URL/MODEL` или `graft config set`: project/global-файл),
 любой структурный `build` сам перечитывает изменившиеся файлы/символы (без дрейфа — 0 LLM-вызовов);
 выкл: `GRFT_AUTO_DEEP=0`.
 

@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { engineDir, hasGraph } from "./store.js";
-import { isIndexablePath, listRepoPaths, readBuildConfig } from "./scan.js";
+import { isIndexablePath, listRepoPaths, readBuildConfig, effectiveRuntime } from "./scan.js";
 
 const FP_NAME = "fingerprint.json";
 const sha1 = (s: string) => createHash("sha1").update(s).digest("hex");
@@ -60,7 +60,7 @@ export async function driftReport(
 	if (!hasGraph(root)) return { drifted: false, reason: "нет графа", added: 0, removed: 0, changed: 0 };
 	const fp = readFp(root);
 	if (!fp) return { drifted: true, reason: "нет fingerprint (пересборка)", added: 0, removed: 0, changed: 0 };
-	const useHash = process.env.GRFT_REFRESH === "hash";
+	const useHash = effectiveRuntime(root).useHash;
 	const list = await listRepoPaths(root, readBuildConfig(root).followSubmodules);
 	if (list.length === 0) return { drifted: false, reason: "git недоступен — пропуск", added: 0, removed: 0, changed: 0 };
 	const current = list.filter(isIndexablePath);
@@ -111,8 +111,8 @@ let autoRebuildInflight = false;
  * Дебаунс-обёртка для тихой пересборки после правок (write/edit): коалесит серию правок
  * в один rebuild через debounceMs; параллельные запуски — один в полёте. Ошибки — тихо.
  */
-export function enableAutoRebuild(fn: () => Promise<void>, debounceMs = 4000): void {
-	if (autoRebuildInflight || process.env.GRFT_NO_REFRESH === "1") return;
+export function enableAutoRebuild(fn: () => Promise<void>, debounceMs = 4000, root?: string): void {
+	if (autoRebuildInflight || (root ? effectiveRuntime(root).noRefresh : process.env.GRFT_NO_REFRESH === "1")) return;
 	if (autoRebuildTimer) clearTimeout(autoRebuildTimer);
 	autoRebuildTimer = setTimeout(async () => {
 		autoRebuildTimer = null;
@@ -144,7 +144,7 @@ export async function ensureFresh(
 	root: string,
 	opts: { timeoutMs?: number } = {},
 ): Promise<{ refreshed: boolean; stale?: boolean; files?: number; skipped?: string; reason?: string }> {
-	if (process.env.GRFT_NO_REFRESH === "1") return { refreshed: false, skipped: "GRFT_NO_REFRESH=1" };
+	if (effectiveRuntime(root).noRefresh) return { refreshed: false, skipped: "no-refresh (env GRFT_NO_REFRESH или конфиг)" };
 	const dr = await driftReport(root);
 	if (!dr.drifted) return { refreshed: false, reason: dr.reason ?? undefined };
 	if (rebuildInflight.has(root)) return { refreshed: false, reason: "rebuild уже идёт (фоновый)" };

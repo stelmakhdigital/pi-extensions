@@ -25,7 +25,7 @@ function section(root: string): string {
 - Все вхождения: node ${bin} grep "<regex>"; сигнатуры файла — skeleton <file>;
   кто зависит — callers <symbol>; blast git-диффа — blast [base]; свежесть — check.
 - Граф авто-пересобирается при каждом запросе (fingerprint дрейфа, $0); вручную — build
-  (+ build --deep с GRFT_LLM_BASE_URL/MODEL). MCP-сервер: node ${mcpServerPath()} (stdio).
+  (+ build --deep с конфигом LLM: graft config show / graft config set). MCP-сервер: node ${mcpServerPath()} (stdio).
 ${END}`;
 }
 

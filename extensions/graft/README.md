@@ -57,27 +57,60 @@
 ## LLM-провайдер (только для deep: `/graft build deep`, `build --deep`)
 
 Deep — суммаризация файлов/символов и концепт-темы. Конфиг явный, без дефолтных
-эндпоинтов (openai-chat-формат, `fetch`):
+эндпоинтов (openai-chat-формат, `fetch`). Конфиг хранится в файлах —
+не нужно export-ить ключи каждый раз:
 
-| Переменная | Назначение |
-|---|---|
-| `GRFT_LLM_BASE_URL` | …/v1 (OpenAI-совместимый: Ollama, vLLM, OpenRouter, Anthropic-прокси) |
-| `GRFT_LLM_MODEL` | имя модели |
-| `GRFT_LLM_API_KEY` | ключ (для локальных серверов — любое значение) |
+| Приоритет | Где | Для чего |
+|---|---|---|
+| 1 | env `GRFT_LLM_BASE_URL` / `GRFT_LLM_MODEL` / `GRFT_LLM_API_KEY` | one-off, CI, точечный override поля |
+| 2 | `<repo>/graft/.engine/llm.json` | per-repo (разные репо → разные провайдеры; `/graft/` в .gitignore) |
+| 3 | `~/.config/pi-graft/llm.json` (chmod 600) | глобальный дефолт на машину |
 
-Пример (локальный vLLM): `GRFT_LLM_BASE_URL=http://127.0.0.1:8000/v1 GRFT_LLM_MODEL=qwen GRFT_LLM_API_KEY=dummy`.
-Без `GRFT_LLM_BASE_URL`/`GRFT_LLM_MODEL` — deep честно отказывается работать.
-Auto-deep (инкрементальный deep при обычной пересборке, если deep уже был)
-управляется тем же конфигом; выкл: `GRFT_AUTO_DEEP=0`.
+Каждое поле (baseUrl/model/apiKey/temperature/timeoutMs) берётся из первого слоя, где задано.
+
+Настройка (из консоли; в pi — та же CLI под `node engine/graft/bin/graft.mjs`):
+
+```bash
+graft config set --base-url http://127.0.0.1:8000/v1 --model qwen   # в корне репо → project-конфиг
+graft config set --base-url … --model … --scope global               # один раз на машину
+graft config set --temperature 0 --timeout-ms 120000                  # опц.: параметры запросов (деф 0.2 / 90s)
+graft config show                                                    # что резолвится и откуда
+```
+
+Формат файла: `{ "baseUrl": "…/v1", "model": "…", "apiKey": "…", "temperature": 0.2, "timeoutMs": 90000 }`
+(apiKey/temperature/timeoutMs опц.; для локальных серверов ключ — любое значение).
+Без `baseUrl` + `model` — deep честно отказывается работать (`graft config show` покажет, чего не хватает).
+
+### Runtime-настройки (project, `<repo>/graft/.engine/config.json`)
+
+Приоритет: **env → config.json → дефолт**. Настройка: `graft config set --<flag> on|off|…`.
+
+| Флаг `config set` | env-аналог | Что делает (деф) |
+|---|---|---|
+| `--no-refresh on\|off` | `GRFT_NO_REFRESH=1` | не автопересобирать граф (off) |
+| `--auto-deep on\|off` | `GRFT_AUTO_DEEP=0` | auto-deep при структурном build (on) |
+| `--follow-submodules on\|off` | — (флаг `build`) | индексировать сабмодули (off) |
+| `--refresh-mode size\|hash` | `GRFT_REFRESH=hash` | fingerprint: size+mtime (size) или sha1 |
+| `--refresh-timeout-ms N` | `GRFT_REFRESH_TIMEOUT_MS` | бюджет синхронного rebuild'а (10000) |
+| `--max-output N` | `GRFT_MAX_OUTPUT` | лимит вывода graft-тулов (16000) |
+
+Machine-level (не per-repo, env-only): `GRFT_STATE_DIR` (метрики), `GRFT_MCP_ROOT` (MCP),
+`GRFT_LLM_CONFIG` (путь global llm.json).
 
 ## Переменные окружения движка
+
+env имеет приоритет над `config.json` (per-repo, `graft config set`); детали — выше в «Runtime-настройки».
 
 | Переменная | Назначение |
 |---|---|
 | `GRFT_NO_REFRESH=1` | не автопересобирать граф перед запросами (fingerprint-проверка) |
 | `GRFT_AUTO_DEEP=0` | выключить auto-deep при структурной пересборке |
+| `GRFT_REFRESH=hash` | fingerprint по sha1 (def: size+mtime) |
+| `GRFT_REFRESH_TIMEOUT_MS` | бюджет синхронного rebuild'а (def 10000) |
 | `GRFT_MAX_OUTPUT` | лимит вывода инструментов (если флаг не задан) |
-| `GRFT_MCP_ROOT` | корень репо для MCP-сервера (иначе — cwd) |
+| `GRFT_STATE_DIR` | каталог метрик сессий (machine-level, env-only) |
+| `GRFT_MCP_ROOT` | корень репо для MCP-сервера (иначе — cwd; env-only) |
+| `GRFT_LLM_CONFIG` | путь global llm.json (env-only) |
 
 ## Graft CLI — `node engine/graft/bin/graft.mjs`
 
@@ -91,6 +124,7 @@ Auto-deep (инкрементальный deep при обычной перес�
 | `lsp-status`, `lsp-sync` | нерешённые member-вызовы → LSP goToDefinition → рёбра `confidence: "lsp"` |
 | `init [--dry-run] [--no-mcp]` | секция в `AGENTS.md` (маркеры, идемпотентно) + `mcpServers.graft` в `.mcp.json` |
 | `uninstall [-y]` | убрать секцию и MCP-запись (без `-y` — dry-run) |
+| `config [show\|set]` | конфиг LLM + runtime: `set --base-url … --model … [--api-key …] [--temperature N] [--timeout-ms N] [--scope global\|project]` (LLM; def: project в репо с графом, иначе global) и `--no-refresh/--auto-deep/--follow-submodules on\|off`, `--refresh-mode size\|hash`, `--refresh-timeout-ms N`, `--max-output N` (runtime → project `config.json`); `show` — что резолвится и откуда |
 
 ### LSP (опционально)
 

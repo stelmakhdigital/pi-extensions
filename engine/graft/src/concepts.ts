@@ -12,8 +12,8 @@ export async function llmChat(cfg: DeepConfig, system: string, user: string): Pr
 	const res = await fetch(url, {
 		method: "POST",
 		headers,
-		body: JSON.stringify({ model: cfg.model, temperature: 0.2, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
-		signal: AbortSignal.timeout(120_000),
+		body: JSON.stringify({ model: cfg.model, temperature: cfg.temperature ?? 0.2, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+		signal: AbortSignal.timeout(cfg.timeoutMs ?? 120_000),
 	});
 	if (!res.ok) throw new Error(`LLM HTTP ${res.status}`);
 	const j = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };

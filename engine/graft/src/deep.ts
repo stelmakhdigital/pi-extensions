@@ -16,7 +16,7 @@ export async function llmChat(cfg: DeepConfig, system: string, user: string): Pr
 	if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;
 	const body = {
 		model: cfg.model,
-		temperature: 0.2,
+		temperature: cfg.temperature ?? 0.2,
 		messages: [
 			{ role: "system", content: system },
 			{ role: "user", content: user },
@@ -24,7 +24,7 @@ export async function llmChat(cfg: DeepConfig, system: string, user: string): Pr
 	};
 	for (let attempt = 0; attempt < 2; attempt++) {
 		const ctl = new AbortController();
-		const t = setTimeout(() => ctl.abort(), 90_000);
+		const t = setTimeout(() => ctl.abort(), cfg.timeoutMs ?? 90_000);
 		try {
 			const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: ctl.signal });
 			if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -56,14 +56,6 @@ function parseLlmJson(raw: string): LlmReply | null {
 	}
 }
 
-/** Deep-конфиг из env (GRFT_LLM_BASE_URL/MODEL/API_KEY); null — если нет baseUrl/model. */
-export function deepCfgFromEnv(): DeepConfig | null {
-	const baseUrl = process.env.GRFT_LLM_BASE_URL;
-	const model = process.env.GRFT_LLM_MODEL;
-	if (!baseUrl || !model) return null;
-	return { baseUrl, model, apiKey: process.env.GRFT_LLM_API_KEY };
-}
-
 export interface DeepReport {
 	filesDone: number;
 	filesCached: number;
@@ -77,7 +69,7 @@ export interface DeepReport {
  * Без cfg — ошибка (явный конфиг обязателен).
  */
 export async function deepBuild(root: string, g: Graph, cfg: DeepConfig, onProgress?: (msg: string) => void): Promise<DeepReport> {
-	if (!cfg.baseUrl || !cfg.model) throw new Error("deep: нужен явный конфиг (baseUrl + model); см. /graft build deep");
+	if (!cfg.baseUrl || !cfg.model) throw new Error("deep: нужен конфиг LLM (baseUrl + model); см. `graft config show` / `graft config set`");
 	const deep: DeepStore = readDeep(root);
 	const report: DeepReport = { filesDone: 0, filesCached: 0, symbolsDone: 0, symbolsCached: 0, symbolsFailed: 0 };
 	const fileNodes = g.nodes.filter((n) => n.kind === "file");

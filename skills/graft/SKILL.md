@@ -77,6 +77,10 @@ description: "Запросы к локальному графу кода Graft (
   callers/skeleton/blast/viz/lsp-status/lsp-sync/init/uninstall.
 - MCP: `node engine/graft/bin/graft-mcp.mjs --root <root>` (stdio) — те же
   инструменты через MCP-протокол для любых LLM-хостов.
-- Deep-слой (summaries/crux/concepts): только при явном
-  `GRFT_LLM_BASE_URL`/`GRFT_LLM_MODEL`/`GRFT_LLM_API_KEY`; авто-обновление —
-  `GRFT_AUTO_DEEP=1`, отключение — `GRFT_AUTO_DEEP=0`.
+- Deep-слой (summaries/crux/concepts): только при явном конфиге LLM —
+  env `GRFT_LLM_BASE_URL`/`GRFT_LLM_MODEL`/`GRFT_LLM_API_KEY` или файл
+  (`graft config set` / `graft config show`; project: `<repo>/graft/.engine/llm.json`,
+  global: `~/.config/pi-graft/llm.json`; опц. `--temperature`, `--timeout-ms`);
+  runtime-ручки (env → `graft/.engine/config.json`): `--no-refresh`, `--auto-deep`,
+  `--follow-submodules`, `--refresh-mode size|hash`, `--refresh-timeout-ms`, `--max-output`.
+  Env-только (machine-level): `GRFT_STATE_DIR`, `GRFT_MCP_ROOT`, `GRFT_LLM_CONFIG`.

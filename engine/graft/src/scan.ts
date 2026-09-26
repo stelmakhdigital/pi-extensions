@@ -84,27 +84,73 @@ const buildConfigPath = (root: string) => join(root, "graft", ".engine", "config
 
 export interface BuildConfig {
 	followSubmodules: boolean;
+	/** GRFT_NO_REFRESH=1 — не автопересобирать граф */
+	noRefresh?: boolean;
+	/** GRFT_AUTO_DEEP=0 — выключить auto-deep при структурном build */
+	autoDeep?: boolean;
+	/** GRFT_REFRESH=hash — fingerprint по sha1 (def: size+mtime) */
+	refresh?: "size" | "hash";
+	/** GRFT_REFRESH_TIMEOUT_MS — бюджет синхронного rebuild'а (def 10000) */
+	refreshTimeoutMs?: number;
+	/** GRFT_MAX_OUTPUT — лимит вывода graft-тулов в символах (def 16000) */
+	maxOutput?: number;
 }
 
 export function readBuildConfig(root: string): BuildConfig {
 	try {
 		const c = JSON.parse(readFileSync(buildConfigPath(root), "utf8")) as Partial<BuildConfig>;
-		return { followSubmodules: c.followSubmodules === true };
+		return { followSubmodules: c.followSubmodules === true, ...c };
 	} catch {
 		return { followSubmodules: false };
 	}
 }
 
-export function writeBuildConfig(root: string, cfg: BuildConfig): void {
+export function writeBuildConfig(root: string, cfg: Partial<BuildConfig>): void {
 	try {
 		const p = buildConfigPath(root);
 		const dir = p.slice(0, p.lastIndexOf("/"));
-		// mkdirSync лениво (node:fs уже импортирован readFileSync-модулем — добавим явно ниже)
 		ensureDir(dir);
-		writeFileSync(p, JSON.stringify(cfg));
+		// merge с существующим: флаг --follow-submodules не затирает остальные настройки
+		const merged: Record<string, unknown> = { ...readRaw(p), ...cfg };
+		writeFileSync(p, JSON.stringify(merged));
 	} catch {
 		// тихо: конфиг опционален
 	}
+}
+
+function readRaw(p: string): Record<string, unknown> {
+	try {
+		const j = JSON.parse(readFileSync(p, "utf8")) as unknown;
+		if (j && typeof j === "object" && !Array.isArray(j)) return j as Record<string, unknown>;
+	} catch { /* нет файла */ }
+	return {};
+}
+
+export interface RuntimeConfig {
+	noRefresh: boolean;
+	autoDeepDisabled: boolean;
+	useHash: boolean;
+	refreshTimeoutMs: number;
+	maxOutput: number | undefined;
+}
+
+/**
+ * Эффективное runtime: env (GRFT_*) → <root>/graft/.engine/config.json → дефолты.
+ * (machine-level GRFT_STATE_DIR/GRFT_MCP_ROOT/GRFT_LLM_CONFIG остаются env-only — они не per-repo.)
+ */
+export function effectiveRuntime(root?: string): RuntimeConfig {
+	const c = root ? readBuildConfig(root) : ({} as BuildConfig);
+	const numEnv = (v: string | undefined) => {
+		const n = Number(v);
+		return Number.isFinite(n) && n > 0 ? n : undefined;
+	};
+	return {
+		noRefresh: process.env.GRFT_NO_REFRESH === "1" || c.noRefresh === true,
+		autoDeepDisabled: process.env.GRFT_AUTO_DEEP === "0" || c.autoDeep === false,
+		useHash: process.env.GRFT_REFRESH === "hash" || c.refresh === "hash",
+		refreshTimeoutMs: numEnv(process.env.GRFT_REFRESH_TIMEOUT_MS) ?? c.refreshTimeoutMs ?? 10_000,
+		maxOutput: numEnv(process.env.GRFT_MAX_OUTPUT) ?? c.maxOutput,
+	};
 }
 
 function ensureDir(dir: string): void {

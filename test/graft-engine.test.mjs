@@ -665,7 +665,7 @@ await check("refresh: fingerprint + ensureFresh (дрейф → rebuild; чис�
 	process.env.GRFT_NO_REFRESH = "1";
 	writeFileSync(join(root, "src/util.ts"), readFileSync(join(root, "src/util.ts"), "utf8") + "export const extra4 = 4;\n");
 	r = await engine.ensureFresh(root);
-	assert(!r.refreshed && r.skipped === "GRFT_NO_REFRESH=1", `GRFT_NO_REFRESH: ${JSON.stringify(r)}`);
+	assert(!r.refreshed && (r.skipped ?? "").startsWith("no-refresh"), `GRFT_NO_REFRESH: ${JSON.stringify(r)}`);
 	delete process.env.GRFT_NO_REFRESH;
 	const c = readFileSync(join(root, "src/util.ts"), "utf8").replace("export const extra3 = 3;\n", "").replace("export const extra4 = 4;\n", "");
 	writeFileSync(join(root, "src/util.ts"), c);

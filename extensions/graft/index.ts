@@ -11,8 +11,9 @@
  *   символов».
  * - Бейдж свежести: `graft: synced` / `graft: ⚠ N stale` / `graft: нет графа`.
  * - Команда /graft: статус + `/graft build` / `/graft build deep`.
- * - Deep-конфиг LLM (явный, без дефолтов): GRFT_LLM_BASE_URL, GRFT_LLM_MODEL,
- *   GRFT_LLM_API_KEY (openai-chat-формат).
+ * - Deep-конфиг LLM (многоуровневый, без дефолтов): env GRFT_LLM_* →
+ *   <repo>/graft/.engine/llm.json → ~/.config/pi-graft/llm.json
+ *   (openai-chat-формат; настройка: `graft config set`).
  *
  * Активно только в репозиториях с построенным графом (graft/.engine/graph.json).
  */
@@ -26,27 +27,21 @@ import {
 	build,
 	checkStatus,
 	deepCoverage,
+	effectiveRuntime,
 	enableAutoRebuild,
 	ensureFresh,
 	findGraphRoot,
 	isRebuilding,
 	makeQueries,
 	readGraph,
+	resolveDeepConfig,
 	scopeOfPath,
-	type DeepConfig,
 } from "../../engine/graft/src/index.js";
 
 const STATUS_KEY = " graft";
 
 function cap(text: string, max: number): string {
 	return text.length <= max ? text : text.slice(0, max) + `\n…[обрезано до ${max} символов]`;
-}
-
-function deepConfigFromEnv(): DeepConfig | null {
-	const baseUrl = process.env.GRFT_LLM_BASE_URL?.trim();
-	const model = process.env.GRFT_LLM_MODEL?.trim();
-	if (!baseUrl || !model) return null;
-	return { baseUrl, model, apiKey: process.env.GRFT_LLM_API_KEY?.trim() || undefined };
 }
 
 function toolResult(text: string, details: Record<string, unknown>) {
@@ -75,7 +70,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 		default: true,
 	});
 	pi.registerFlag("graft-max-output", {
-		description: "Лимит вывода graft-инструментов в символах (число; env GRFT_MAX_OUTPUT)",
+		description: "Лимит вывода graft-инструментов в символах (число; env GRFT_MAX_OUTPUT / config --max-output)",
 		type: "string",
 		default: "16000",
 	});
@@ -90,8 +85,11 @@ export default function graftExtension(pi: ExtensionAPI) {
 	let freshCache: { at: number; st: Awaited<ReturnType<typeof checkStatus>> } | null = null;
 	const FRESH_TTL_MS = 30_000;
 	let bgSyncRunning = false;
-	/** Бюджет синхронного rebuild'а: дольше — отвечаем по старому графу, rebuild докручивается фоном. */
-	const FRESH_TIMEOUT_MS = (() => { const v = Number(process.env.GRFT_REFRESH_TIMEOUT_MS); return Number.isFinite(v) && v > 0 ? v : 10_000; })();
+	/** Бюджет синхронного rebuild'а: дольше — отвечаем по старому графу, rebuild докручивается фоном.
+	 *  env GRFT_REFRESH_TIMEOUT_MS → project-конфиг (graft config set --refresh-timeout-ms) → 10s. */
+	function freshTimeoutMs(root: string | null): number {
+		return effectiveRuntime(root ?? undefined).refreshTimeoutMs;
+	}
 	let lastEditedPath: string | null = null;
 
 	function enabled(ctx: ExtensionContext): boolean {
@@ -103,10 +101,12 @@ export default function graftExtension(pi: ExtensionAPI) {
 		return findGraphRoot(ctx.cwd);
 	}
 
-	function maxOut(): number {
-		const raw = pi.getFlag("--graft-max-output") ?? process.env.GRFT_MAX_OUTPUT ?? "16000";
-		const v = Number(typeof raw === "string" ? raw : String(raw));
-		return Number.isFinite(v) && v > 0 ? v : 16000;
+	/** Лимит вывода: флаг --graft-max-output (если не дефолт) → env GRFT_MAX_OUTPUT →
+	 *  project-конфиг (graft config set --max-output) → 16000. */
+	function maxOut(root: string | null = null): number {
+		const flag = pi.getFlag("--graft-max-output");
+		if (flag != null && String(flag) !== "16000") return Number(flag) || 16000;
+		return effectiveRuntime(root ?? undefined).maxOutput ?? 16000;
 	}
 
 	const noGraphHint =
@@ -259,7 +259,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			trackMetrics(ctx, { calls: 1 });
 			try {
 				await (async () => {
-					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					const fr = await ensureFresh(root, { timeoutMs: freshTimeoutMs(root) });
 					if (fr.stale) setSyncingBadge(ctx);
 				})();
 				let out = makeQueries(root).ask(params.query, { source: params.source });
@@ -268,7 +268,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 					const prefix = params.scope.endsWith("/") ? params.scope : `${params.scope}/`;
 					out = out.split("\n").filter((l) => !l.includes(prefix) || l.includes("graft ask")).join("\n");
 				}
-				return toolResult(cap(out, maxOut()), { cmd: `graft ask ${params.query}` });
+				return toolResult(cap(out, maxOut(root)), { cmd: `graft ask ${params.query}` });
 			} catch (e) {
 				return toolResult(`graft ask: ${(e as Error).message}`, { error: "query" });
 			}
@@ -293,12 +293,12 @@ export default function graftExtension(pi: ExtensionAPI) {
 			trackMetrics(ctx, { calls: 1 });
 			try {
 				await (async () => {
-					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					const fr = await ensureFresh(root, { timeoutMs: freshTimeoutMs(root) });
 					if (fr.stale) setSyncingBadge(ctx);
 				})();
 				const out = makeQueries(root).grep(params.pattern, { scope: params.scope, fixed: params.fixed, ignoreCase: params.ignoreCase });
 				recordSavings(out, ctx);
-				return toolResult(cap(out, maxOut()), { cmd: `graft grep ${params.pattern}` });
+				return toolResult(cap(out, maxOut(root)), { cmd: `graft grep ${params.pattern}` });
 			} catch (e) {
 				return toolResult(`graft grep: ${(e as Error).message}`, { error: "query" });
 			}
@@ -323,12 +323,12 @@ export default function graftExtension(pi: ExtensionAPI) {
 			trackMetrics(ctx, { calls: 1 });
 			try {
 				await (async () => {
-					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					const fr = await ensureFresh(root, { timeoutMs: freshTimeoutMs(root) });
 					if (fr.stale) setSyncingBadge(ctx);
 				})();
 				const out = makeQueries(root).callers(params.symbol, { direction: params.direction, depth: params.depth, scope: params.scope });
 				recordSavings(out, ctx);
-				return toolResult(cap(out, maxOut()), { cmd: `graft callers ${params.symbol}` });
+				return toolResult(cap(out, maxOut(root)), { cmd: `graft callers ${params.symbol}` });
 			} catch (e) {
 				return toolResult(`graft callers: ${(e as Error).message}`, { error: "query" });
 			}
@@ -350,12 +350,12 @@ export default function graftExtension(pi: ExtensionAPI) {
 			trackMetrics(ctx, { calls: 1 });
 			try {
 				await (async () => {
-					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					const fr = await ensureFresh(root, { timeoutMs: freshTimeoutMs(root) });
 					if (fr.stale) setSyncingBadge(ctx);
 				})();
 				const out = makeQueries(root).skeleton(params.file);
 				recordSavings(out, ctx);
-				return toolResult(cap(out, maxOut()), { cmd: `graft skeleton ${params.file}` });
+				return toolResult(cap(out, maxOut(root)), { cmd: `graft skeleton ${params.file}` });
 			} catch (e) {
 				return toolResult(`graft skeleton: ${(e as Error).message}`, { error: "query" });
 			}
@@ -377,12 +377,12 @@ export default function graftExtension(pi: ExtensionAPI) {
 			trackMetrics(ctx, { calls: 1 });
 			try {
 				await (async () => {
-					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					const fr = await ensureFresh(root, { timeoutMs: freshTimeoutMs(root) });
 					if (fr.stale) setSyncingBadge(ctx);
 				})();
 				const out = makeQueries(root).map({ maxDirs: params.maxDirs });
 				mapCache = { text: out, at: Date.now() };
-				return toolResult(cap(out, maxOut()), { cmd: "graft map" });
+				return toolResult(cap(out, maxOut(root)), { cmd: "graft map" });
 			} catch (e) {
 				return toolResult(`graft map: ${(e as Error).message}`, { error: "query" });
 			}
@@ -425,11 +425,11 @@ export default function graftExtension(pi: ExtensionAPI) {
 			trackMetrics(ctx, { calls: 1 });
 			try {
 				await (async () => {
-					const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+					const fr = await ensureFresh(root, { timeoutMs: freshTimeoutMs(root) });
 					if (fr.stale) setSyncingBadge(ctx);
 				})();
 				const out = await makeQueries(root).blast(params.base);
-				return toolResult(cap(out, maxOut()), { cmd: `graft blast ${params.base ?? ""}`.trim() });
+				return toolResult(cap(out, maxOut(root)), { cmd: `graft blast ${params.base ?? ""}`.trim() });
 			} catch (e) {
 				return toolResult(`graft blast: ${(e as Error).message}`, { error: "blast" });
 			}
@@ -440,7 +440,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 	 *  старые пакеты не повторять — только новые id; пусто → пакет не инжектится). */
 	const pushHits = async (root: string, prompt: string, words: string[]): Promise<string | null> => {
 		await (async () => {
-			const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+			const fr = await ensureFresh(root, { timeoutMs: freshTimeoutMs(root) });
 			if (fr.stale) setSyncingBadge(ctx);
 		})();
 		let scopes: Record<string, string[]> = {};
@@ -508,7 +508,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 			if (!mapCache || Date.now() - mapCache.at > MAP_TTL_MS) {
 				try {
 					await (async () => {
-						const fr = await ensureFresh(root, { timeoutMs: FRESH_TIMEOUT_MS });
+						const fr = await ensureFresh(root, { timeoutMs: freshTimeoutMs(root) });
 						if (fr.stale) setSyncingBadge(ctx);
 					})();
 					const out = makeQueries(root).map();
@@ -584,7 +584,7 @@ export default function graftExtension(pi: ExtensionAPI) {
 		// Auto-rebuild: тихая пересборка после правки (дебаунс в enableAutoRebuild).
 		if (pi.getFlag("--graft-auto-rebuild") !== false) {
 			setSyncingBadge(ctx);
-			enableAutoRebuild(() => build(root, {}).then(() => refreshBadge(ctx, root)));
+			enableAutoRebuild(() => build(root, {}).then(() => refreshBadge(ctx, root)), 4000, root);
 		}
 		return note ? { content: [...event.content, { type: "text", text: note }] } : undefined;
 	});
@@ -660,10 +660,10 @@ export default function graftExtension(pi: ExtensionAPI) {
 			}
 			if (arg.startsWith("build")) {
 				const withDeep = arg.includes("deep");
-				const deepCfg = withDeep ? deepConfigFromEnv() : undefined;
+				const deepCfg = withDeep ? resolveDeepConfig(root ?? ctx.cwd).config : undefined;
 				if (withDeep && !deepCfg) {
 					ctx.ui.notify(
-						"graft build deep: нет конфига LLM. Задайте GRFT_LLM_BASE_URL и GRFT_LLM_MODEL (опц. GRFT_LLM_API_KEY) и повторите.",
+						"graft build deep: нет конфига LLM. Задайте через `graft config set --base-url … --model …` (или env GRFT_LLM_BASE_URL/GRFT_LLM_MODEL) и повторите.",
 						"error",
 					);
 					return;

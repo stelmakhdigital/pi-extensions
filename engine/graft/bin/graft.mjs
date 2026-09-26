@@ -13,15 +13,24 @@
  *   node engine/graft/bin/graft.mjs concepts [--dir <dir>]     # темы (LLM, fallback по каталогам)
  *   node engine/graft/bin/graft.mjs watch [--dir <dir>]       # авто-пересборка при изменениях
  *   node engine/graft/bin/graft.mjs viz [--dir <dir>]         # graft/viz.html
+ *   node engine/graft/bin/graft.mjs config [show|set]         # конфиг LLM + runtime (без export каждый раз)
+ *     set: --base-url <url> --model <m> [--api-key <k>] [--temperature N] [--timeout-ms N] [--scope global|project]
+ *          [--no-refresh on|off] [--auto-deep on|off] [--follow-submodules on|off]
+ *          [--refresh-mode size|hash] [--refresh-timeout-ms N] [--max-output N]  (runtime → project config.json)
+ *     show: что резолвится и откуда (env → <repo>/graft/.engine/{llm,config}.json → ~/.config/pi-graft/llm.json)
  *
  * Auto-refresh: ask/grep/callers/skeleton/map/blast тихо пересобирают граф при дрейфе
  * (fingerprint: size+mtime; GRFT_REFRESH=hash — sha1; GRFT_NO_REFRESH=1 — выкл).
  * check НЕ пересобирает — только отчёт (и exit 1 при дрейфе).
  *
- * Deep-конфиг (явный): GRFT_LLM_BASE_URL, GRFT_LLM_MODEL, GRFT_LLM_API_KEY.
+ * Deep-конфиг (многоуровневый, см. `graft config show`):
+ *   1. env GRFT_LLM_BASE_URL / GRFT_LLM_MODEL / GRFT_LLM_API_KEY
+ *   2. <root>/graft/.engine/llm.json (project, gitignored)
+ *   3. ~/.config/pi-graft/llm.json (global, chmod 600)
  */
 import { createJiti } from "jiti";
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const jiti = createJiti(fileURLToPath(import.meta.url));
@@ -41,14 +50,14 @@ function optVal(name) {
 
 function deepConfig() {
 	const soft = deepConfigSoft();
-	if (!soft.baseUrl || !soft.model) {
-		console.error("deep: нет конфига. Задайте GRFT_LLM_BASE_URL и GRFT_LLM_MODEL (опц. GRFT_LLM_API_KEY).");
+	if (!soft) {
+		console.error("deep: нет конфига LLM. Задайте через `graft config set --base-url … --model …` (или env GRFT_LLM_BASE_URL/GRFT_LLM_MODEL).");
 		process.exit(2);
 	}
 	return soft;
 }
 function deepConfigSoft() {
-	return { baseUrl: process.env.GRFT_LLM_BASE_URL, model: process.env.GRFT_LLM_MODEL, apiKey: process.env.GRFT_LLM_API_KEY };
+	return engine.resolveDeepConfig(root).config;
 }
 
 const dirArg = (a) => (a && !a.startsWith("-") && ["ask", "grep", "callers", "skeleton"].includes(cmd) ? a : undefined);
@@ -65,8 +74,8 @@ function renderBlastMarkdown(data, base) {
 }
 async function nameBlastAreas(data) {
 	const cfg = deepConfigSoft();
-	if (!cfg.baseUrl || !cfg.model) {
-		console.error("blast --name: нет LLM-конфига (GRFT_LLM_BASE_URL/MODEL)");
+	if (!cfg) {
+		console.error("blast --name: нет LLM-конфига (graft config show / graft config set)");
 		return;
 	}
 	const list = data.files.map((f) => `- ${f.path}: ${f.symbols.map((x) => x.name).join(", ")}`).join("\n");
@@ -233,9 +242,97 @@ switch (cmd) {
 		}
 		break;
 	}
+	case "config": {
+		const sub = rest.find((a) => !a.startsWith("-")) ?? "show";
+		if (sub === "set") {
+			const numOpt = (name, min = 1) => {
+				const v = optVal(name);
+				if (v === undefined) return undefined;
+				const n = Number(v);
+				if (!Number.isFinite(n) || n < min) throw new Error(`${name}: ожидается число >= ${min}, получено: ${v}`);
+				return n;
+			};
+			const boolOpt = (name) => {
+				const v = optVal(name);
+				if (v === undefined) return undefined;
+				if (v === "on" || v === "1" || v === "true") return true;
+				if (v === "off" || v === "0" || v === "false") return false;
+				throw new Error(`${name}: on|off, получено: ${v}`);
+			};
+			// LLM (llm.json, scope global|project)
+			const cfg = {
+				baseUrl: optVal("--base-url"),
+				model: optVal("--model"),
+				apiKey: optVal("--api-key"),
+				temperature: numOpt("--temperature", 0),
+				timeoutMs: numOpt("--timeout-ms"),
+			};
+			const hasLlm = Object.values(cfg).some((v) => v !== undefined);
+			// Runtime (per-repo, → graft/.engine/config.json; приоритет: env GRFT_* → файл → def)
+			const runtime = {};
+			const nr = boolOpt("--no-refresh"); if (nr !== undefined) runtime.noRefresh = nr;
+			const ad = boolOpt("--auto-deep"); if (ad !== undefined) runtime.autoDeep = ad;
+			const fsm = boolOpt("--follow-submodules"); if (fsm !== undefined) runtime.followSubmodules = fsm;
+			const rm = optVal("--refresh-mode");
+			if (rm !== undefined) { if (rm !== "size" && rm !== "hash") throw new Error("--refresh-mode: size|hash"); runtime.refresh = rm; }
+			const rtm = numOpt("--refresh-timeout-ms"); if (rtm !== undefined) runtime.refreshTimeoutMs = rtm;
+			const mo = numOpt("--max-output"); if (mo !== undefined) runtime.maxOutput = mo;
+			const hasRuntime = Object.keys(runtime).length > 0;
+			if (!hasLlm && !hasRuntime)
+				throw new Error("usage: graft config set [--base-url <url> --model <m> [--api-key <k>] [--temperature N] [--timeout-ms N] [--scope global|project] [--no-refresh on|off] [--auto-deep on|off] [--follow-submodules on|off] [--refresh-mode size|hash] [--refresh-timeout-ms N] [--max-output N]");
+			if (hasLlm) {
+				// Дефолтный скоуп: project, если в корне есть graft/ (репо с графом), иначе global.
+				const scope = optVal("--scope") ?? (existsSync(join(root, "graft")) ? "project" : "global");
+				const path = engine.writeLlmConfig(scope, root, cfg);
+				console.log(`graft config (LLM): записано в ${path} (0600)`);
+			}
+			if (hasRuntime) {
+				const p = join(root, "graft", ".engine", "config.json");
+				engine.writeBuildConfig(root, runtime);
+				console.log(`graft config (runtime): записано в ${p}`);
+			}
+			console.log("проверка: graft config show");
+		} else if (sub === "show") {
+			const r = engine.resolveDeepConfig(root);
+			const src = (s) => (s ? `  ← ${s}` : "");
+			const projectPath = engine.projectLlmConfigPath(root);
+			const globalPath = engine.globalLlmConfigPath();
+			const lines = [
+				`graft config (root: ${root})`,
+				`  baseUrl: ${r.config?.baseUrl ?? "—"}${src(r.sources.baseUrl)}`,
+				`  model:   ${r.config?.model ?? "—"}${src(r.sources.model)}`,
+				`  apiKey:  ${engine.maskKey(r.config?.apiKey)}${src(r.sources.apiKey)}`,
+				`  temperature: ${r.config?.temperature ?? "—"}${src(r.sources.temperature)}${r.config?.temperature == null ? " (def 0.2)" : ""}`,
+				`  timeoutMs:   ${r.config?.timeoutMs ?? "—"}${src(r.sources.timeoutMs)}${r.config?.timeoutMs == null ? " (def 90s deep / 120s concepts)" : ""}`,
+				`  project: ${projectPath}${existsSync(projectPath) ? " (есть)" : " (нет)"}`,
+				`  global:  ${globalPath}${existsSync(globalPath) ? " (есть)" : " (нет)"}`,
+			];
+			if (!r.config) lines.push("  → конфиг НЕ резолвится (нужны baseUrl + model): graft config set --base-url … --model …");
+			else if (r.sources.baseUrl === "env" || r.sources.model === "env") lines.push("  → часть полей из env (GRFT_LLM_*) — env имеет приоритет над файлами");
+			// Runtime: env GRFT_* → graft/.engine/config.json → дефолты
+			const rt = engine.effectiveRuntime(root);
+			const bc = engine.readBuildConfig(root);
+			const bcPath = join(root, "graft", ".engine", "config.json");
+			lines.push(
+				"",
+				"  runtime (env → config.json → def):",
+				`    auto-rebuild:       ${rt.noRefresh ? "ВЫКЛ (no-refresh)" : "вкл"}`,
+				`    auto-deep:          ${rt.autoDeepDisabled ? "ВЫКЛ" : "вкл"}`,
+				`    refresh-fingerprint:${rt.useHash ? " hash (sha1)" : " size+mtime"}`,
+				`    refresh-timeout:    ${rt.refreshTimeoutMs}ms`,
+				`    max-output:         ${rt.maxOutput ?? 16000}`,
+				`    follow-submodules:  ${bc.followSubmodules ? "вкл" : "выкл"}`,
+				`    config.json:        ${bcPath}${existsSync(bcPath) ? " (есть)" : " (нет)"}`,
+			);
+			console.log(lines.join("\n"));
+		} else {
+			throw new Error(`usage: graft config [show|set] (неизвестное: ${sub})`);
+		}
+		break;
+	}
 	case "concepts": {
 		const cfg = deepConfigSoft();
-		if (!cfg.baseUrl && !cfg.model) console.log("подсказка: без GRFT_LLM_BASE_URL/MODEL темы соберутся fallback'ом по каталогам");
+		if (!cfg?.baseUrl && !cfg?.model) console.log("подсказка: без конфига LLM (graft config show) темы соберутся fallback'ом по каталогам");
 		const g = engine.readGraph(root);
 		const topics = await engine.conceptsBuild(root, g, cfg, (m) => console.log("  …", m));
 		for (const t of topics) console.log(`${t.name}: ${t.summary}\n  [${t.files.slice(0, 10).join(", ")}${t.files.length > 10 ? ", …" : ""}]`);
@@ -258,7 +355,7 @@ switch (cmd) {
 				}
 			}, 1500);
 		});
-		console.log(`graft watch: слежу за ${root} (дебаунс 1.5s; auto-deep при дрейфе — если задан GRFT_LLM_BASE_URL/MODEL). Ctrl+C — стоп.`);
+		console.log(`graft watch: слежу за ${root} (дебаунс 1.5s; auto-deep при дрейфе — если есть конфиг LLM: graft config show). Ctrl+C — стоп.`);
 		await new Promise(() => {});
 		break;
 	}

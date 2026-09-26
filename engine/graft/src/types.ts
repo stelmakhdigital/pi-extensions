@@ -110,4 +110,8 @@ export interface DeepConfig {
 	baseUrl: string;
 	model: string;
 	apiKey?: string;
+	/** def 0.2 (llmChat) */
+	temperature?: number;
+	/** Таймаут одного LLM-запроса, мс (def 90s deep / 120s concepts) */
+	timeoutMs?: number;
 }
