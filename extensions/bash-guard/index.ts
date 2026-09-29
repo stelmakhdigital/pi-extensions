@@ -88,7 +88,7 @@ function isGitReadonly(sub: string | undefined, subArgs: string[]): boolean {
 	}
 }
 
-function analyzeSegment(seg: Token[], depth = 0, strictGit = false): Risk | null {
+function analyzeSegment(seg: Token[], depth = 0, strictGit = false, skipRm = false): Risk | null {
 	const reasons: string[] = [];
 	let severity: Severity = "medium";
 
@@ -126,7 +126,7 @@ function analyzeSegment(seg: Token[], depth = 0, strictGit = false): Risk | null
 	}
 
 	// rm/rmdir/unlink
-	if (cmd === "rm" || cmd === "rmdir" || cmd === "unlink") {
+	if (!skipRm && (cmd === "rm" || cmd === "rmdir" || cmd === "unlink")) {
 		severity = "high";
 		reasons.push(`${cmd} (удаление файлов)`);
 		if (hasShortFlagWith(rest, "rR") || rest.includes("--recursive")) reasons.push("рекурсивное удаление (-r/-R)");
@@ -328,7 +328,7 @@ function analyzeSegment(seg: Token[], depth = 0, strictGit = false): Risk | null
 	return { severity, reasons };
 }
 
-function analyzeBashCommand(command: string, depth = 0, strictGit = false): Risk | null {
+function analyzeBashCommand(command: string, depth = 0, strictGit = false, skipRm = false): Risk | null {
 	// Каждую строку разбираем отдельно: shell-quote теряет переносы строк, и без этого
 	// опасная команда, «спрятанная» за безобидной первой строкой (echo 1\nrm -rf /),
 	// ушла бы незамеченной.
@@ -336,7 +336,7 @@ function analyzeBashCommand(command: string, depth = 0, strictGit = false): Risk
 	const reasons: string[] = [];
 	let severity: Severity = "medium";
 	for (const line of lines) {
-		const lineRisk = analyzeLine(line, depth, strictGit);
+		const lineRisk = analyzeLine(line, depth, strictGit, skipRm);
 		if (!lineRisk) continue;
 		if (lineRisk.severity === "high") severity = "high";
 		for (const r of lineRisk.reasons) reasons.push(r);
@@ -346,7 +346,7 @@ function analyzeBashCommand(command: string, depth = 0, strictGit = false): Risk
 	return { severity, reasons: uniq };
 }
 
-function analyzeLine(line: string, depth: number, strictGit: boolean): Risk | null {
+function analyzeLine(line: string, depth: number, strictGit: boolean, skipRm: boolean): Risk | null {
 	let tokens: Token[];
 	try {
 		tokens = shellParse(line) as Token[];
@@ -374,7 +374,7 @@ function analyzeLine(line: string, depth: number, strictGit: boolean): Risk | nu
 	// Сегменты (разбивка по &&, ||, ;)
 	const segments = splitOnOps(tokens, ["&&", "||", ";"]);
 	for (const seg of segments) {
-		const segRisk = analyzeSegment(seg, depth, strictGit);
+		const segRisk = analyzeSegment(seg, depth, strictGit, skipRm);
 		if (!segRisk) continue;
 		if (segRisk.severity === "high") severity = "high";
 		for (const r of segRisk.reasons) reasons.push(r);
@@ -442,9 +442,9 @@ const _isSubagent = Number.isFinite(_subagentDepth) && _subagentDepth >= 1;
 // Меньше ложных срабатываний важнее широкого покрытия — остальное в главной
 // сессии закрывает интерактивный запрос. `sessionOnly: true` — действует только
 // в сессиях, а не в «поле» автономного режима главной сессии.
-const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean }> = [
-	// Рекурсивное удаление
-	{ pattern: /(?<!\bgit\s+)\brm\b[^#\n]*\s-(?:[a-zA-Z]*[rR]|-\brecursive\b)/, reason: "рекурсивное удаление (rm -r / -rf / -Rf)" },
+const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean; rmOnly?: boolean }> = [
+	// Рекурсивное удаление (rmOnly — снимается /bash-guard-rm в главной сессии)
+	{ pattern: /(?<!\bgit\s+)\brm\b[^#\n]*\s-(?:[a-zA-Z]*[rR]|-\brecursive\b)/, reason: "рекурсивное удаление (rm -r / -rf / -Rf)", rmOnly: true },
 	// Повышение привилегий
 	{ pattern: /\bsudo\b/, reason: "повышенные привилегии (sudo)" },
 	// Удалённое выполнение кода через pipe-to-shell
@@ -480,7 +480,7 @@ const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: b
 // разрешены; блокируются только по-настоящему катастрофические/необратимые
 // паттерны. Помечены явно (sessionOnly), а не матчингом source регулярных
 // выражений — изменение формулировок больше не ломает «пол» молча.
-const MAIN_DISABLED_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean }> = HEADLESS_BLOCKED.filter(
+const MAIN_DISABLED_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean; rmOnly?: boolean }> = HEADLESS_BLOCKED.filter(
 	(r) => !r.sessionOnly,
 );
 
@@ -537,40 +537,53 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
-	// Переключатель живёт только внутри сессии. Намеренно не сохраняется между перезагрузками и перезапусками.
+	// Переключатели живут только внутри сессии. Намеренно не сохраняются между перезагрузками и перезапусками.
 	let disabled = false;
+	let rmAllowed = false;
 
-	pi.on("session_start", async (event, ctx) => {
-		if (event.reason === "startup" && pi.getFlag("--bash-guard-disabled") === true) {
+	// Бейдж в футер: собираем активные отключения; пусто → сбрасываем статус.
+	const refreshStatus = (ctx: any) => {
+		const { theme } = ctx.ui;
+		const parts: string[] = [];
+		if (disabled) parts.push(theme.bg("toolErrorBg", theme.bold(theme.fg("error", " ⚠ BG OFF "))));
+		if (rmAllowed) parts.push(theme.bg("toolErrorBg", theme.bold(theme.fg("error", " 🗑 RM OFF "))));
+		ctx.ui.setStatus(BASH_GUARD_STATUS_KEY, parts.length ? parts.join("") : undefined);
+	};
+
+	pi.on("session_start", async (_event, ctx) => {
+		if (pi.getFlag("--bash-guard-disabled") === true) {
 			disabled = true;
-			const { theme } = ctx.ui;
-			const badge = theme.bg(
-				"toolErrorBg",
-				theme.bold(theme.fg("error", " ⚠ BG OFF ")),
-			);
-			ctx.ui.setStatus(BASH_GUARD_STATUS_KEY, badge);
 		}
+		refreshStatus(ctx);
 	});
 
 	pi.registerCommand("bash-guard", {
 		description: "Переключить bash-guard между интерактивным (по умолчанию) и отключённым (автономным) режимом для этой сессии.",
 		handler: async (_args, ctx) => {
 			disabled = !disabled;
+			refreshStatus(ctx);
 			if (disabled) {
-				const { theme } = ctx.ui;
-				const badge = theme.bg(
-					"toolErrorBg",
-					theme.bold(theme.fg("error", " ⚠ BG OFF ")),
-				);
-				ctx.ui.setStatus(BASH_GUARD_STATUS_KEY, badge);
 				ctx.ui.notify(
 					"bash-guard ОТКЛЮЧЁН на эту сессию. Катастрофические операции по-прежнему блокируются жёстко. Снова выполни /bash-guard, чтобы включить.",
 					"warning",
 				);
 			} else {
-				ctx.ui.setStatus(BASH_GUARD_STATUS_KEY, undefined);
 				ctx.ui.notify("bash-guard снова включён.", "info");
 			}
+		},
+	});
+
+	pi.registerCommand("bash-guard-rm", {
+		description: "Переключить запрет rm для этой сессии: агент сможет удалять файлы (тесты, tmp) без подтверждения и без жёсткого блока в автономном режиме.",
+		handler: async (_args, ctx) => {
+			rmAllowed = !rmAllowed;
+			refreshStatus(ctx);
+			ctx.ui.notify(
+				rmAllowed
+					? "bash-guard: rm ОТКЛЮЧЁН на эту сессию — удаление файлов разрешено без подтверждения. Снова выполни /bash-guard-rm, чтобы вернуть защиту."
+					: "bash-guard: защита rm снова включена.",
+				rmAllowed ? "warning" : "info",
+			);
 		},
 	});
 
@@ -592,7 +605,8 @@ export default function (pi: ExtensionAPI) {
 		// Отключённый (автономный) режим: без интерактивных запросов, но
 		// сохраняем «пол» жёсткого блока для катастрофических операций.
 		if (disabled) {
-			for (const { pattern, reason } of MAIN_DISABLED_BLOCKED) {
+			for (const { pattern, reason, rmOnly } of MAIN_DISABLED_BLOCKED) {
+				if (rmAllowed && rmOnly) continue;
 				if (pattern.test(command)) {
 					return {
 						block: true,
@@ -606,7 +620,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const risk = analyzeBashCommand(command, 0, pi.getFlag("--bash-guard-git-strict") === true);
+		const risk = analyzeBashCommand(command, 0, pi.getFlag("--bash-guard-git-strict") === true, rmAllowed);
 		if (!risk) return;
 
 		const now = Date.now();

@@ -89,8 +89,8 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 }
 ```
 
-Даст диалог «Выполнить / Отменить» на рискованные bash-команды, `/bash-guard`
-и флаги `--bash-guard-disabled` / `--bash-guard-auto-allow`. Зависимость
+Даст диалог «Выполнить / Отменить» на рискованные bash-команды, `/bash-guard`,
+`/bash-guard-rm` (снять запрет на удаление файлов) и флаги `--bash-guard-disabled` / `--bash-guard-auto-allow`. Зависимость
 `shell-quote` ставится автоматически (npm install при установке пакета).
 
 ### Только dir-guard
