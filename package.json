@@ -30,8 +30,7 @@
       "extensions/ask-user-question/index.ts",
       "extensions/subagents/index.ts",
       "extensions/sandbox/index.ts",
-      "extensions/gen-speed/index.ts",
-      "extensions/repo-update/index.ts"
+      "extensions/gen-speed/index.ts"
     ],
     "skills": [
       "skills/session-insights"

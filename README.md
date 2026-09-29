@@ -14,7 +14,6 @@
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
 | [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41 t/s · ⌀ 0.8s` (EMA по ответам, на лету при стриминге; TTFT — время до первого токена; aborted/короткие ответы не считаются) |
 | [subagents](extensions/subagents/) | Асинхронные подагенты в tmux: спавн в панель (не блокирует основную сессию), live-виджет статусов и токенов (starting/active/waiting/stalled), steer-результат, resume/interrupt, agent-definitions (`.pi/agents/*.md`) + 4 bundled-агента (planner/scout/worker/reviewer); команды `/spawn`, `/subagents [doctor|status]`, `/iterate [agent] <task>`, `/plan <task>` (planner→worker→reviewer); `spawning`/`deny-tools` в frontmatter; вне tmux — handoff (перезапуск pi внутри tmux с продолжением сессии) |
-| [repo-update](extensions/repo-update/) | Команда `/update`: подтягивает актуальный HEAD в git-клон, из которого pi реально грузит расширения (`git pull --ff-only`), и уведомляет в TUI — уже актуальная / обновлено `старый → новый` (с подсказкой про `/reload`) / ошибка |
 
 ## Скиллы
 
@@ -58,7 +57,6 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 | sandbox | `extensions/sandbox/*` |
 | subagents | `extensions/subagents/*` |
 | gen-speed | `extensions/gen-speed/*` |
-| repo-update | `extensions/repo-update/*` |
 
 Далее — пример для каждого (глобальные настройки `~/.pi/agent/settings.json`).
 
@@ -165,24 +163,6 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 tmux (`tmux new -A -s pi 'pi'`); вне tmux при старте предложит handoff.
 Детали — в `extensions/subagents/README.md`.
 
-### Только repo-update
-
-```json
-{
-	"packages": [
-		{
-			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
-			"extensions": ["extensions/repo-update/*"]
-		}
-	]
-}
-```
-
-Даст команду `/update` — подтягивает актуальный HEAD в git-клон пакета (из
-которого pi реально грузит расширения, а не CWD) через `git pull --ff-only`
-и уведомляет в TUI: уже актуальная / обновлено `старый → новый` (плюс
-подсказка про `/reload`) / ошибка. Без зависимостей.
-
 ### Только session-insights
 
 Скиллы из пакета ставятся вместе с ним (манифест `package.json` → `pi.skills`).
@@ -267,8 +247,6 @@ extensions/
     index.ts                  # per-command sandbox (bwrap / sandbox-exec)
   gen-speed/
     index.ts                  # бейдж скорости генерации токенов + TTFT в футере
-  repo-update/
-    index.ts                  # /update — git pull --ff-only в клон пакета + уведомление в TUI
   subagents/
     index.ts                  # родитель: инструменты, watch, виджет, steer, handoff
     child.ts                  # дочернее: agent_done/agent_ping, снапшоты активности

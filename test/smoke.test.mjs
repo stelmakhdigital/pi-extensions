@@ -596,65 +596,6 @@ print(found)`,
 	});
 }
 
-// === 9. repo-update ===
-{
-	const { mkdtempSync, rmSync, writeFileSync, readFileSync: rfUp } = await import("node:fs");
-	const { execFileSync } = await import("node:child_process");
-	const os = await import("node:os");
-	const path = await import("node:path");
-
-	const base = mkdtempSync(path.join(os.tmpdir(), "pi-update-"));
-	const upstream = path.join(base, "upstream");
-	const clone = path.join(base, "clone");
-	const g = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" });
-
-	try {
-		// офлайн фикстура: upstream (master, c1) + клон, origin → upstream
-		execFileSync("git", ["init", "-q", "-b", "master", upstream]);
-		writeFileSync(path.join(upstream, "f.txt"), "v1\n");
-		g(upstream, "add", "-A");
-		g(upstream, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c1");
-		execFileSync("git", ["clone", "-q", "-b", "master", upstream, clone]);
-
-		const notifs = [];
-		const ctxUpd = { ...noUiCtx, ui: { ...noUiCtx.ui, notify: (m) => notifs.push(m) } };
-
-		process.env.PI_REPO_UPDATE_ROOT = clone;
-		const piUpd = makePi();
-		createJiti(import.meta.url, { cache: false })("../extensions/repo-update/index.ts").default(piUpd);
-		const runUpdate = () => piUpd.commands.find((c) => c.name === "update").def.handler("", ctxUpd);
-
-		await check("repo-update: /update зарегистрирован", () => {
-			if (!piUpd.commands.some((c) => c.name === "update")) throw new Error("нет /update");
-		});
-		await check("repo-update: актуальная версия — «уже актуальная»", async () => {
-			notifs.length = 0;
-			await runUpdate();
-			if (!notifs.some((m) => m.includes("уже актуаль"))) throw new Error("не up-to-date: " + notifs.join("|"));
-		});
-		await check("repo-update: новый коммит — «обновлено» и файл подтянут", async () => {
-			writeFileSync(path.join(upstream, "f.txt"), "v2\n");
-			g(upstream, "add", "-A");
-			g(upstream, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c2");
-			notifs.length = 0;
-			await runUpdate();
-			if (!notifs.some((m) => m.includes("обновлено"))) throw new Error("не updated: " + notifs.join("|"));
-			if (rfUp(path.join(clone, "f.txt"), "utf8") !== "v2\n") throw new Error("файл не подтянут");
-		});
-		await check("repo-update: не-git каталог — ошибка, не падает", async () => {
-			process.env.PI_REPO_UPDATE_ROOT = path.join(base, "not-git");
-			const piBad = makePi();
-			createJiti(import.meta.url, { cache: false })("../extensions/repo-update/index.ts").default(piBad);
-			notifs.length = 0;
-			await piBad.commands.find((c) => c.name === "update").def.handler("", ctxUpd);
-			if (!notifs.some((m) => m.includes("не нашёл git-репозиторий"))) throw new Error("нет ошибки: " + notifs.join("|"));
-		});
-	} finally {
-		delete process.env.PI_REPO_UPDATE_ROOT;
-		rmSync(base, { recursive: true, force: true });
-	}
-}
-
 // === guard-state: персистентность toggle ===
 await check("guard-state: /bash-guard:rm пишется в guard-state.json и восстанавливается новым factory", async () => {
 	const stFile = join(guardAgentDir, "guard-state.json");
