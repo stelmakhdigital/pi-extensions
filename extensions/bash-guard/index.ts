@@ -560,7 +560,7 @@ export default function (pi: ExtensionAPI) {
 			rmAllowed = false;
 			saveGuard("bash-guard", { disabled, rmAllowed });
 		}
-		if (pi.getFlag("--bash-guard-disabled") === true && !disabled) {
+		if (pi.getFlag("bash-guard-disabled") === true && !disabled) {
 			disabled = true;
 			saveGuard("bash-guard", { disabled });
 		}
@@ -632,7 +632,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const risk = analyzeBashCommand(command, 0, pi.getFlag("--bash-guard-git-strict") === true, rmAllowed);
+		const risk = analyzeBashCommand(command, 0, pi.getFlag("bash-guard-git-strict") === true, rmAllowed);
 		if (!risk) return;
 
 		const now = Date.now();
@@ -650,7 +650,7 @@ export default function (pi: ExtensionAPI) {
 			};
 		}
 
-		if (!ctx.hasUI && pi.getFlag("--bash-guard-auto-allow")) {
+		if (!ctx.hasUI && pi.getFlag("bash-guard-auto-allow")) {
 			// Неинтерактивный режим: разрешаем при явном запросе.
 			return;
 		}

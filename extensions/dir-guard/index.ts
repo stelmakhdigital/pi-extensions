@@ -122,7 +122,7 @@ export default function (pi: ExtensionAPI) {
 		root = canonical(cwd);
 
 		const raw: string[] = [path.join(os.homedir(), ".pi")]; // встроенный дефолт
-		const flagVal = pi.getFlag("--dir-guard-allow");
+		const flagVal = pi.getFlag("dir-guard-allow");
 		// Парсер флагов pi знает только одиночные значения (Map, последнее
 		// переопределяет) → поддерживаем коммат-список в одном флаге.
 		if (typeof flagVal === "string" && flagVal.trim()) {
@@ -214,7 +214,7 @@ export default function (pi: ExtensionAPI) {
 			disabled = false;
 			saveGuard("dir-guard", { disabled });
 		}
-		if (event.reason === "startup" && pi.getFlag("--dir-guard-disabled") === true && !disabled) {
+		if (event.reason === "startup" && pi.getFlag("dir-guard-disabled") === true && !disabled) {
 			disabled = true;
 			saveGuard("dir-guard", { disabled });
 		}

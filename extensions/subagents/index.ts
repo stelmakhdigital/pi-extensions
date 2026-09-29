@@ -625,7 +625,7 @@ export function buildLaunchScript(opts: {
 
 export function isDisabledFlag(pi: ExtensionAPI): boolean {
 	try {
-		return isDisabled(process.env, pi.getFlag("--subagents-disabled"));
+		return isDisabled(process.env, pi.getFlag("subagents-disabled"));
 	} catch {
 		return isDisabled(process.env);
 	}

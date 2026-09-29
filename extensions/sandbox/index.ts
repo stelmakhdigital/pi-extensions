@@ -279,7 +279,7 @@ export default function (pi: ExtensionAPI) {
 
 	function activeLevel(ctx: ExtensionContext): Level {
 		if (sessionLevel) return sessionLevel;
-		const flag = pi.getFlag("--sandbox-level");
+		const flag = pi.getFlag("sandbox-level");
 		if (typeof flag === "string" && flag) return flag as Level;
 		const root = projectRoot(ctx.cwd);
 		return markerLevel(root) ?? savedLevel(root) ?? "off";
@@ -287,7 +287,7 @@ export default function (pi: ExtensionAPI) {
 
 	function levelSource(ctx: ExtensionContext): string {
 		if (sessionLevel) return "сессия (/sandbox on)";
-		const flag = pi.getFlag("--sandbox-level");
+		const flag = pi.getFlag("sandbox-level");
 		if (typeof flag === "string" && flag) return "флаг --sandbox-level";
 		if (markerLevel(ctx.cwd)) return "файл .sandbox";
 		if (savedLevel(projectRoot(ctx.cwd))) return "сохранённое решение о доверии";
@@ -323,7 +323,7 @@ export default function (pi: ExtensionAPI) {
 		const root = projectRoot(ctx.cwd);
 		if (trustPromptedRoots.has(root)) return;
 		if (markerLevel(root) || savedLevel(root)) return;
-		const flag = pi.getFlag("--sandbox-level");
+		const flag = pi.getFlag("sandbox-level");
 		if (typeof flag === "string" && flag) return;
 		const label = await ctx.ui.select(`Проект ${root}: доверяешь ли ты ему? (первый запуск)`, TRUST_PROMPT_OPTIONS.map((o) => o.label));
 		const opt = TRUST_PROMPT_OPTIONS.find((o) => o.label === label);

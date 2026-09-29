@@ -160,7 +160,7 @@ writeFileSync(join(outside, "secret.txt"), "s3cr3t");
 	});
 
 	await check("(h) allowlist-путь (флаг --dir-guard-allow) разрешён", async () => {
-		const piAllow = makePi({ "--dir-guard-allow": outside });
+		const piAllow = makePi({ "dir-guard-allow": outside });
 		dirGuard.default(piAllow);
 		const ctxA = makeCtx(cwd);
 		const res = await piAllow.handlers.tool_call({ toolName: "read", input: { path: join(outside, "secret.txt") } }, ctxA);
@@ -195,7 +195,7 @@ writeFileSync(join(outside, "secret.txt"), "s3cr3t");
 	});
 
 	await check("session_start с --dir-guard-disabled ставит бейдж с ключом ' dir-guard'", async () => {
-		const piDis = makePi({ "--dir-guard-disabled": true });
+		const piDis = makePi({ "dir-guard-disabled": true });
 		dirGuard.default(piDis);
 		let statusKey = null, statusVal = null;
 		const ctxDis = makeCtx(cwd, { setStatus: (k, v) => { statusKey = k; statusVal = v; } });

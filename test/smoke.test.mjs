@@ -151,7 +151,7 @@ const noUiCtx = {
 	await check("bash-guard: strict-режим (--bash-guard-git-strict) спрашивает и на git status", async () => {
 		const bashGuardStrict = jiti("../extensions/bash-guard/index.ts");
 		const piStrict = makePi();
-		piStrict.getFlag = (name) => (name === "--bash-guard-git-strict" ? true : false);
+		piStrict.getFlag = (name) => (name === "bash-guard-git-strict" ? true : false);
 		bashGuardStrict.default(piStrict);
 		const res = await piStrict.handlers.tool_call({ toolName: "bash", input: { command: "git status" } }, noUiCtx);
 		if (!res?.block) throw new Error("ожидалось block, получили: " + JSON.stringify(res));
@@ -262,7 +262,7 @@ const noUiCtx = {
 
 	await check("sandbox: vm-уровень блокирует bash с инструкцией", async () => {
 		const piVm = makePi();
-		piVm.getFlag = (name) => (name === "--sandbox-level" ? "vm" : false);
+		piVm.getFlag = (name) => (name === "sandbox-level" ? "vm" : false);
 		sbxExt.default(piVm);
 		const res = await piVm.handlers.tool_call({ toolName: "bash", input: { command: "echo x" } }, ctxSbx);
 		if (!res?.block || !res.reason.includes("vm")) throw new Error("нет блока: " + JSON.stringify(res));
