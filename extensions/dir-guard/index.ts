@@ -87,7 +87,9 @@ function extractBashPaths(command: string): string[] {
 		// URL-хост после схемы (`https://host/…`): предыдущий символ — `:` (схема)
 		// или `/` (второй слэш из `//host`) — это не файловый путь. Буква/точка —
 		// хвост более длинного неразрешимого токена (`$HOME/tmpdir`, `x//etc/x`).
-		if (before && (before === ":" || before === "/" || /[A-Za-z0-9_.`}$]/.test(before))) continue;
+		// `~` — хвост home-пути `~/…` (обрабатывается отдельным правилом ниже;
+		// без этого исключения `~/.pi/agent` давал ложный токен `/.pi/agent`).
+		if (before && (before === ":" || before === "/" || before === "~" || /[A-Za-z0-9_.`}$]/.test(before))) continue;
 		const after = command[idx + m[0].length];
 		if (after === "$" || after === "*") continue;
 		found.add(m[0]);
@@ -103,7 +105,9 @@ function extractBashPaths(command: string): string[] {
 		if (!/^[A-Za-z0-9_.\/\-]+$/.test(tok)) continue;
 		found.add(tok);
 	}
-	return [...found];
+	// /dev/null — ни читать данные, ни записывать их наружу не может (пустой
+	// ввод/вывод), ложное срабатывание на стандартную редирекцию `2>/dev/null`.
+	return [...found].filter((p) => p !== "/dev/null");
 }
 
 export default function (pi: ExtensionAPI) {

@@ -137,6 +137,16 @@ writeFileSync(join(outside, "secret.txt"), "s3cr3t");
 		if (res !== undefined) throw new Error("неразрешимый токен заблокирован: " + JSON.stringify(res));
 	});
 
+	await check("(e6) bash с редирекцией 2>/dev/null не блокируется ложно", async () => {
+		const res = await handler({ toolName: "bash", input: { command: "ls missing-file 2>/dev/null | head" } }, ctx);
+		if (res !== undefined) throw new Error("ложный блок на /dev/null: " + JSON.stringify(res));
+	});
+
+	await check("(e7) bash с ~/… (allowlist-дефолт $HOME/.pi) не даёт ложного токена /…", async () => {
+		const res = await handler({ toolName: "bash", input: { command: "ls ~/.pi/agent" } }, ctx);
+		if (res !== undefined) throw new Error("ложный блок на ~/…: " + JSON.stringify(res));
+	});
+
 	await check("(f) symlink-escape блокируется (symlink в CWD → наружу)", async () => {
 		const link = join(cwd, "sneaky-link");
 		if (!existsSync(link)) symlinkSync(outside, link);
