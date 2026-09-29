@@ -3,7 +3,7 @@ import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { loadGuard, saveGuard } from "../guard-state.ts";
+import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
 
 /**
  * dir-guard: жёсткий блок tool-вызовов (read/write/edit/bash), чьи пути уходят
@@ -208,9 +208,10 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
-		// Новая сессия в главной (startup/new/fork) → дефолт (защита ON) + persist;
-		// продолжение/перезагрузка (resume/reload) → сохранённое состояние. Субагент не сбрасывает.
-		if (!_isSubagent && event.reason !== "resume" && event.reason !== "reload") {
+		// Новая сессия (startup с пустой историей, new) → дефолт (защита ON) + persist;
+		// продолжение (pi -c / --session / resume / reload / fork) → сохранённое состояние.
+		// Субагент не сбрасывает.
+		if (!_isSubagent && shouldResetGuards(event, ctx)) {
 			disabled = false;
 			saveGuard("dir-guard", { disabled });
 		}

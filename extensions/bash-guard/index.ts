@@ -3,7 +3,7 @@ import { DynamicBorder, isToolCallEventType } from "@earendil-works/pi-coding-ag
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 import { parse as shellParse } from "shell-quote";
-import { loadGuard, saveGuard } from "../guard-state.ts";
+import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
 
 /**
  * Перехватывает вызовы инструмента `bash` и применяет разную защиту в зависимости
@@ -553,9 +553,10 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (event, ctx) => {
-		// Новая сессия в главной (startup/new/fork) → дефолт (вся защита ON) + persist;
-		// продолжение/перезагрузка (resume/reload) → сохранённое состояние. Субагент не сбрасывает.
-		if (!_isSubagent && event.reason !== "resume" && event.reason !== "reload") {
+		// Новая сессия (startup с пустой историей, new) → дефолт (вся защита ON) + persist;
+		// продолжение (pi -c / --session / resume / reload / fork) → сохранённое состояние.
+		// Субагент не сбрасывает.
+		if (!_isSubagent && shouldResetGuards(event, ctx)) {
 			disabled = false;
 			rmAllowed = false;
 			saveGuard("bash-guard", { disabled, rmAllowed });

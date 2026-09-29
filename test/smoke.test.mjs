@@ -639,6 +639,14 @@ await check("guard-state: новая сессия (startup) сбрасывает
 	bashGuard.default(piResume);
 	await piResume.handlers.session_start({ type: "session_start", reason: "resume" }, noUiCtx);
 	if (readBash().rmAllowed !== true) throw new Error("resume сбросил состояние (а должен восстановить): " + JSON.stringify(readBash()));
+
+	// pi -c: на старте процесса reason тоже "startup", но история непустая → НЕ сбрасывает.
+	seed({ "bash-guard": { rmAllowed: true } });
+	const piCont = makePi();
+	bashGuard.default(piCont);
+	const contCtx = { ...noUiCtx, sessionManager: { buildSessionContext: () => ({ messages: [{}] }) } };
+	await piCont.handlers.session_start({ type: "session_start", reason: "startup" }, contCtx);
+	if (readBash().rmAllowed !== true) throw new Error("startup с историей (pi -c) сбросил состояние (а должен восстановить): " + JSON.stringify(readBash()));
 });
 
 console.log(results.join("\n"));

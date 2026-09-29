@@ -1,6 +1,6 @@
 {
   "name": "pi-extensions",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Коллекция небольших расширений для pi (git-пакет: устанавливай целиком или по отдельности через фильтры)",
   "keywords": [
     "pi-package"
