@@ -3,6 +3,7 @@ import { DynamicBorder, isToolCallEventType } from "@earendil-works/pi-coding-ag
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 import { parse as shellParse } from "shell-quote";
+import { loadGuard, saveGuard } from "../guard-state.ts";
 
 /**
  * Перехватывает вызовы инструмента `bash` и применяет разную защиту в зависимости
@@ -537,9 +538,10 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
-	// Переключатели живут только внутри сессии. Намеренно не сохраняются между перезагрузками и перезапусками.
-	let disabled = false;
-	let rmAllowed = false;
+	// Переключатели персистентны: <agentDir>/guard-state.json (переживает /reload
+	// и перезапуск сессии — factory перечитывает файл при старте).
+	let disabled = Boolean(loadGuard("bash-guard").disabled);
+	let rmAllowed = Boolean(loadGuard("bash-guard").rmAllowed);
 
 	// Бейдж в футер: собираем активные отключения; пусто → сбрасываем статус.
 	const refreshStatus = (ctx: any) => {
@@ -551,8 +553,9 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		if (pi.getFlag("--bash-guard-disabled") === true) {
+		if (pi.getFlag("--bash-guard-disabled") === true && !disabled) {
 			disabled = true;
+			saveGuard("bash-guard", { disabled });
 		}
 		refreshStatus(ctx);
 	});
@@ -561,10 +564,11 @@ export default function (pi: ExtensionAPI) {
 		description: "Переключить bash-guard между интерактивным (по умолчанию) и отключённым (автономным) режимом для этой сессии.",
 		handler: async (_args, ctx) => {
 			disabled = !disabled;
+			saveGuard("bash-guard", { disabled });
 			refreshStatus(ctx);
 			if (disabled) {
 				ctx.ui.notify(
-					"bash-guard ОТКЛЮЧЁН на эту сессию. Катастрофические операции по-прежнему блокируются жёстко. Снова выполни /bash-guard, чтобы включить.",
+					"bash-guard ОТКЛЮЧЁН (состояние запомнено, переживает /reload и перезапуск). Катастрофические операции по-прежнему блокируются жёстко. Снова выполни /bash-guard, чтобы включить.",
 					"warning",
 				);
 			} else {
@@ -577,6 +581,7 @@ export default function (pi: ExtensionAPI) {
 		description: "Переключить запрет rm для этой сессии: агент сможет удалять файлы (тесты, tmp) без подтверждения и без жёсткого блока в автономном режиме.",
 		handler: async (_args, ctx) => {
 			rmAllowed = !rmAllowed;
+			saveGuard("bash-guard", { rmAllowed });
 			refreshStatus(ctx);
 			ctx.ui.notify(
 				rmAllowed

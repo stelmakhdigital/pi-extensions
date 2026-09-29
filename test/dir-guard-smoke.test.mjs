@@ -9,6 +9,10 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { createJiti } from "jiti";
 
+// Изолируем agent dir (guard-state.json пишется в <agentDir>/ — не в реальный ~/.pi/agent).
+const guardAgentDir = join(tmpdir(), `pi-dir-guard-state-test-${process.pid}`);
+process.env.PI_CODING_AGENT_DIR = guardAgentDir;
+
 const require = createRequire(import.meta.url);
 const jiti = createJiti(fileURLToPath(import.meta.url));
 const dirGuard = jiti("../extensions/dir-guard/index.ts");
@@ -200,6 +204,37 @@ writeFileSync(join(outside, "secret.txt"), "s3cr3t");
 		if (!statusVal) throw new Error("бейдж не установлен");
 	});
 }
+
+await check("dir-guard: /dir-guard персистентен и восстанавливается новым factory", async () => {
+	const stFile = join(guardAgentDir, "guard-state.json");
+	const readState = () => {
+		try {
+			return JSON.parse(readFileSync(stFile, "utf8"))["dir-guard"] ?? {};
+		} catch {
+			return {};
+		}
+	};
+	const before = Boolean(readState().disabled);
+	const piP = makePi();
+	dirGuard.default(piP);
+	const cmd = piP.commands.find((c) => c.name === "dir-guard").def;
+	await cmd.handler("", makeCtx(cwd)); // флип → file: !before
+	if (readState().disabled !== !before) throw new Error("файл не обновлён: " + JSON.stringify(readState()));
+	// Новый factory (имитация /reload): disabled восстановлен из файла — поведение соответствует
+	const piNew = makePi();
+	dirGuard.default(piNew);
+	const resFlipped = await piNew.handlers.tool_call({ toolName: "read", input: { path: "/etc/passwd" } }, makeCtx(cwd));
+	if (Boolean(resFlipped?.block) !== before) {
+		throw new Error("состояние не восстановлено (ожидалось block=" + before + "): " + JSON.stringify(resFlipped));
+	}
+	// Возврат в исходный вид: флип на новом factory (file → before) + поведение соответствует
+	await piNew.commands.find((c) => c.name === "dir-guard").def.handler("", makeCtx(cwd));
+	if (readState().disabled !== before) throw new Error("не вернули исходное состояние: " + JSON.stringify(readState()));
+	const resBack = await piNew.handlers.tool_call({ toolName: "read", input: { path: "/etc/passwd" } }, makeCtx(cwd));
+	if (Boolean(resBack?.block) !== !before) {
+		throw new Error("после возврата поведение неверно (ожидалось block=" + !before + "): " + JSON.stringify(resBack));
+	}
+});
 
 rmSync(base, { recursive: true, force: true });
 console.log(results.join("\n"));

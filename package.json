@@ -1,6 +1,6 @@
 {
   "name": "pi-extensions",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Коллекция небольших расширений для pi (git-пакет: устанавливай целиком или по отдельности через фильтры)",
   "keywords": [
     "pi-package"
@@ -30,7 +30,8 @@
       "extensions/ask-user-question/index.ts",
       "extensions/subagents/index.ts",
       "extensions/sandbox/index.ts",
-      "extensions/gen-speed/index.ts"
+      "extensions/gen-speed/index.ts",
+      "extensions/repo-update/index.ts"
     ],
     "skills": [
       "skills/session-insights"

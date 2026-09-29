@@ -3,6 +3,7 @@ import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { loadGuard, saveGuard } from "../guard-state.ts";
 
 /**
  * dir-guard: жёсткий блок tool-вызовов (read/write/edit/bash), чьи пути уходят
@@ -106,8 +107,10 @@ function extractBashPaths(command: string): string[] {
 }
 
 export default function (pi: ExtensionAPI) {
-	// Состояние сессии (in-memory, не персистент).
-	let disabled = false;
+	// Состояние персистентно: <agentDir>/guard-state.json (переживает /reload и
+	// перезапуск сессии). В субагентах файл сознательно не читается — свежее
+	// включённое состояние (fail-safe по умолчанию).
+	let disabled = _isSubagent ? false : Boolean(loadGuard("dir-guard").disabled);
 	let ready = false;
 	let root = "";
 	let allowRoots: string[] = [];
@@ -205,20 +208,24 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
-		if (event.reason === "startup" && pi.getFlag("--dir-guard-disabled") === true) {
+		if (event.reason === "startup" && pi.getFlag("--dir-guard-disabled") === true && !disabled) {
 			disabled = true;
-			ctx.ui.setStatus(STATUS_KEY, offBadge(ctx));
+			saveGuard("dir-guard", { disabled });
 		}
+		// Синхронизируем бейдж при любой причине (включая "reload": factory
+		// перезапускается, а состояние восстанавливается из guard-state.json).
+		ctx.ui.setStatus(STATUS_KEY, disabled ? offBadge(ctx) : undefined);
 	});
 
 	pi.registerCommand("dir-guard", {
 		description: "Переключить dir-guard (жёсткий блок путей вне рабочей директории) для этой сессии.",
 		handler: async (_args, ctx) => {
 			disabled = !disabled;
+			saveGuard("dir-guard", { disabled });
 			if (disabled) {
 				ctx.ui.setStatus(STATUS_KEY, offBadge(ctx));
 				ctx.ui.notify(
-					"dir-guard ОТКЛЮЧЁН на эту сессию. Пути вне рабочей директории больше не блокируются. Снова выполни /dir-guard, чтобы включить.",
+					"dir-guard ОТКЛЮЧЁН (состояние запомнено, переживает /reload и перезапуск). Пути вне рабочей директории больше не блокируются. Снова выполни /dir-guard, чтобы включить.",
 					"warning",
 				);
 			} else {
