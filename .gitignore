@@ -9,3 +9,6 @@ __pycache__/
 graft/
 # локальный allowlist dir-guard
 .dir-guard.json
+
+# временные debug-каталоги тестов
+tmp-*/
