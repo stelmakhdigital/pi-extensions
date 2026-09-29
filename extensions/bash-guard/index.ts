@@ -443,7 +443,7 @@ const _isSubagent = Number.isFinite(_subagentDepth) && _subagentDepth >= 1;
 // сессии закрывает интерактивный запрос. `sessionOnly: true` — действует только
 // в сессиях, а не в «поле» автономного режима главной сессии.
 const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean; rmOnly?: boolean }> = [
-	// Рекурсивное удаление (rmOnly — снимается /bash-guard-rm в главной сессии)
+	// Рекурсивное удаление (rmOnly — снимается /bash-guard:rm в главной сессии)
 	{ pattern: /(?<!\bgit\s+)\brm\b[^#\n]*\s-(?:[a-zA-Z]*[rR]|-\brecursive\b)/, reason: "рекурсивное удаление (rm -r / -rf / -Rf)", rmOnly: true },
 	// Повышение привилегий
 	{ pattern: /\bsudo\b/, reason: "повышенные привилегии (sudo)" },
@@ -573,14 +573,14 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("bash-guard-rm", {
+	pi.registerCommand("bash-guard:rm", {
 		description: "Переключить запрет rm для этой сессии: агент сможет удалять файлы (тесты, tmp) без подтверждения и без жёсткого блока в автономном режиме.",
 		handler: async (_args, ctx) => {
 			rmAllowed = !rmAllowed;
 			refreshStatus(ctx);
 			ctx.ui.notify(
 				rmAllowed
-					? "bash-guard: rm ОТКЛЮЧЁН на эту сессию — удаление файлов разрешено без подтверждения. Снова выполни /bash-guard-rm, чтобы вернуть защиту."
+					? "bash-guard: rm ОТКЛЮЧЁН на эту сессию — удаление файлов разрешено без подтверждения. Снова выполни /bash-guard:rm, чтобы вернуть защиту."
 					: "bash-guard: защита rm снова включена.",
 				rmAllowed ? "warning" : "info",
 			);

@@ -86,7 +86,7 @@ const noUiCtx = {
 		if (!pi.flags.some((f) => f.name === "bash-guard-disabled")) throw new Error("нет флага bash-guard-disabled");
 		if (!pi.flags.some((f) => f.name === "bash-guard-auto-allow")) throw new Error("нет флага bash-guard-auto-allow");
 		if (!pi.commands.some((c) => c.name === "bash-guard")) throw new Error("нет /bash-guard");
-		if (!pi.commands.some((c) => c.name === "bash-guard-rm")) throw new Error("нет /bash-guard-rm");
+		if (!pi.commands.some((c) => c.name === "bash-guard:rm")) throw new Error("нет /bash-guard:rm");
 	});
 	const toolHandler = pi.handlers.tool_call;
 	if (!toolHandler) {
@@ -97,13 +97,13 @@ const noUiCtx = {
 		if (!res?.block) throw new Error("ожидалось block, получили: " + JSON.stringify(res));
 		if (!res.reason.includes("bash-guard")) throw new Error("причина: " + res.reason);
 	});
-	await check("bash-guard: /bash-guard-rm снимает запрет rm (интерактив и floor)", async () => {
+	await check("bash-guard: /bash-guard:rm снимает запрет rm (интерактив и floor)", async () => {
 		const piRm = makePi();
 		bashGuard.default(piRm);
 		const h = piRm.handlers.tool_call;
-		await piRm.commands.find((c) => c.name === "bash-guard-rm").def.handler("", noUiCtx);
+		await piRm.commands.find((c) => c.name === "bash-guard:rm").def.handler("", noUiCtx);
 		const res1 = await h({ toolName: "bash", input: { command: "rm -rf build/" } }, noUiCtx);
-		if (res1 !== undefined) throw new Error("rm после /bash-guard-rm всё равно блокируется: " + JSON.stringify(res1));
+		if (res1 !== undefined) throw new Error("rm после /bash-guard:rm всё равно блокируется: " + JSON.stringify(res1));
 		await piRm.commands.find((c) => c.name === "bash-guard").def.handler("", noUiCtx); // автономный режим
 		const res2 = await h({ toolName: "bash", input: { command: "rm -rf node_modules" } }, noUiCtx);
 		if (res2 !== undefined) throw new Error("rm в floor-режиме с rmAllowed не прошёл: " + JSON.stringify(res2));

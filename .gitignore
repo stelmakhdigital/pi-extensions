@@ -4,3 +4,8 @@ FOR_REMOVE.md
 
 __pycache__/
 .memory/
+
+# артефакты графа pi-graft (не репозиторийный контент)
+graft/
+# локальный allowlist dir-guard
+.dir-guard.json
