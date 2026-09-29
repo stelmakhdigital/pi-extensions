@@ -108,8 +108,8 @@ function extractBashPaths(command: string): string[] {
 
 export default function (pi: ExtensionAPI) {
 	// Состояние персистентно: <agentDir>/guard-state.json (переживает /reload и
-	// перезапуск сессии). В субагентах файл сознательно не читается — свежее
-	// включённое состояние (fail-safe по умолчанию).
+	// продолжение pi -c; новая сессия pi стартует с дефолтом). В субагентах файл
+	// сознательно не читается — свежее включённое состояние (fail-safe по умолчанию).
 	let disabled = _isSubagent ? false : Boolean(loadGuard("dir-guard").disabled);
 	let ready = false;
 	let root = "";
@@ -208,6 +208,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		// Новая сессия в главной (startup/new/fork) → дефолт (защита ON) + persist;
+		// продолжение/перезагрузка (resume/reload) → сохранённое состояние. Субагент не сбрасывает.
+		if (!_isSubagent && event.reason !== "resume" && event.reason !== "reload") {
+			disabled = false;
+			saveGuard("dir-guard", { disabled });
+		}
 		if (event.reason === "startup" && pi.getFlag("--dir-guard-disabled") === true && !disabled) {
 			disabled = true;
 			saveGuard("dir-guard", { disabled });
@@ -225,7 +231,7 @@ export default function (pi: ExtensionAPI) {
 			if (disabled) {
 				ctx.ui.setStatus(STATUS_KEY, offBadge(ctx));
 				ctx.ui.notify(
-					"dir-guard ОТКЛЮЧЁН (состояние запомнено, переживает /reload и перезапуск). Пути вне рабочей директории больше не блокируются. Снова выполни /dir-guard, чтобы включить.",
+					"dir-guard ОТКЛЮЧЁН (запомнено: переживёт /reload и pi -c; новая сессия pi стартует с дефолтом). Пути вне рабочей директории больше не блокируются. Снова выполни /dir-guard, чтобы включить.",
 					"warning",
 				);
 			} else {

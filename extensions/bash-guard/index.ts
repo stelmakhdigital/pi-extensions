@@ -539,7 +539,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// Переключатели персистентны: <agentDir>/guard-state.json (переживает /reload
-	// и перезапуск сессии — factory перечитывает файл при старте).
+	// и продолжение pi -c; новая сессия pi стартует с дефолтом — сброс в session_start).
 	let disabled = Boolean(loadGuard("bash-guard").disabled);
 	let rmAllowed = Boolean(loadGuard("bash-guard").rmAllowed);
 
@@ -552,7 +552,14 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus(BASH_GUARD_STATUS_KEY, parts.length ? parts.join("") : undefined);
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
+		// Новая сессия в главной (startup/new/fork) → дефолт (вся защита ON) + persist;
+		// продолжение/перезагрузка (resume/reload) → сохранённое состояние. Субагент не сбрасывает.
+		if (!_isSubagent && event.reason !== "resume" && event.reason !== "reload") {
+			disabled = false;
+			rmAllowed = false;
+			saveGuard("bash-guard", { disabled, rmAllowed });
+		}
 		if (pi.getFlag("--bash-guard-disabled") === true && !disabled) {
 			disabled = true;
 			saveGuard("bash-guard", { disabled });
@@ -568,7 +575,7 @@ export default function (pi: ExtensionAPI) {
 			refreshStatus(ctx);
 			if (disabled) {
 				ctx.ui.notify(
-					"bash-guard ОТКЛЮЧЁН (состояние запомнено, переживает /reload и перезапуск). Катастрофические операции по-прежнему блокируются жёстко. Снова выполни /bash-guard, чтобы включить.",
+					"bash-guard ОТКЛЮЧЁН (запомнено: переживёт /reload и pi -c; новая сессия pi стартует с дефолтом). Катастрофические операции по-прежнему блокируются жёстко. Снова выполни /bash-guard, чтобы включить.",
 					"warning",
 				);
 			} else {

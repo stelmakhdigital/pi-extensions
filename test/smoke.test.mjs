@@ -3,7 +3,7 @@
  * со стаб-объектом ExtensionAPI и проверяет основные пути.
  * Запуск: node test/smoke.test.mjs
  */
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -615,6 +615,30 @@ await check("guard-state: /bash-guard:rm пишется в guard-state.json и �
 	await piNew.commands.find((c) => c.name === "bash-guard:rm").def.handler("", noUiCtx);
 	const restored = JSON.parse(readFileSync(stFile, "utf8"))["bash-guard"];
 	if (restored.rmAllowed !== before) throw new Error("состояние не восстановлено: " + JSON.stringify(restored));
+});
+
+await check("guard-state: новая сессия (startup) сбрасывает в дефолт, resume — восстанавливает", async () => {
+	const stFile = join(guardAgentDir, "guard-state.json");
+	const seed = (obj) => {
+		mkdirSync(guardAgentDir, { recursive: true });
+		writeFileSync(stFile, JSON.stringify(obj, null, 2));
+	};
+	const readBash = () => JSON.parse(readFileSync(stFile, "utf8"))["bash-guard"] ?? {};
+
+	// Сеём «старое» состояние (rmAllowed=true), заводим factory (прочитает его),
+	// затем новая сессия (startup) → сброс в дефолт + persist.
+	seed({ "bash-guard": { rmAllowed: true } });
+	const piFresh = makePi();
+	bashGuard.default(piFresh);
+	await piFresh.handlers.session_start({ type: "session_start", reason: "startup" }, noUiCtx);
+	if (readBash().rmAllowed !== false) throw new Error("startup не сбросил rmAllowed в дефолт: " + JSON.stringify(readBash()));
+
+	// Сеём снова (rmAllowed=true), затем resume → НЕ сбрасывает (восстанавливает).
+	seed({ "bash-guard": { rmAllowed: true } });
+	const piResume = makePi();
+	bashGuard.default(piResume);
+	await piResume.handlers.session_start({ type: "session_start", reason: "resume" }, noUiCtx);
+	if (readBash().rmAllowed !== true) throw new Error("resume сбросил состояние (а должен восстановить): " + JSON.stringify(readBash()));
 });
 
 console.log(results.join("\n"));
