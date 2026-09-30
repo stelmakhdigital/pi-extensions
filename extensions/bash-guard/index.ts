@@ -443,7 +443,7 @@ const _isSubagent = Number.isFinite(_subagentDepth) && _subagentDepth >= 1;
 // Меньше ложных срабатываний важнее широкого покрытия — остальное в главной
 // сессии закрывает интерактивный запрос. `sessionOnly: true` — действует только
 // в сессиях, а не в «поле» автономного режима главной сессии.
-const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean; rmOnly?: boolean }> = [
+export const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean; rmOnly?: boolean }> = [
 	// Рекурсивное удаление (rmOnly — снимается /bash-guard:rm в главной сессии)
 	{ pattern: /(?<!\bgit\s+)\brm\b[^#\n]*\s-(?:[a-zA-Z]*[rR]|-\brecursive\b)/, reason: "рекурсивное удаление (rm -r / -rf / -Rf)", rmOnly: true },
 	// Повышение привилегий
@@ -460,7 +460,7 @@ const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: b
 	{ pattern: /\bcryptsetup\b/, reason: "управление шифрованием дисков" },
 	{ pattern: /\bzpool\b/, reason: "управление пулами ZFS" },
 	// Электропитание системы
-	{ pattern: /\b(shutdown|reboot|halt|poweroff)\b/, reason: "операции электропитания системы" },
+	{ pattern: /(?<!\.)\b(shutdown|reboot|halt|poweroff)\b/, reason: "операции электропитания системы" },
 	// Снос инфраструктуры
 	{ pattern: /\bterraform\s+destroy\b/, reason: "снос инфраструктуры (terraform destroy)" },
 	{ pattern: /\bkubectl\s+delete\b/, reason: "удаление ресурсов Kubernetes" },
