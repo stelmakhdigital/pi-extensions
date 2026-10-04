@@ -176,11 +176,13 @@ export default function (pi: ExtensionAPI) {
 							// строка статусов других расширений — как в дефолте
 							const statuses = footerData.getExtensionStatuses();
 							if (statuses.size > 0) {
-								const statusLine = Array.from(statuses.entries())
-									.sort(([a], [b]) => a.localeCompare(b))
-									.map(([, text]) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim())
-									.join(" ");
-								lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+								// две строки: сначала остальные (graft/ponytail), внизу — guard-бейджи (ключи " z-…")
+								const sorted = Array.from(statuses.entries()).sort(([a], [b]) => a.localeCompare(b));
+								const clean = (text: string) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+								const main = sorted.filter(([key]) => !key.startsWith(" z-")).map(([, text]) => clean(text)).join(" ");
+								const guard = sorted.filter(([key]) => key.startsWith(" z-")).map(([, text]) => clean(text)).join(" ");
+								if (main) lines.push(truncateToWidth(main, width, theme.fg("dim", "...")));
+								if (guard) lines.push(truncateToWidth(guard, width, theme.fg("dim", "...")));
 							}
 							return lines;
 						} catch {
