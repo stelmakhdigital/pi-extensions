@@ -44,7 +44,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 type Level = "off" | "dev" | "untrusted" | "vm";
 type Platform = "linux" | "macos" | "unsupported";
 
-const STATUS_KEY = " sandbox"; // ведущий пробел: бейдж не обрезается футером
+const STATUS_KEY = " ~sandbox"; // ведущий пробел: не обрезается футером; "~": бейдж после иконок graft/ponytail
 const SCRIPT_IN_SANDBOX = "/run/pi-sbx-cmd.sh";
 
 /** Варианты стартового промпта «Доверяешь ли ты этому проекту?» */

@@ -496,7 +496,8 @@ const MAIN_DISABLED_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnl
 //   (терминалы переназначают его по теме, часто он выглядит коричнево-оранжевым).
 // - NBSP (U+00A0) внутри предупреждения, потому что sanitizeStatusText в футере
 //   схлопывает повторяющиеся ASCII-пробелы через / +/g.
-const BASH_GUARD_STATUS_KEY = " bash-guard";
+// "~" в начале ключа — бейдж сортируется ПСЛЕ иконок graft/ponytail (футер сортирует ключи)
+const BASH_GUARD_STATUS_KEY = " ~bash-guard";
 
 export default function (pi: ExtensionAPI) {
 	if (_isSubagent) {
