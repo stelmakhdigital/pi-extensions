@@ -210,7 +210,7 @@ writeFileSync(join(outside, "secret.txt"), "s3cr3t");
 		let statusKey = null, statusVal = null;
 		const ctxDis = makeCtx(cwd, { setStatus: (k, v) => { statusKey = k; statusVal = v; } });
 		await piDis.handlers.session_start({ reason: "startup" }, ctxDis);
-		if (statusKey !== " ~dir-guard") throw new Error("ключ статуса: " + JSON.stringify(statusKey));
+		if (statusKey !== " z-dir-guard") throw new Error("ключ статуса: " + JSON.stringify(statusKey));
 		if (!statusVal) throw new Error("бейдж не установлен");
 	});
 }

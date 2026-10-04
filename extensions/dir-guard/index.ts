@@ -30,7 +30,7 @@ import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
 
 // Ключ с пробелом в начале: футер сортирует статусы по алфавиту, и предупреждение
 // не обрезается truncateToWidth (см. аналогичный комментарий в bash-guard).
-const STATUS_KEY = " ~dir-guard"; // "~": бейдж после иконок graft/ponytail
+const STATUS_KEY = " z-dir-guard"; // "z-": бейдж после иконок graft/ponytail (localeCompare)
 
 const _subagentDepth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
 const _isSubagent = Number.isFinite(_subagentDepth) && _subagentDepth >= 1;
