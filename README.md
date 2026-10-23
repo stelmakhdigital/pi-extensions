@@ -10,6 +10,7 @@
 | [prompt-snippets](extensions/prompt-snippets/) | Комбинируемые одноцелевые промпт-правила: включаются на каждое сообщение через меню (`alt+s` / `/snippets`), вставляются перед или после вашего текста |
 | [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах, toggle персистентны (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
 | [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/bash, чьи пути уходят вне рабочей директории (CWD) и allowlist'а: realpath-канонизация (symlink-escape блокируется), allowlist — `$HOME/.pi` (дефолт) + `--dir-guard-allow` + `.dir-guard.json` в CWD, `/dir-guard` и бейдж `DR OFF`, состояние персистентно (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
+| [text-guard](extensions/text-guard/) | Контроль текста модели (документация, комментарии, коммиты, чат) — без эмодзи, стрелок, слов-маркеров ИИ-стиля («давайте», delve…) и умных названий: секция стиля в системном промпте, скан write/edit/bash (коммиты, heredoc, echo), режимы off/warn/strict (`/text-guard`, дефолт warn), автофикс эмодзи/стрелок, `.text-guard.json` в CWD (allow/skip/words/ignore), `/text-guard:stats`, бейдж `TG OFF`, состояние персистентно |
 | [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: задаёт пользователю один вопрос (текст, выбор одного, мультивыбор) и ждёт ответа |
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
 | [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41 t/s · ⌀ 0.8s` (EMA по ответам, на лету при стриминге; TTFT — время до первого токена; aborted/короткие ответы не считаются) |
@@ -52,7 +53,7 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 | prompt-snippets | `extensions/prompt-snippets/*` |
 | bash-guard | `extensions/bash-guard/*` |
 | dir-guard | `extensions/dir-guard/*` |
-| dir-guard | `extensions/dir-guard/*` |
+| text-guard | `extensions/text-guard/*` |
 | ask-user-question | `extensions/ask-user-question/*` |
 | sandbox | `extensions/sandbox/*` |
 | subagents | `extensions/subagents/*` |
@@ -109,6 +110,24 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 (дефолт `$HOME/.pi`, плюс `--dir-guard-allow` и `.dir-guard.json` в CWD),
 команду `/dir-guard` и флаги `--dir-guard-disabled` / `--dir-guard-allow`.
 Без зависимостей.
+
+### Только text-guard
+
+```json
+{
+	"packages": [
+		{
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
+			"extensions": ["extensions/text-guard/*"]
+		}
+	]
+}
+```
+
+Даст контроль текста модели (write/edit/bash + чат): секция стиля в системном
+промпте, режимы off/warn/strict (`/text-guard`, дефолт warn), автофикс
+эмодзи/стрелок (`/text-guard:fix`), статистику (`/text-guard:stats`),
+настройку через `.text-guard.json` в CWD. Без зависимостей.
 
 ### Только ask-user-question
 
