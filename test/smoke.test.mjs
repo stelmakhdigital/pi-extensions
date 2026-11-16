@@ -4,7 +4,7 @@
  * Запуск: node test/smoke.test.mjs
  */
 import { readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -17,12 +17,17 @@ process.env.PI_CODING_AGENT_DIR = guardAgentDir;
 const require = createRequire(import.meta.url);
 const jiti = createJiti(fileURLToPath(import.meta.url));
 
+const repoRoot = fileURLToPath(new URL("../", import.meta.url)).replace(/\/+$/, "");
 const promptSnippets = jiti("../extensions/prompt-snippets/index.ts");
 const bashGuard = jiti("../extensions/bash-guard/index.ts");
 const askUserQuestion = jiti("../extensions/ask-user-question/index.ts");
 
 const results = [];
-async function check(name, fn) {
+async function check(name, fn, skipReason) {
+	if (skipReason) {
+		results.push(`skip ${name} (${skipReason})`);
+		return;
+	}
 	try {
 		// Изоляция: каждый check стартует с чистым guard-state (файл общий на процесс)
 		rmSync(join(guardAgentDir, "guard-state.json"), { force: true });
@@ -207,10 +212,22 @@ const noUiCtx = {
 	sbxExt.default(pi);
 
 	const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
-	const { execFileSync, execFile } = await import("node:child_process");
+	const { execFileSync, execFile, spawnSync } = await import("node:child_process");
 
-	// Фикстура-проект (НЕ в /tmp: bwrap маскирует /tmp свежим tmpfs)
-	const fixture = "/home/arkalaust/pi-sbx-fixture";
+	// Проверка «песочница реально работает», а не «bwrap в PATH»: тот же probe,
+	// что делает extensions/sandbox/index.ts (checkBackend). Без рабочих
+	// namespaces (CI, чужая машина) проверки ниже пропускаются, а не падают.
+	const hasBwrap =
+		process.platform === "linux" &&
+		spawnSync("bwrap", [
+			"--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib",
+			"--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc", "--unshare-pid", "--", "true",
+		]).status === 0;
+	const needsBwrap = hasBwrap ? null : "нужен bwrap (Linux)";
+
+	// Фикстура-проект в $HOME (НЕ в /tmp: bwrap маскирует /tmp свежим tmpfs).
+	// Путь берём из homedir: зашитый путь автора ломал смоук на других машинах.
+	const fixture = join(homedir(), "pi-sbx-fixture");
 	if (!existsSync(fixture + "/.git")) {
 		mkdirSync(fixture, { recursive: true });
 		execFileSync("git", ["init", "-q"], { cwd: fixture });
@@ -218,10 +235,11 @@ const noUiCtx = {
 	writeFileSync(fixture + "/.sandbox", "dev\n");
 	const ctxSbx = { ...noUiCtx, cwd: fixture };
 
-	await check("sandbox: .sandbox=dev оборачивает bash-команду в bwrap", async () => {
+	await check("sandbox: .sandbox=dev оборачивает bash-команду (bwrap/sandbox-exec)", async () => {
 		const ev = { toolName: "bash", input: { command: "echo hello-sbx" } };
 		await pi.handlers.tool_call(ev, ctxSbx);
-		if (!String(ev.input.command).includes("bwrap")) throw new Error("не обёрнуто: " + String(ev.input.command).slice(0, 120));
+		const cmd = String(ev.input.command);
+		if (!/bwrap|sandbox-exec/.test(cmd)) throw new Error("не обёрнуто: " + cmd.slice(0, 120));
 		if (!ev.__sandboxWrapped) throw new Error("нет маркера __sandboxWrapped");
 	});
 
@@ -236,29 +254,30 @@ const noUiCtx = {
 	}
 
 	await check("sandbox: home/секреты скрыты, workspace rw (e2e)", async () => {
+		const home = homedir();
 		const out = await runWrapped(
-			'ls -A /home/arkalaust 2>/dev/null | tr "\n" " " | grep -qE "\.(ssh|gnupg)" && echo SECRETS-VISIBLE || echo SECRETS-HIDDEN; ls /home/arkalaust/.ssh >/dev/null 2>&1 && echo SSH-VISIBLE || echo SSH-HIDDEN; ls /home/arkalaust/Code >/dev/null 2>&1 && echo CODE-VISIBLE || echo CODE-HIDDEN; touch "' + fixture + '/.wtest" && echo WS-RW || echo WS-FAIL; rm -f "' + fixture + '/.wtest"',
+			`ls -A ${home} 2>/dev/null | tr "\n" " " | grep -qE "\.(ssh|gnupg)" && echo SECRETS-VISIBLE || echo SECRETS-HIDDEN; ls ${home}/.ssh >/dev/null 2>&1 && echo SSH-VISIBLE || echo SSH-HIDDEN; ls ${home}/Code >/dev/null 2>&1 && echo CODE-VISIBLE || echo CODE-HIDDEN; touch "${fixture}/.wtest" && echo WS-RW || echo WS-FAIL; rm -f "${fixture}/.wtest"`,
 			fixture,
 		);
 		if (!out.includes("SECRETS-HIDDEN")) throw new Error("секретные home-каталоги видны: " + out);
 		if (!out.includes("SSH-HIDDEN")) throw new Error("ssh виден: " + out);
 		if (!out.includes("CODE-HIDDEN")) throw new Error("другие проекты видны: " + out);
 		if (!out.includes("WS-RW")) throw new Error("workspace не rw: " + out);
-	});
+	}, needsBwrap);
 
 	await check("sandbox: секреты env не попадают в песочницу", async () => {
 		process.env.FAKE_API_KEY_SANDBOX_TEST = "secret123";
 		const out = await runWrapped("env | grep -c FAKE_API_KEY_SANDBOX_TEST || true", fixture);
 		if (!out.trim().startsWith("0")) throw new Error("секрет виден: " + out);
 		delete process.env.FAKE_API_KEY_SANDBOX_TEST;
-	});
+	}, needsBwrap);
 
 	await check("sandbox: untrusted блокирует сеть (e2e)", async () => {
 		writeFileSync(fixture + "/.sandbox", "untrusted\n");
 		const out = await runWrapped("timeout 6 curl -sI https://1.1.1.1 >/dev/null 2>&1 && echo NET-OK || echo NET-BLOCKED", fixture);
 		if (!out.includes("NET-BLOCKED")) throw new Error("сеть жива: " + out);
 		writeFileSync(fixture + "/.sandbox", "dev\n");
-	});
+	}, needsBwrap);
 
 	await check("sandbox: vm-уровень блокирует bash с инструкцией", async () => {
 		const piVm = makePi();
@@ -269,7 +288,7 @@ const noUiCtx = {
 	});
 
 	await check("sandbox: без маркера — passthrough", async () => {
-		const plain = "/home/arkalaust/pi-sbx-fixture-plain";
+		const plain = join(homedir(), "pi-sbx-fixture-plain");
 		if (!existsSync(plain + "/.git")) {
 			mkdirSync(plain, { recursive: true });
 			execFileSync("git", ["init", "-q"], { cwd: plain });
@@ -288,7 +307,7 @@ const noUiCtx = {
 	const cleanStore = () => { try { unlinkSync(trustFile); } catch {} };
 	process.env.PI_SANDBOX_TRUST_FILE = trustFile;
 
-	const plain = "/home/arkalaust/pi-sbx-fixture-plain"; // без .sandbox
+	const plain = join(homedir(), "pi-sbx-fixture-plain"); // без .sandbox
 	const mkCtx = (cwd) => ({
 		hasUI: true,
 		cwd,
@@ -329,7 +348,11 @@ const noUiCtx = {
 		if (res.trusted !== "no") throw new Error("неверный trust: " + JSON.stringify(res));
 		const ev = { toolName: "bash", input: { command: "echo x" } };
 		await pi3.handlers.tool_call(ev, { ...noUiCtx, cwd: plain });
-		if (!String(ev.input.command).includes("unshare-net")) throw new Error("не untrusted: " + String(ev.input.command).slice(0, 150));
+		// untrusted должен дать сетевой blockade: bwrap --unshare-net (Linux) или
+		// sandbox-exec-профиль с deny network (macOS)
+		const wrapped = String(ev.input.command);
+		const backend = process.platform === "linux" ? "unshare-net" : "sandbox-exec";
+		if (!wrapped.includes(backend)) throw new Error("не применён untrusted: " + wrapped.slice(0, 150));
 	});
 
 	await check("sandbox-trust: маркер .sandbox — промпт не показывается", async () => {
@@ -337,7 +360,7 @@ const noUiCtx = {
 		const pi4 = makePi();
 		sbxExt4.default(pi4);
 		let calls = 0;
-		const fixture = "/home/arkalaust/pi-sbx-fixture"; // .sandbox = dev
+		const fixture = join(homedir(), "pi-sbx-fixture"); // .sandbox = dev
 		const ctxT = mkCtx(fixture);
 		ctxT.ui.select = async () => { calls++; return "x"; };
 		const res = await pi4.handlers.project_trust({ type: "project_trust", cwd: fixture }, ctxT);
@@ -364,6 +387,9 @@ const noUiCtx = {
 	});
 
 	delete process.env.PI_SANDBOX_TRUST_FILE;
+	// фикстуры — только для этого смоука, в $HOME их не оставляем
+	rmSync(join(homedir(), "pi-sbx-fixture"), { recursive: true, force: true });
+	rmSync(join(homedir(), "pi-sbx-fixture-plain"), { recursive: true, force: true });
 }
 
 
@@ -416,7 +442,7 @@ print(found)`,
 	const ctxG = {
 		hasUI: true,
 		mode: "tui",
-		cwd: "/home/arkalaust/Code/AGENTS/pi-extensions",
+		cwd: repoRoot,
 		model: { id: "test-model", contextWindow: 200000, reasoning: true },
 		thinkingLevel: "medium",
 		getContextUsage: () => ({ tokens: 48000, contextWindow: 200000, percent: 24 }),
@@ -432,7 +458,7 @@ print(found)`,
 				},
 			],
 			getSessionName: () => "test-session",
-			getCwd: () => "/home/arkalaust/Code/AGENTS/pi-extensions",
+			getCwd: () => repoRoot,
 		},
 		ui: { setFooter: (f) => { footerFactory = f; } },
 	};
@@ -471,7 +497,10 @@ print(found)`,
 		if (!stats.includes("↑")) throw new Error("нет токенов ↑: " + stats);
 		if (!stats.includes("24.0%/200k (auto)")) throw new Error("нет context%: " + stats);
 		if (!stats.includes("test-model • medium")) throw new Error("нет модели справа: " + stats);
-		if (lines[0] !== "[dim]~/Code/AGENTS/pi-extensions (master) • test-session") throw new Error("pwd-строка: " + lines[0]);
+		// cwd показывается сокращённо до ~ — считаем ожидаемое от реального пути репо
+		const home = homedir();
+		const pwd = repoRoot.startsWith(home) ? "~" + repoRoot.slice(home.length) : repoRoot;
+		if (lines[0] !== `[dim]${pwd} (master) • test-session`) throw new Error("pwd-строка: " + lines[0]);
 		// бейдж в строке токенов, а НЕ в строке статусов
 		if (lines[2] && lines[2].includes("t/s")) throw new Error("бейдж дублируется в статус-строке: " + lines[2]);
 		if (!lines[2] || !lines[2].includes("bash-guard: ok")) throw new Error("статусы других расширений потеряны: " + JSON.stringify(lines));

@@ -1,0 +1,30 @@
+# Смоук-тесты — самодостаточные скрипты (jiti + стаб ExtensionAPI): без сети,
+# без tmux, без моделей. bubblewrap ставится, чтобы sandbox e2e-проверки
+# выполнялись, а не пропускались; если user namespaces в раннере не работают,
+# проверки печатают skip и прогон остаётся зелёным (см. hasBwrap в smoke.test.mjs).
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: smoke tests (node 22)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: bubblewrap для sandbox e2e
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Test
+        run: npm test
