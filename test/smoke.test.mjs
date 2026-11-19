@@ -215,12 +215,15 @@ const noUiCtx = {
 	const { execFileSync, execFile, spawnSync } = await import("node:child_process");
 
 	// Проверка «песочница реально работает», а не «bwrap в PATH»: тот же probe,
-	// что делает extensions/sandbox/index.ts (checkBackend). Без рабочих
-	// namespaces (CI, чужая машина) проверки ниже пропускаются, а не падают.
+	// что делает extensions/sandbox/index.ts (checkBackend): bind'ы только
+	// существующих каталогов (хосты без /lib64 — GH-раннеры — не должны
+	// расходиться с расширением). Без рабочих namespaces (CI, чужая машина)
+	// проверки ниже пропускаются, а не падают.
+	const sysDirs = ["/usr", "/bin", "/lib", "/lib64"].filter((d) => existsSync(d));
 	const hasBwrap =
 		process.platform === "linux" &&
 		spawnSync("bwrap", [
-			"--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib",
+			...sysDirs.flatMap((d) => ["--ro-bind", d, d]),
 			"--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc", "--unshare-pid", "--", "true",
 		]).status === 0;
 	const needsBwrap = hasBwrap ? null : "нужен bwrap (Linux)";
@@ -396,23 +399,42 @@ const noUiCtx = {
 // === 6. session-insights (skills) ===
 {
 	const { spawnSync } = await import("node:child_process");
+	const { mkdtempSync, rmSync } = await import("node:fs");
 	const script = fileURLToPath(new URL("../skills/session-insights/scripts/insights.py", import.meta.url));
 
-	await check("session-insights: insights.py --json валиден", async () => {
-		const r = spawnSync("python3", [script, "--since", "90d", "--json"], { encoding: "utf8", timeout: 120000 });
-		if (r.status !== 0) throw new Error("exit " + r.status + ": " + (r.stderr || "").slice(0, 200));
-		const d = JSON.parse(r.stdout);
-		for (const k of ["totals", "sessions_top", "tool_errors", "max_tool_output_chars", "repeated_prompt_lines", "prompt_keywords"]) {
-			if (!(k in d)) throw new Error("нет ключа " + k);
+	// Синтетическая фикстура под временным $HOME: тесты не должны зависеть от
+	// реальных сессий разработчика (на CI-раннере ~/.pi/agent/sessions пуст).
+	const fakeHome = mkdtempSync(join(tmpdir(), "pi-insights-home-"));
+	try {
+		const sessDir = join(fakeHome, ".pi", "agent", "sessions", "home-fake--project--");
+		mkdirSync(sessDir, { recursive: true });
+		const nowIso = new Date().toISOString();
+		const records = [JSON.stringify({ type: "session", id: "fixture-session", cwd: "/home/fake/project", timestamp: nowIso })];
+		for (let i = 0; i < 6; i++) {
+			records.push(JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: `вопрос ${i}` }], timestamp: Date.now() } }));
+			records.push(JSON.stringify({
+				type: "message",
+				message: { role: "assistant", model: "test-model", content: [{ type: "text", text: `ответ ${i}` }], usage: { input: 10, output: 5, cost: { total: 0.01 } }, timestamp: Date.now() },
+			}));
 		}
-		if (!Number.isInteger(d.totals.sessions) || d.totals.sessions <= 0) throw new Error("sessions = " + d.totals.sessions);
-	});
+		writeFileSync(join(sessDir, `${nowIso.slice(0, 19).replace(/:/g, "-")}_fixture-0001.jsonl`), records.join("\n") + "\n");
+		const env = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome };
 
-	await check("session-insights: sessions.summarize_session парсит реальную сессию", async () => {
-		const lib = fileURLToPath(new URL("../skills/session-insights/scripts/sessions.py", import.meta.url));
-		const r = spawnSync("python3", [
-			"-c",
-			`import sys, os; sys.path.insert(0, os.path.dirname(sys.argv[1])); import sessions as S
+		await check("session-insights: insights.py --json валиден (на фикстуре)", async () => {
+			const r = spawnSync("python3", [script, "--since", "90d", "--json"], { encoding: "utf8", timeout: 120000, env });
+			if (r.status !== 0) throw new Error("exit " + r.status + ": " + (r.stderr || "").slice(0, 200));
+			const d = JSON.parse(r.stdout);
+			for (const k of ["totals", "sessions_top", "tool_errors", "max_tool_output_chars", "repeated_prompt_lines", "prompt_keywords"]) {
+				if (!(k in d)) throw new Error("нет ключа " + k);
+			}
+			if (!Number.isInteger(d.totals.sessions) || d.totals.sessions <= 0) throw new Error("sessions = " + d.totals.sessions);
+		});
+
+		await check("session-insights: sessions.summarize_session парсит сессию (на фикстуре)", async () => {
+			const lib = fileURLToPath(new URL("../skills/session-insights/scripts/sessions.py", import.meta.url));
+			const r = spawnSync("python3", [
+				"-c",
+				`import sys, os; sys.path.insert(0, os.path.dirname(sys.argv[1])); import sessions as S
 from pathlib import Path
 found = 0
 for p in S.iter_session_files(include_subagents=False):
@@ -423,10 +445,13 @@ for p in S.iter_session_files(include_subagents=False):
         found += 1
 assert found > 0, "нет сессий с сообщениями"
 print(found)`,
-			lib,
-		], { encoding: "utf8", timeout: 120000 });
-		if (r.status !== 0) throw new Error((r.stderr || "").slice(0, 300));
-	});
+				lib,
+			], { encoding: "utf8", timeout: 120000, env });
+			if (r.status !== 0) throw new Error((r.stderr || "").slice(0, 300));
+		});
+	} finally {
+		rmSync(fakeHome, { recursive: true, force: true });
+	}
 }
 
 // === 7. gen-speed ===

@@ -257,8 +257,15 @@ export default function (pi: ExtensionAPI) {
 	function checkBackend(): boolean {
 		if (backendOk === null) {
 			if (platform === "linux") {
+				// Те же условные bind'ы, что в bwrapArgs: хосты без /lib64 (минимальные
+				// Ubuntu-образы, GH-раннеры) не должны получать «backend unavailable» и
+				// блокировать bash там, где реальный wrap отработал бы.
+				const binds = ["/usr", "/bin", "/lib", "/lib64"].filter(isDir);
 				backendOk =
-					spawnSync("bwrap", ["--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64", "--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc", "--unshare-pid", "--", "true"]).status === 0;
+					spawnSync("bwrap", [
+						...binds.flatMap((d) => ["--ro-bind", d, d]),
+						"--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc", "--unshare-pid", "--", "true",
+					]).status === 0;
 			} else {
 				backendOk = platform === "macos"; // sandbox-exec есть на всех современных macOS
 			}
