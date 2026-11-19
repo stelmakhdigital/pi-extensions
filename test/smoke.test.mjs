@@ -227,6 +227,8 @@ const noUiCtx = {
 			"--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc", "--unshare-pid", "--", "true",
 		]).status === 0;
 	const needsBwrap = hasBwrap ? null : "нужен bwrap (Linux)";
+	// Пробник нужен и sandbox-trust-секции (ниже, вне этого блока).
+	globalThis.__piHasBwrap = hasBwrap;
 
 	// Фикстура-проект в $HOME (НЕ в /tmp: bwrap маскирует /tmp свежим tmpfs).
 	// Путь берём из homedir: зашитый путь автора ломал смоук на других машинах.
@@ -244,7 +246,7 @@ const noUiCtx = {
 		const cmd = String(ev.input.command);
 		if (!/bwrap|sandbox-exec/.test(cmd)) throw new Error("не обёрнуто: " + cmd.slice(0, 120));
 		if (!ev.__sandboxWrapped) throw new Error("нет маркера __sandboxWrapped");
-	});
+	}, needsBwrap);
 
 	async function runWrapped(command, cwd) {
 		const ev = { toolName: "bash", input: { command } };
@@ -350,12 +352,17 @@ const noUiCtx = {
 		if (calls !== 0) throw new Error("спросил повторно");
 		if (res.trusted !== "no") throw new Error("неверный trust: " + JSON.stringify(res));
 		const ev = { toolName: "bash", input: { command: "echo x" } };
-		await pi3.handlers.tool_call(ev, { ...noUiCtx, cwd: plain });
-		// untrusted должен дать сетевой blockade: bwrap --unshare-net (Linux) или
-		// sandbox-exec-профиль с deny network (macOS)
+		const resCall = await pi3.handlers.tool_call(ev, { ...noUiCtx, cwd: plain });
 		const wrapped = String(ev.input.command);
-		const backend = process.platform === "linux" ? "unshare-net" : "sandbox-exec";
-		if (!wrapped.includes(backend)) throw new Error("не применён untrusted: " + wrapped.slice(0, 150));
+		if (globalThis.__piHasBwrap) {
+			// untrusted должен дать сетевой blockade: bwrap --unshare-net (Linux) или
+			// sandbox-exec-профиль с deny network (macOS)
+			const backend = process.platform === "linux" ? "unshare-net" : "sandbox-exec";
+			if (!wrapped.includes(backend)) throw new Error("не применён untrusted: " + wrapped.slice(0, 150));
+		} else if (!resCall?.block || !/бэкенд|backend/i.test(String(resCall.reason))) {
+			// без рабочего бэкенда «уровень применяется» = fail-closed блок, не тихий пропуск
+			throw new Error("ни wrap, ни fail-closed блока: " + wrapped.slice(0, 150));
+		}
 	});
 
 	await check("sandbox-trust: маркер .sandbox — промпт не показывается", async () => {
