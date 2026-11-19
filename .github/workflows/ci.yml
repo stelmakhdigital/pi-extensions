@@ -38,7 +38,9 @@ jobs:
           code=$?
           set -e
           tail -n 40 /tmp/test-output.log
+            # GitHub truncates annotation messages at a few thousand chars —
+            # send the last 25 lines (line-based, the interesting part).
           if [ "$code" -ne 0 ]; then
-            tail -c 8000 /tmp/test-output.log | sed 's/%/%25/g' | awk '{out = out $0 "%0A"} END {sub(/%0A$/, "", out); print "::error::" out}'
+            tail -n 25 /tmp/test-output.log | sed 's/%/%25/g' | awk '{out = out $0 "%0A"} END {sub(/%0A$/, "", out); print "::error::" out}'
             exit "$code"
           fi
