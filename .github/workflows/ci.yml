@@ -8,11 +8,12 @@ on:
   push:
     branches: [master]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
     name: smoke tests (node 22)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -27,4 +28,17 @@ jobs:
       - name: Install
         run: npm ci --no-audit --no-fund
       - name: Test
-        run: npm test
+        # npm test is a `for f in ...; do node $f || exit 1; done` loop, so a
+        # red run otherwise shows only "exit code 1". Capture the full output
+        # and mirror the tail into annotations — annotations are public on
+        # public repos, so failures stay debuggable without dashboard access.
+        run: |
+          set +e
+          npm test > /tmp/test-output.log 2>&1
+          code=$?
+          set -e
+          tail -n 40 /tmp/test-output.log
+          if [ "$code" -ne 0 ]; then
+            tail -c 8000 /tmp/test-output.log | sed 's/%/%25/g' | awk '{out = out $0 "%0A"} END {sub(/%0A$/, "", out); print "::error::" out}'
+            exit "$code"
+          fi
