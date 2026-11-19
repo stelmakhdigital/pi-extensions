@@ -13,7 +13,7 @@ on:
 jobs:
   test:
     name: smoke tests (node 22)
-    runs-on: ubuntu-24
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
