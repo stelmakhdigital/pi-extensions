@@ -12,8 +12,11 @@ description: "Анализ собственных pi-сессий (~/.pi/agent/s
 
 ### 1. Собрать digest
 
+Скилл живёт в checkout пакета (`~/.pi/agent/git/github.com/stelmakhdigital/pi-extensions/skills/session-insights`),
+а не в `~/.pi/agent/skills`. Пути — относительно каталога этого SKILL.md:
+
 ```bash
-python3 ~/.pi/agent/skills/session-insights/scripts/insights.py [фильтры]
+python3 <каталог_скилла>/scripts/insights.py [фильтры]
 ```
 
 Фильтры: `--since 30d`, `--until`, `--cwd <подстрока>` (повторяемо), `--min-cost`,
@@ -30,7 +33,7 @@ tool output, повторяющиеся строки промптов, повт�
 - Конкретная сессия (посмотреть, где именно были ошибки/ретраи):
   ```bash
   python3 - <<'EOF'
-  import sys; sys.path.insert(0, __import__('os').path.expanduser('~/.pi/agent/skills/session-insights/scripts'))
+  import sys; sys.path.insert(0, "<каталог_скилла>/scripts")
   import sessions as S, glob, os
   for p in S.iter_session_files():
       s = S.summarize_session(p)

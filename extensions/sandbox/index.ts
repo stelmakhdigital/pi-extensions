@@ -36,7 +36,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, statSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, statSync, mkdirSync, renameSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -71,23 +71,28 @@ function savedLevel(root: string): Level | null {
 	const e = loadTrustStore()[root];
 	return e && (e.level === "off" || e.level === "dev" || e.level === "untrusted" || e.level === "vm") ? e.level : null;
 }
+const LEVELS: Level[] = ["off", "dev", "untrusted", "vm"];
 function rememberLevel(root: string, level: Level) {
 	const store = loadTrustStore();
 	if (level === "off") delete store[root];
 	else store[root] = { level, at: Date.now() };
-	try {
-		mkdirSync(dirname(trustStoreFile()), { recursive: true });
-		writeFileSync(trustStoreFile(), JSON.stringify(store, null, 2));
-	} catch {
-		// не критично: решение действует в этой сессии в любом случае
-	}
+	saveTrustStore(store);
 }
 function forgetLevel(root: string) {
 	const store = loadTrustStore();
 	delete store[root];
+	saveTrustStore(store);
+}
+// tmp+rename (как в guard-state): полусторый JSON не должен переживать падение процесса
+function saveTrustStore(store: TrustStore) {
 	try {
-		writeFileSync(trustStoreFile(), JSON.stringify(store, null, 2));
-	} catch {}
+		mkdirSync(dirname(trustStoreFile()), { recursive: true });
+		const tmp = trustStoreFile() + "." + process.pid + ".tmp";
+		writeFileSync(tmp, JSON.stringify(store, null, 2), { mode: 0o600 });
+		renameSync(tmp, trustStoreFile());
+	} catch {
+		// не критично: решение действует в этой сессии в любом случае
+	}
 }
 
 function isDir(p: string): boolean {
@@ -202,25 +207,31 @@ function bwrapArgs(workspace: string, opts: { net: boolean }): string[] {
 	return args;
 }
 
-/** macOS: SBPL-профиль. (Проверен ревьюем; на Linux-машине сборки не запускался.) */
+/**
+ * macOS: SBPL-профиль. L1 на macOS слабее bwrap: deny-default профиль убивает
+ * сам bash (нужны сотни неперечислимых mach/ipc-операций), поэтому схема
+ * «allow default + deny»:
+ * - home целиком запрещён (скрыты чужие проекты), workspace разрешён — он
+ *   конкретнее по SBPL-специфичности и выигрывает у deny домашнего subpath;
+ * - секреты (.pi/.ssh/.aws/.gnupg/.config) запрещены явно — переживают даже
+ *   будущие правки домашнего правила;
+ * - untrusted: deny network-*.
+ * bwrap-уровня изоляция — на Linux; macOS защищает от случайного чтения
+ * секретов, не от скомпрометированного процесса.
+ */
 function sbplProfile(workspace: string, opts: { net: boolean }): string {
 	const home = homedir();
-	const deny = [".pi", ".ssh", ".aws", ".gnupg", ".config"]
-		.map((p) => `(literal "${join(home, p)}")`)
+	const secrets = [".pi", ".ssh", ".aws", ".gnupg", ".config"]
+		.map((p) => `(subpath "${join(home, p)}")`)
 		.join(" ");
 	return [
 		"(version 1)",
-		"(deny default)",
-		'(allow process-fork process-exec signal (target self))',
-		"(allow sysctl-read)",
-		'(allow file-read* (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/System") (subpath "/Library") (subpath "/private/var/db"))',
-		`(allow file-read* (literal "${getFakeHome()}"))`,
+		"(allow default)",
+		`(deny file-read* file-write* ${secrets})`,
+		`(deny file-read* file-write* (subpath "${home}"))`,
 		`(allow file-read* file-write* (subpath "${workspace}"))`,
-		'(allow file-read* file-write* (subpath "/private/tmp") (subpath "/var/folders") (subpath "/dev"))',
-		`(deny file-read* ${deny})`,
-		opts.net ? "(allow network-outbound network-inbound)" : "(deny network-outbound network-inbound)",
-		"(allow system-fscache)",
-	].join("\n");
+		opts.net ? "" : "(deny network-outbound network-inbound)",
+	].filter(Boolean).join("\n");
 }
 
 /**
@@ -234,21 +245,26 @@ function wrapCommand(command: string, workspace: string, level: Level): string {
 	const script = join(tmpdir(), `pi-sbx-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`);
 	// set -e НЕ ставим: семантика должна совпадать со штатным bash -c
 	// (команды после падшего звена должны выполняться, как и без песочницы).
-	writeFileSync(script, "#!/bin/sh\n" + command + "\n");
+	// Тело команды и профиль могут содержать секреты — режим 600, чтобы их не
+	// читали остальные пользователи машины (общие серверы).
+	writeFileSync(script, "#!/bin/sh\n" + command + "\n", { mode: 0o600 });
 	const comment = `# ⧉ sandbox:${level} (workspace: ${workspace}; скрипт: ${script})\n`;
 
 	if (platform === "linux") {
 		const argv = ["bwrap", ...bwrapArgs(workspace, { net }), "--ro-bind", script, SCRIPT_IN_SANDBOX, "--", "bash", SCRIPT_IN_SANDBOX];
-		return comment + shellJoin(argv);
+		// rm после исполнения: тела команд не должны копиться в /tmp; rc сохраняет
+		// код завершения команды (штатный bash -c так же отдаёт rc последней команды)
+		return comment + shellJoin(argv) + `; rc=$?; rm -f ${q(script)}; exit $rc`;
 	}
 	const profile = script + ".sbpl";
-	writeFileSync(profile, sbplProfile(workspace, { net }));
-	// env -i + явные переменные: sandbox-exec наследует окружение, scrub руками
-	const envAssign = Object.entries(sandboxEnv())
-		.map(([k, v]) => `${k}=${v}`)
-		.join(" ");
-	const argv = ["env", "-i", envAssign, "--", "sandbox-exec", "-f", profile, "bash", "-c", `source "${script}"`];
-	return comment + shellJoin(argv);
+	writeFileSync(profile, sbplProfile(workspace, { net }), { mode: 0o600 });
+	// env -i + явные переменные: sandbox-exec наследует окружение, scrub руками.
+	// Каждое присваивание — ОТДЕЛЬНЫЙ аргумент (в одну строку env сделал бы одну
+	// переменную со значением «... HOME=...»), `--` не ставим: BSD env (macOS) его
+	// не знает и падает «env: --: No such file or directory» (exit 127).
+	const envAssigns = Object.entries(sandboxEnv()).map(([k, v]) => `${k}=${v}`);
+	const argv = ["env", "-i", ...envAssigns, "sandbox-exec", "-f", profile, "bash", "-c", `source "${script}"`];
+	return comment + shellJoin(argv) + `; rc=$?; rm -f ${q(script)} ${q(profile)}; exit $rc`;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -287,7 +303,9 @@ export default function (pi: ExtensionAPI) {
 	function activeLevel(ctx: ExtensionContext): Level {
 		if (sessionLevel) return sessionLevel;
 		const flag = pi.getFlag("sandbox-level");
-		if (typeof flag === "string" && flag) return flag as Level;
+		// Невалидное значение флага = off, а не «как попало завёрнутая команда»
+		// с вводящим в заблуждение бейджем.
+		if (typeof flag === "string" && flag) return (LEVELS as string[]).includes(flag) ? (flag as Level) : "off";
 		const root = projectRoot(ctx.cwd);
 		return markerLevel(root) ?? savedLevel(root) ?? "off";
 	}
@@ -413,7 +431,7 @@ export default function (pi: ExtensionAPI) {
 			const a = args.trim().split(/\s+/);
 			if (a[0] === "on" || a[0] === "off") {
 				const want: Level = a[0] === "off" ? "off" : ((a[1] as Level) ?? "dev");
-				if (!["off", "dev", "untrusted", "vm"].includes(want)) {
+				if (!LEVELS.includes(want)) {
 					ctx.ui.notify("Неизвестный уровень: " + want, "warning");
 					return;
 				}

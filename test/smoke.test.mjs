@@ -232,9 +232,14 @@ const noUiCtx = {
 			...sysDirs.flatMap((d) => ["--ro-bind", d, d]),
 			"--tmpfs", "/tmp", "--dev", "/dev", "--proc", "/proc", "--unshare-pid", "--", "true",
 		]).status === 0;
-	const needsBwrap = hasBwrap ? null : "нужен bwrap (Linux)";
+	// Бэкенд — по платформе: на macOS расширение считает рабочим sandbox-exec
+	// (есть во всех современных macOS), и wrap там обязан исполняться, а не
+	// ожидаться fail-closed блоком. Раньше darwin попадал в «нет бэкенда», и
+	// macOS-путь wrap никогда не проверялся (там и прятался баг env/--).
+	const backendOk = process.platform === "linux" ? hasBwrap : process.platform === "darwin";
+	const needsBackend = backendOk ? null : "нужен бэкенд (bwrap на Linux, sandbox-exec на macOS)";
 	// Пробник нужен и sandbox-trust-секции (ниже, вне этого блока).
-	globalThis.__piHasBwrap = hasBwrap;
+	globalThis.__piBackendOk = backendOk;
 
 	// Фикстура-проект в $HOME (НЕ в /tmp: bwrap маскирует /tmp свежим tmpfs).
 	// Путь берём из homedir: зашитый путь автора ломал смоук на других машинах.
@@ -252,7 +257,7 @@ const noUiCtx = {
 		const cmd = String(ev.input.command);
 		if (!/bwrap|sandbox-exec/.test(cmd)) throw new Error("не обёрнуто: " + cmd.slice(0, 120));
 		if (!ev.__sandboxWrapped) throw new Error("нет маркера __sandboxWrapped");
-	}, needsBwrap);
+	}, needsBackend);
 
 	async function runWrapped(command, cwd) {
 		const ev = { toolName: "bash", input: { command } };
@@ -274,21 +279,23 @@ const noUiCtx = {
 		if (!out.includes("SSH-HIDDEN")) throw new Error("ssh виден: " + out);
 		if (!out.includes("CODE-HIDDEN")) throw new Error("другие проекты видны: " + out);
 		if (!out.includes("WS-RW")) throw new Error("workspace не rw: " + out);
-	}, needsBwrap);
+	}, needsBackend);
 
 	await check("sandbox: секреты env не попадают в песочницу", async () => {
 		process.env.FAKE_API_KEY_SANDBOX_TEST = "secret123";
 		const out = await runWrapped("env | grep -c FAKE_API_KEY_SANDBOX_TEST || true", fixture);
 		if (!out.trim().startsWith("0")) throw new Error("секрет виден: " + out);
 		delete process.env.FAKE_API_KEY_SANDBOX_TEST;
-	}, needsBwrap);
+	}, needsBackend);
 
 	await check("sandbox: untrusted блокирует сеть (e2e)", async () => {
 		writeFileSync(fixture + "/.sandbox", "untrusted\n");
-		const out = await runWrapped("timeout 6 curl -sI https://1.1.1.1 >/dev/null 2>&1 && echo NET-OK || echo NET-BLOCKED", fixture);
+		// --max-time вместо timeout(1): на macOS coreutils timeout обычно отсутствует,
+		// и отсутствие утилиты дало бы NET-BLOCKED без реальной сетевой проверки
+		const out = await runWrapped("curl -sI --max-time 6 https://1.1.1.1 >/dev/null 2>&1 && echo NET-OK || echo NET-BLOCKED", fixture);
 		if (!out.includes("NET-BLOCKED")) throw new Error("сеть жива: " + out);
 		writeFileSync(fixture + "/.sandbox", "dev\n");
-	}, needsBwrap);
+	}, needsBackend);
 
 	await check("sandbox: vm-уровень блокирует bash с инструкцией", async () => {
 		const piVm = makePi();
@@ -360,7 +367,7 @@ const noUiCtx = {
 		const ev = { toolName: "bash", input: { command: "echo x" } };
 		const resCall = await pi3.handlers.tool_call(ev, { ...noUiCtx, cwd: plain });
 		const wrapped = String(ev.input.command);
-		if (globalThis.__piHasBwrap) {
+		if (globalThis.__piBackendOk) {
 			// untrusted должен дать сетевой blockade: bwrap --unshare-net (Linux) или
 			// sandbox-exec-профиль с deny network (macOS)
 			const backend = process.platform === "linux" ? "unshare-net" : "sandbox-exec";
