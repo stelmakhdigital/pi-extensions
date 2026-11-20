@@ -20,7 +20,12 @@ SESSION_INSIGHTS_LEDGER). Запись заводится ДО правки, ver
 - evidence обязателен: без ссылки на сессии/числа запись не заводится;
 - verdict `confounded` предпочитать, когда за то же окно принято несколько
   записей или наблюдений меньше 5 на сторону;
-- «нет записи» — легальный исход, выдуманная атрибуция отравляет журнал.
+- «нет записи» — легальный исход, выдуманная атрибуция отравляет журнал;
+- check ищет pattern по всему jsonl сессии, включая текст, который обсуждает саму
+  ошибку (мои же правки session-insights повышают частоту «oldText»). Берите
+  pattern из буквального текста ошибки (`Could not find (the exact text|edit)`),
+  а не из свободной формулировки, и смотрите на числа before/after, а не только
+  на suggested verdict.
 
 Команды:
   ledger.py list
@@ -28,7 +33,7 @@ SESSION_INSIGHTS_LEDGER). Запись заводится ДО правки, ver
                 [--confidence ...] [--check ...] [--scope ...] [--window 14d]
   ledger.py adopt --id ...            # фиксирует дату принятия
   ledger.py verdict --id ... --verdict helped [--note ...]
-  ledger.py check [--id ...] [--json] # частота паттерна до/после даты принятия
+  ledger.py check [--id ...] [--window 60] [--json]  # частота паттерна до/после принятия
 """
 
 from __future__ import annotations
@@ -117,9 +122,11 @@ def _pattern_of(e: dict) -> tuple[str | None, str, int]:
             int(win.group(1)) if win else 14)
 
 
-def measure_change(e: dict, summaries) -> dict:
+def measure_change(e: dict, summaries, window_override: int | None = None) -> dict:
     """Частота паттерна в сессиях до и после даты принятия (грубый A/B)."""
     pattern, scope, win_days = _pattern_of(e)
+    if window_override:
+        win_days = window_override
     day = _day(e)
     out = {"id": e["id"], "pattern": pattern, "scope": scope, "window_days": win_days,
            "since": day.strftime("%Y-%m-%d") if day else None}
@@ -160,9 +167,13 @@ def measure_change(e: dict, summaries) -> dict:
     rb = before_hits / before
     ra = after_hits / after
     out.update({"before_per_session": round(rb, 3), "after_per_session": round(ra, 3)})
-    if rb == 0:
-        out["verdict_suggested"] = "no observed effect" if ra == 0 else "hurt"
-        out["why"] = "до принятия паттерн не встречался"
+    if rb == 0 and ra == 0:
+        out["verdict_suggested"] = "confounded"
+        out["why"] = (f"паттерн не встречался ни до ни после в окне {win_days}д — "
+                      f"либо правка не работала, либо окно узкое (пересчитай с --window 60)")
+    elif rb == 0:
+        out["verdict_suggested"] = "hurt"
+        out["why"] = "до принятия паттерн не встречался, после появился"
     elif ra <= rb * 0.7:
         out["verdict_suggested"] = "helped"
     elif ra >= rb * 1.3:
@@ -207,6 +218,8 @@ def main() -> int:
     sp = sub.add_parser("check", help="частота паттерна до/после даты принятия")
     sp.add_argument("--id")
     sp.add_argument("--since", default="120d", help="окно сессий для сравнения (default 120d)")
+    sp.add_argument("--window", type=int,
+                    help="перекрыть окно записи (когда паттерн реже, чем окно)")
     sp.add_argument("--apply", action="store_true",
                     help="записать suggested verdict в журнал")
     sp.add_argument("--json", action="store_true")
@@ -292,7 +305,7 @@ def main() -> int:
     filters = S.Filters()
     filters.since = S.parse_when(args.since)
     summaries = S.load_summaries(filters)
-    results = [measure_change(e, summaries) for e in wanted]
+    results = [measure_change(e, summaries, args.window) for e in wanted]
 
     if args.apply:
         for e, r in zip(wanted, results):

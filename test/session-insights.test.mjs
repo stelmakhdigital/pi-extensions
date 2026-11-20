@@ -192,7 +192,9 @@ writeFileSync(join(agentDir, "skills", "demo-skill", "SKILL.md"),
 	"---\nname: demo-skill\ndescription: >-\n  Короткое описание в первую строку не влезает,\n  поэтому оно написано блоком с переносами.\n---\n\n# Тело скилла\n\naaa\n");
 
 await check("surface: description блоком и AGENTS.md учтены, чужие копии пропущены", () => {
-	const envFix = { ...env, PI_CODING_AGENT_DIR: agentDir };
+	const envFix = { ...env, PI_CODING_AGENT_DIR: agentDir,
+		// ~/.agents на хосте содержит свои скиллы — тест не должен их видеть
+		SESSION_INSIGHTS_SKILL_ROOTS: "" };
 	const s = JSON.parse(execFileSync("python3", [join(SCRIPTS, "surface.py"), "--json"], { encoding: "utf8", env: envFix }));
 	assert(s.totals.skills_count === 1, `skills=${s.totals.skills_count}`);
 	const one = s.skills[0];
@@ -205,7 +207,8 @@ await check("surface: description блоком и AGENTS.md учтены, чуж
 });
 
 await check("surface: пустой агент-каталог не роняет и даёт нули", () => {
-	const envEmpty = { ...env, PI_CODING_AGENT_DIR: join(tmp, "agent-empty") };
+	const envEmpty = { ...env, PI_CODING_AGENT_DIR: join(tmp, "agent-empty"),
+		SESSION_INSIGHTS_SKILL_ROOTS: "" };
 	const s = JSON.parse(execFileSync("python3", [join(SCRIPTS, "surface.py"), "--json"], { encoding: "utf8", env: envEmpty }));
 	assert(s.totals.always_on_chars === 0 && s.totals.skills_count === 0, JSON.stringify(s.totals));
 });
@@ -242,6 +245,28 @@ await check("ledger: add/adopt/check/writeback работают на fixtures", 
 	run("ledger.py", ["check", "--id", "edit-fresh", "--apply"]);
 	const final = JSON.parse(run("ledger.py", ["list", "--json"]))[0];
 	assert(final.verdict === "confounded", final.verdict);
+});
+
+await check("ledger: ноль с обеих сторон => confounded, а не 'no observed effect'", () => {
+	const emptyLedger = join(tmp, "ledger-empty.md");
+	const out = execFileSync("python3", ["-c", `
+import sys, os, pathlib
+from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
+sys.path.insert(0, ${JSON.stringify(SCRIPTS)})
+import ledger as L
+day = datetime.now(timezone.utc)
+d = pathlib.Path(os.environ["SI_TMP"]); d.mkdir(exist_ok=True)
+def mk(off):
+    p = d / f"s{off}.jsonl"; p.write_text("ничего релевантного")
+    return SimpleNamespace(path=p, cwd="/proj/x", started_at=day + timedelta(days=off))
+ss = [mk(-i) for i in range(1, 7)] + [mk(i) for i in range(1, 7)]
+e = {"id": "x", "check": 'pattern="no-such-pattern" window=20d',
+     "verdict": "adopted " + day.strftime("%Y-%m-%d")}
+r = L.measure_change(e, ss)
+print(r["verdict_suggested"], r["before_sessions"], r["after_sessions"], "ни до ни после" in r.get("why", ""))
+`], { encoding: "utf8", env: { ...env, SESSION_INSIGHTS_LEDGER: emptyLedger, SI_TMP: join(tmp, "zero") } });
+	assert(out.trim() === "confounded 6 6 True", out.trim());
 });
 
 rmSync(tmp, { recursive: true, force: true });

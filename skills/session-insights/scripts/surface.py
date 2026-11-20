@@ -34,7 +34,11 @@ SKILL_GLOBS = [
     "skills/**/SKILL.md",              # ~/.pi/agent/skills
     "git/**/skills/**/SKILL.md",       # скиллы из git-пакетов
 ]
-EXTRA_SKILL_ROOTS = [Path("~/.agents").expanduser()]
+# помимо agent-каталога скиллы живут в ~/.agents; список перекрывается
+# (тесты ставят пустое значение, чтобы не зависеть от хоста)
+_roots = os.environ.get("SESSION_INSIGHTS_SKILL_ROOTS")
+EXTRA_SKILL_ROOTS = ([Path(x).expanduser() for x in _roots.split(os.pathsep) if x.strip()]
+                     if _roots is not None else [Path("~/.agents").expanduser()])
 
 
 def _frontmatter(text: str) -> dict:

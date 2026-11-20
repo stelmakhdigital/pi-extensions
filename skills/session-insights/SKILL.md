@@ -107,12 +107,19 @@ python3 ledger.py add --id edit-fresh-guard --cue 'edit падает file change
   --confidence medium --check 'file changed since read' --scope sima --window 14
 python3 ledger.py adopt --id edit-fresh-guard     # когда внесено
 python3 ledger.py check --id edit-fresh-guard     # позже: частота до/после
+python3 ledger.py check --id edit-fresh-guard --window 60   # шире, если паттерн редкий
 python3 ledger.py check --apply                   # записать предложенный verdict
 ```
 
 `evidence` обязателен и обязан содержать числа/id сессий — без него `add` отказывает.
 Verdict: `helped` / `hurt` / `no observed effect` / `confounded` (несколько правок
-в одном окне или < 5 сессий на сторону) / `reverted`.
+в одном окне или < 5 сессий на сторону, или паттерн не встречался ни до ни после)
+/ `reverted`.
+
+`check` ищет pattern по всему jsonl, включая места, где ошибка только упомянута
+в разговоре, поэтому частота может вырасти от самого обсуждения правки. Pattern
+бери из буквального текста ошибки и сравни before/after руками, прежде чем
+оставить verdict.
 
 ## Куда писать
 
