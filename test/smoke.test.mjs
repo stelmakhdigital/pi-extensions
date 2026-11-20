@@ -84,6 +84,12 @@ const noUiCtx = {
 	await check("prompt-snippets: session_start не роняет", async () => {
 		await pi.handlers.session_start({ reason: "startup" }, noUiCtx);
 	});
+	await check("prompt-snippets: slash-команды и `!`-режим не трансформируются (и не тратят переключатели)", () => {
+		if (promptSnippets.transformable("/skill:gitlab-tasks") !== false) throw new Error("/skill должен пропускаться");
+		if (promptSnippets.transformable("/compact") !== false) throw new Error("/compact должен пропускаться");
+		if (promptSnippets.transformable("  !ls") !== false) throw new Error("!-режим должен пропускаться");
+		if (promptSnippets.transformable("сделай задачу") !== true) throw new Error("обычный текст должен трансформироваться");
+	});
 	await check("prompt-snippets: сниппеты на русском", () => {
 		const dir = fileURLToPath(new URL("../extensions/prompt-snippets/snippets/", import.meta.url));
 		const raw = readFileSync(dir + "verify-not-assume.md", "utf8");

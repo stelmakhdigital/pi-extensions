@@ -36,6 +36,12 @@ const extensionDir = dirname(fileURLToPath(import.meta.url));
 const snippetsDir = join(extensionDir, "snippets");
 const WIDGET_ID = "prompt-snippets";
 
+/** Обычное сообщение (не slash-команда и не `!`-режим) — сниппеты применимы. */
+export function transformable(text: string): boolean {
+	const t = text.trim();
+	return !t.startsWith("/") && !t.startsWith("!");
+}
+
 function parseSnippet(filename: string, raw: string): Snippet | null {
 	const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
 	if (!match) return null;
@@ -294,6 +300,12 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("input", async (event, ctx) => {
 		if (enabled.size === 0) return; // продолжаем без изменений
+		// Slash-команды и шаблоны раскрываются ПОСЛЕ input (docs/extensions.md):
+		// prepend-правило, вклеенное перед `/skill:...` или `/compact`, ломает
+		// раскрытие, а для `!`-режима правила бессмысленны. Такое сообщение
+		// прокидываем нетронутым и переключатели НЕ сбрасываем — сниппеты
+		// дождутся следующего обычного сообщения.
+		if (!transformable(event.text)) return;
 
 		snippets = loadSnippets();
 		const active = snippets.filter((s) => enabled.has(s.id));
