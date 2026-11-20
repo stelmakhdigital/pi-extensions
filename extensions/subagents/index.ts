@@ -466,7 +466,7 @@ async function watchTick(): Promise<void> {
 			continue;
 		}
 
-		const alive = r.surface.kind === "pane" ? statuses.get(r.surface.target) ?? false : await ensureBackend().isAlive(r.surface);
+		const alive = statuses.get(r.surface.target) ?? false;
 		if (!alive) {
 			// Surface gone without a sidecar: crash path.
 			void finishSubagent(r, { type: "error", exitCode: 1, errorMessage: "Sub-agent surface disappeared before it reported completion." }, "crash").catch(() => {});
@@ -1293,11 +1293,14 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify("subagents: usage: /plan <task...>", "info");
 				return;
 			}
-			const phase = (role: "planner" | "worker" | "reviewer") => ({
-				agent: resolveAgent(ctx.cwd, role) ? role : undefined,
-				hasDef: !!resolveAgent(ctx.cwd, role),
-			});
-			const p1 = phase("planner");
+			const knownRole = (role: "planner" | "worker" | "reviewer") => {
+				const has = !!resolveAgent(ctx.cwd, role);
+				return { agent: has ? role : undefined, hasDef: has };
+			};
+			const p1 = knownRole("planner");
+			const p2 = knownRole("worker");
+			const p3 = knownRole("reviewer");
+			const p4 = p2;
 			const outcome = await spawnAgentInternal(
 				{
 					task: `Plan (do NOT implement): ${task}`,
@@ -1311,9 +1314,6 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify(`subagents: /plan failed at phase 1 (planner): ${outcome.error}`, "error");
 				return;
 			}
-			const p2 = phase("worker");
-			const p3 = phase("reviewer");
-			const p4 = phase("worker");
 			const instruction = [
 				"Subagents /plan — phased workflow started. Results of each phase arrive automatically as steer messages; do not poll.",
 				`Task: ${task}`,

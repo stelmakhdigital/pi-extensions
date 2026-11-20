@@ -16,6 +16,7 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { contentHasText } from "./session.ts";
 
 const CHILD_ID = process.env.PI_SUBAGENTS_CHILD_ID ?? "";
 const ACTIVITY_FILE = process.env.PI_SUBAGENTS_ACTIVITY_FILE ?? "";
@@ -56,18 +57,7 @@ export function lastAssistantHasText(messages: Array<Record<string, any>>): bool
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg?.role !== "assistant") continue;
-		const content = msg.content;
-		if (Array.isArray(content)) {
-			// pi writes a "  (no response)" text block when the assistant produced
-			// no text at all — treat that placeholder as "no answer".
-			return content.some((b: any) => {
-				if (b?.type !== "text" || typeof b.text !== "string") return false;
-				const t = b.text.trim();
-				return t !== "" && t !== "(no response)";
-			});
-		}
-		// No content (or non-array): treat as "no text".
-		return false;
+		return contentHasText(msg.content);
 	}
 	return false;
 }

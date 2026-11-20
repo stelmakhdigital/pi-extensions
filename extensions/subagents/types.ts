@@ -2,13 +2,11 @@
  * Shared types for the subagents extension (parent, child, tmux backend).
  */
 
-/** A controllable terminal surface in the multiplexer. */
+/** A controllable terminal surface in the multiplexer (tmux pane). */
 export interface SurfaceRef {
-	kind: "pane" | "window";
-	/** tmux target: pane id (%N) or window id (@N). */
+	kind: "pane";
+	/** tmux pane id (%N). */
 	target: string;
-	/** Owning tmux session name (when known). */
-	session?: string;
 }
 
 export interface MuxProbe {
@@ -29,7 +27,6 @@ export interface MuxBackend {
 	sendEscape(surface: SurfaceRef): Promise<void>;
 	isAlive(surface: SurfaceRef): Promise<boolean>;
 	captureTail(surface: SurfaceRef, lines?: number): Promise<string>;
-	rename(surface: SurfaceRef, title: string): Promise<void>;
 	close(surface: SurfaceRef): Promise<void>;
 	/** One batched probe for all surfaces (single multiplexer call). */
 	batchStatus(surfaces: SurfaceRef[]): Promise<Map<string, boolean>>;
@@ -53,7 +50,7 @@ export interface ActivitySnapshot {
 /** Exit sidecar written by the child next to its session file. */
 export type ExitSidecar =
 	| { type: "done"; exitCode: number }
-	| { type: "ping"; exitCode: number; name?: string; message: string }
+	| { type: "ping"; exitCode: number; message: string }
 	| { type: "error"; exitCode: number; errorMessage?: string };
 
 export interface RunningSubagent {

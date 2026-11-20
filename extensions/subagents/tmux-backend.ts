@@ -107,32 +107,19 @@ export function createTmuxBackend(options: TmuxBackendOptions = {}): MuxBackend 
 			}
 		},
 
-		async rename(surface, title) {
-			try {
-				const windowId = tmux("display-message", "-p", "-t", surface.target, "#{window_id}");
-				tmux("rename-window", "-t", windowId, title);
-			} catch {
-				// Cosmetic.
-			}
-		},
-
 		async close(surface) {
 			try {
-				if (surface.kind === "pane") {
-					// Capture the window first: after kill-pane the pane target is gone.
-					let windowId = "";
+				// Capture the window first: after kill-pane the pane target is gone.
+				let windowId = "";
+				try {
+					windowId = tmux("display-message", "-p", "-t", surface.target, "#{window_id}");
+				} catch {}
+				tmux("kill-pane", "-t", surface.target);
+				if (windowId) {
+					// Rebalance remaining panes (no-op if the window died).
 					try {
-						windowId = tmux("display-message", "-p", "-t", surface.target, "#{window_id}");
+						tmux("select-layout", "-t", windowId, "tiled");
 					} catch {}
-					tmux("kill-pane", "-t", surface.target);
-					if (windowId) {
-						// Rebalance remaining panes (no-op if the window died).
-						try {
-							tmux("select-layout", "-t", windowId, "tiled");
-						} catch {}
-					}
-				} else {
-					tmux("kill-window", "-t", surface.target);
 				}
 			} catch {
 				// Already gone.
@@ -148,14 +135,7 @@ export function createTmuxBackend(options: TmuxBackendOptions = {}): MuxBackend 
 			} catch {
 				alive = new Set();
 			}
-			for (const surface of surfaces) {
-				if (surface.kind === "pane") {
-					result.set(surface.target, alive.has(surface.target));
-				} else {
-					// Windows: fall back to a per-surface check (rare in v1).
-					result.set(surface.target, await this.isAlive(surface));
-				}
-			}
+			for (const surface of surfaces) result.set(surface.target, alive.has(surface.target));
 			return result;
 		},
 	};

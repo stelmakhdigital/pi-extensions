@@ -5,7 +5,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, join } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 
 export interface TmuxConfig {
@@ -135,9 +135,4 @@ export function persistHandoffPreference(handoff: "ask" | "never", filePath?: st
 	} catch {
 		return false;
 	}
-}
-
-/** Absolute-path check helper (kept here to avoid importing path in tests). */
-export function absolutize(maybeRelative: string, base: string): string {
-	return isAbsolute(maybeRelative) ? maybeRelative : join(base, maybeRelative);
 }

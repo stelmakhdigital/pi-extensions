@@ -118,6 +118,23 @@ export function createChildSession(opts: SeedOptions): SeededChildSession {
 	return session;
 }
 
+/**
+ * Answer-text predicate shared by parent and child: pi writes a
+ * "  (no response)" text block when the assistant produced no text — it is
+ * NOT an answer. One source of truth (child.ts imports this).
+ */
+export function isAnswerTextBlock(block: unknown): boolean {
+	const b = block as { type?: unknown; text?: unknown } | null;
+	if (b?.type !== "text" || typeof b.text !== "string") return false;
+	const t = b.text.trim();
+	return t !== "" && t !== "(no response)";
+}
+
+/** True when an assistant `content` array carries a non-empty text block. */
+export function contentHasText(content: unknown): boolean {
+	return Array.isArray(content) && content.some(isAnswerTextBlock);
+}
+
 /** Extract the last assistant text message from a pi session jsonl file. */
 export function lastAssistantText(lines: string[]): string | undefined {
 	let found: string | undefined;
@@ -132,12 +149,7 @@ export function lastAssistantText(lines: string[]): string | undefined {
 		const message = entry.message;
 		if (message?.role !== "assistant") continue;
 		const texts = (message.content ?? [])
-			.filter((block: any) => {
-				if (block?.type !== "text" || typeof block.text !== "string") return false;
-				// pi writes "  (no response)" when the assistant produced no text.
-				const t = block.text.trim();
-				return t !== "" && t !== "(no response)";
-			})
+			.filter(isAnswerTextBlock)
 			.map((block: any) => block.text)
 			.join("\n")
 			.trim();
