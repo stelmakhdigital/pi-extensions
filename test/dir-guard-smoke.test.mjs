@@ -3,7 +3,7 @@
  * Запуск: node test/dir-guard-smoke.test.mjs
  */
 import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -58,7 +58,9 @@ function makeCtx(cwd, extra = {}) {
 }
 
 // --- фикстуры ---
-const base = tmpdir() + "/pi-dir-guard-test-" + process.pid;
+// НЕ tmpdir: /tmp в дефолтном allowlist guard'а (осознанно), поэтому
+// «outside» берётся в home — он не в allowlist ни на macOS, ни на раннере.
+const base = join(homedir(), ".pi-dir-guard-test-" + process.pid);
 const cwd = join(base, "project");
 const outside = join(base, "outside");
 mkdirSync(cwd, { recursive: true });
