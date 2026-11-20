@@ -58,9 +58,29 @@ function makeCtx(cwd, extra = {}) {
 }
 
 // --- фикстуры ---
-// НЕ tmpdir: /tmp в дефолтном allowlist guard'а (осознанно), поэтому
-// «outside» берётся в home — он не в allowlist ни на macOS, ни на раннере.
-const base = join(homedir(), ".pi-dir-guard-test-" + process.pid);
+// dir-guard по дефолту открывает scratch (/tmp, /private/tmp) и $HOME/.pi.
+// Фикстуру «outside» нельзя брать ни там, ни там: на хостах, где HOME лежит
+// внутри /tmp (подменённый HOME, песочницы), «outside» попадал в allowlist, и
+// проверки на блок падали с «получили: undefined». Поэтому HOME фикстуре
+// ставим в /var/tmp — он вне allowlist, и $HOME/.pi остаётся внутри фикстуры.
+function writableDir(p) {
+	try {
+		mkdirSync(p, { recursive: true });
+		const probe = join(p, `.dir-guard-probe-${process.pid}`);
+		writeFileSync(probe, "x");
+		rmSync(probe);
+		return true;
+	} catch {
+		return false;
+	}
+}
+const base = writableDir("/var/tmp")
+	? join("/var/tmp", `pi-dir-guard-test-${process.pid}`)
+	: join(homedir(), `.pi-dir-guard-test-${process.pid}`);
+// os.homedir() читает HOME в момент вызова, а guard считает allowlist
+// лениво (на первом tool call) — так что подмена до проверок работает
+process.env.HOME = base;
+process.env.USERPROFILE = base;
 const cwd = join(base, "project");
 const outside = join(base, "outside");
 mkdirSync(cwd, { recursive: true });
