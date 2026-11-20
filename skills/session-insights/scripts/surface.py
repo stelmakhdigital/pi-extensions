@@ -38,15 +38,30 @@ EXTRA_SKILL_ROOTS = [Path("~/.agents").expanduser()]
 
 
 def _frontmatter(text: str) -> dict:
-    """Поля name/description из YAML-шапки (без yaml: нужны две строки)."""
-    m = re.match(r"^---\n(.*?)\n---", text, re.S)
+    """name/description из YAML-шапки. Без yaml: нужны строки значения,
+    включая блочные скаляры (`description: >-` + переносы), иначе реальный вес
+    description мерится неверно (blk у orca/ponytail — 600+ символов)."""
+    m = re.match(r"^---\n(.*?)\n(?:---|\.\.\.)", text, re.S)
     if not m:
         return {}
-    out = {}
-    for key in ("name", "description"):
-        km = re.search(rf"^{key}:\s*(.+)$", m.group(1), re.M)
-        if km:
-            out[key] = km.group(1).strip().strip("\"'")
+    lines = m.group(1).splitlines()
+    out: dict[str, str] = {}
+    i = 0
+    while i < len(lines):
+        km = re.match(r"^(name|description):\s*(.*)$", lines[i])
+        if not km:
+            i += 1
+            continue
+        key, rest = km.group(1), km.group(2).strip()
+        i += 1
+        if rest[:1] in ("|", ">") or not rest:
+            block = []
+            while i < len(lines) and (not lines[i].strip() or lines[i][:1] in (" ", "\t")):
+                block.append(lines[i].strip())
+                i += 1
+            out[key] = " ".join(b for b in block if b)
+        else:
+            out[key] = rest.strip("\"'")
     return out
 
 
@@ -56,6 +71,9 @@ def skill_entries() -> list[dict]:
     for root in roots:
         for glob in (SKILL_GLOBS if root == S.AGENT_DIR else ["skills/**/SKILL.md"]):
             for p in root.glob(glob):
+                parts = set(p.parts)
+                if "node_modules" in parts or ".openclaw" in parts:
+                    continue  # чужие копии скиллов, pi их не грузит
                 try:
                     body = p.read_text(encoding="utf-8", errors="replace")
                 except OSError:
