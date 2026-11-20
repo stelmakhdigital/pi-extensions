@@ -52,7 +52,7 @@ def _frontmatter(text: str) -> dict:
     out: dict[str, str] = {}
     i = 0
     while i < len(lines):
-        km = re.match(r"^(name|description):\s*(.*)$", lines[i])
+        km = re.match(r"^(name|description|disable-model-invocation):\s*(.*)$", lines[i])
         if not km:
             i += 1
             continue
@@ -69,6 +69,14 @@ def _frontmatter(text: str) -> dict:
     return out
 
 
+# Формат инжекта проверен по dist/core/skills.js (pi 1.5.2):
+#   <skill><name>..</name><description>..</description><location>..</location></skill>
+# 97 символов разметки на скилл + 281 на шапку блока. Пустое description —
+# скилл вообще не грузится; disable-model-invocation — не попадает в промпт.
+SKILL_MARKUP = 97
+SKILLS_HEADER = 281
+
+
 def skill_entries() -> list[dict]:
     seen: dict[str, dict] = {}
     roots = [S.AGENT_DIR] + [r for r in EXTRA_SKILL_ROOTS if r.exists()]
@@ -83,12 +91,13 @@ def skill_entries() -> list[dict]:
                 except OSError:
                     continue
                 fm = _frontmatter(body)
+                if not fm.get("description"):
+                    continue  # без описания pi скилл не загружает
+                if fm.get("disable-model-invocation", "").lower() in ("true", "yes", "1"):
+                    continue  # в промпт не попадает, только /skill:name
                 name = fm.get("name") or p.parent.name
-                desc = fm.get("description") or ""
-                # в списке скиллов pi держит name + description + путь
-                always = len(name) + len(desc) + len(str(p)) + 8
-                if not desc:
-                    always += 40  # описание-заглушка всё равно стоит строк
+                desc = fm["description"]
+                always = (SKILL_MARKUP + len(name) + len(desc) + len(str(p)))
                 seen[str(p)] = {
                     "name": name,
                     "path": str(p),
@@ -96,7 +105,17 @@ def skill_entries() -> list[dict]:
                     "always_on_chars": always,
                     "body_chars": len(body),
                 }
-    return sorted(seen.values(), key=lambda e: -e["always_on_chars"])
+    # pi держит один скилл на имя (первый выигрывает), дубли — коллизия
+    by_name: dict[str, dict] = {}
+    collisions = 0
+    for e in seen.values():
+        if e["name"] in by_name:
+            collisions += 1
+            continue
+        by_name[e["name"]] = e
+    if by_name:
+        by_name[next(iter(by_name))]["collisions"] = collisions
+    return sorted(by_name.values(), key=lambda e: -e["always_on_chars"])
 
 
 def agents_md_files(project_cwds: list[str] | None = None) -> list[dict]:
@@ -117,7 +136,7 @@ def agents_md_files(project_cwds: list[str] | None = None) -> list[dict]:
 def measure(project_cwds: list[str] | None = None) -> dict:
     skills = skill_entries()
     amds = agents_md_files(project_cwds)
-    skills_always = sum(s["always_on_chars"] for s in skills)
+    skills_always = sum(s["always_on_chars"] for s in skills) + (SKILLS_HEADER if skills else 0)
     amds_chars = sum(a["chars"] for a in amds)
     total = skills_always + amds_chars
     return {
@@ -138,12 +157,12 @@ def render(m: dict, add_chars: int | None, window_sessions: int | None) -> str:
     t = m["totals"]
     out = ["## Вес always-on", ""]
     out.append(f"- AGENTS.md: {t['agents_md_chars']:,} символов ({len(m['agents_md'])} файл(ов))")
-    out.append(f"- скиллов: {t['skills_count']}, их name+description в контексте всегда: "
+    out.append(f"- скиллов: {t['skills_count']}, их name+description+xml-обёртка в контексте всегда: "
                f"{t['skills_always_on_chars']:,} символов")
     out.append(f"- ИТОГО always-on по файлам на диске: ~{t['always_on_chars']:,} символов "
                f"(≈{t['always_on_tokens_est']:,} токенов на каждый ход; схемы тулз и системный промпт pi сюда не входят)")
     out.append("")
-    out.append("| скилл | description, символов | всегда в контексте |")
+    out.append("| скилл | description, символов | всегда в контексте (с разметкой) |")
     out.append("|---|---|---|")
     for s in m["skills"][:15]:
         out.append(f"| {s['name']} | {s['description_chars']} | {s['always_on_chars']} |")

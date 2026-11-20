@@ -128,6 +128,21 @@ def iter_records(path: Path) -> Iterator[dict]:
                 continue
 
 
+# pi разворачивает вызов `/скилл` в user-сообщение с ТЕЛОМ скилла целиком.
+# Это не текст пользователя: его надо считать отдельно (он стоит контекст на
+# каждый вызов) и не путать с правилами/фактами.
+SKILL_BLOCK_RE = re.compile(
+    r'^\s*<skill name="([^"]+)"(?:[^>]*)>\n(.*?)(?:\n</skill>|$)(?:\n\n(.*))?$', re.S)
+
+
+def split_skill_block(text: str):
+    """(тело_скилла_или_None, остаток_сообщения)."""
+    m = SKILL_BLOCK_RE.match(text or "")
+    if not m:
+        return None, text
+    return (m.group(1), len(m.group(2))), (m.group(3) or "").strip()
+
+
 @dataclass
 class SessionSummary:
     path: Path
@@ -147,6 +162,7 @@ class SessionSummary:
     bash_fail_count: int = 0
     compaction_count: int = 0
     is_automation: bool = False  # первый промпт — известный авто-ран (OM-извлечение и т.п.)
+    skill_injections: list = field(default_factory=list)  # (имя скилла, символов тела)
 
     cost_total: float = 0.0
     cost_cache_read: float = 0.0
@@ -213,6 +229,11 @@ def summarize_session(path: Path) -> Optional[SessionSummary]:
             if role == "user":
                 s.user_count += 1
                 text = _extract_text(m.get("content"))
+                if text:
+                    inj, rest = split_skill_block(text)
+                    if inj:
+                        s.skill_injections.append(inj)
+                        text = rest
                 if text:
                     s.user_texts.append(text)
                     if len(s.user_texts) == 1 and AUTOMATION_RE.match(

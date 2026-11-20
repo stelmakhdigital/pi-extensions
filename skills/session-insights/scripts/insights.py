@@ -157,7 +157,12 @@ def build_digest(summaries, args) -> dict:
     max_tool_output: dict[str, int] = {}
     compactions = 0
     models: set = set()
+    inj_count: Counter = Counter()
+    inj_chars: Counter = Counter()
     for s in summaries:
+        for name, chars in s.skill_injections:
+            inj_count[name] += 1
+            inj_chars[name] += chars
         errors_by_tool.update(s.errors_by_tool)
         for t, n in s.errors_by_tool.items():
             error_sessions.setdefault(t, set()).add(s.short_id)
@@ -254,6 +259,8 @@ def build_digest(summaries, args) -> dict:
             "compactions": compactions,
             "retries": retries_total,
             "corrections": corrections_total,
+            "skill_injections": sum(inj_count.values()),
+            "skill_injection_chars": sum(inj_chars.values()),
             "representative": len(summaries) >= 10,
         },
         "sort": "cost" if sort_by_cost else "tokens",
@@ -272,6 +279,10 @@ def build_digest(summaries, args) -> dict:
         "corrections": [{"line": k, "count": n,
                          "projects": sorted(correction_projects.get(k, set()))[:5]}
                         for k, n in correction_lines.most_common(12)],
+        "skill_injections": [
+            {"skill": n, "count": inj_count[n], "chars": inj_chars[n]}
+            for n in sorted(inj_count, key=lambda k: -inj_chars[k])[:10]
+        ],
         "signals": {
             kind: _signal_rows(buckets[kind], samples, 12)
             for kind in ("rule", "fact", "noise")
@@ -301,7 +312,8 @@ def render_markdown(d: dict) -> str:
     out.append(f"- Сессий: **{t['sessions']}**, {cost_line}, "
                f"токенов: {t['tokens']:,}, медиана на сессию: {t['median_tokens_per_session']:,}")
     out.append(f"- Ретраев: **{t['retries']}**, поправок пользователя: **{t['corrections']}**, "
-               f"компактаций: {t['compactions']}")
+               f"компактаций: {t['compactions']}, инжектов тел скиллов: {t['skill_injections']} "
+               f"({t['skill_injection_chars']:,} символов)")
     out.append(f"- Модели: {', '.join(t['models']) or '?'}")
     if not t["representative"]:
         out.append("")
@@ -353,6 +365,18 @@ def render_markdown(d: dict) -> str:
     out.append("## Максимальный размер tool output (символы)")
     for tool, ln in d["max_tool_output_chars"].items():
         out.append(f"- `{tool}`: {ln:,}")
+    out.append("")
+
+    si = d["skill_injections"]
+    out.append("## Инжекты тел скиллов (пи разворачивает /скилл в user-сообщение целиком)")
+    if si:
+        for row in si:
+            out.append(f"- `{row['skill']}`: {row['count']}x, {row['chars']:,} символов "
+                       f"(≈{row['chars'] // 4:,} токенов в контексте на каждый вызов)")
+        out.append("- Тело скилла платится целиком на каждый вызов: если вызовов много, а нужен")
+        out.append("  только раздел — разрезать скилл или вынести разделы в отдельные файлы.")
+    else:
+        out.append("- Нет")
     out.append("")
 
     sig = d["signals"]

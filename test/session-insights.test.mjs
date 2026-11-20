@@ -85,6 +85,7 @@ function sessionFile(name, opts = {}) {
 		seq++;
 		toolResult(9500, "bash", true, "Error: pod gitlab-runner-sima-01 not found (attempt 1)");
 	}
+	if (opts.skill) user(`<skill name="demo" location="/s/SKILL.md">\n${opts.skill}\n</skill>\n\nсделай отчет по часам`, 600);
 	if (opts.rule) for (let i = 0; i < opts.rule; i++) user(RULE_LINE + (i ? "" : ""), 100 + i * 10000);
 	if (opts.fact) user(FACT_LINE, 200);
 	if (opts.log) user(`вывод из пода:\n${LOG_LINE}`, 300);
@@ -108,6 +109,7 @@ for (let i = 0; i < 12; i++) {
 		editErrors: i % 4 === 0 ? 3 : 0,
 		bashErrors: i % 3 === 0,
 		corrections: i % 5 === 0,
+		skill: i % 6 === 0 ? "обязательные поля задачи: " + "x".repeat(300) : null,
 	});
 }
 
@@ -166,6 +168,17 @@ await check("insights: поправки пользователя посчита�
 	assert(digest.corrections.some((c) => c.line.includes("migrations")), JSON.stringify(digest.corrections));
 });
 
+await check("insights: тело скилла из /slash не считается фактом и считается отдельно", () => {
+	assert(digest.totals.skill_injections === 2, `injections=${digest.totals.skill_injections}`);
+	const inj = digest.skill_injections.find((r) => r.skill === "demo");
+	assert(inj && inj.chars >= 300, JSON.stringify(digest.skill_injections));
+	const facts = digest.signals.fact.map((r) => r.line).join("\n");
+	assert(!facts.includes("обязательные поля задачи"), "тело скилла попало в факты проекта");
+	// остаток сообщения после </skill> — настоящий текст пользователя, он учитывается
+	const md = run("insights.py", ["--since", "60d"]);
+	assert(md.includes("Инжекты тел скиллов"), "нет секции инжектов");
+});
+
 await check("insights: markdown рендерится без падений", () => {
 	const md = run("insights.py", ["--since", "60d"]);
 	assert(md.includes("## Ошибки инструментов"), "нет секции ошибок");
@@ -190,18 +203,31 @@ mkdirSync(join(agentDir, "skills", "demo-skill"), { recursive: true });
 writeFileSync(join(agentDir, "AGENTS.md"), "# Правила\n\n- перечитывай файл перед edit\n");
 writeFileSync(join(agentDir, "skills", "demo-skill", "SKILL.md"),
 	"---\nname: demo-skill\ndescription: >-\n  Короткое описание в первую строку не влезает,\n  поэтому оно написано блоком с переносами.\n---\n\n# Тело скилла\n\naaa\n");
+// без description pi скилл не грузит; disable-model-invocation — не в промпт;
+// второе вхождение того же имени — коллизия (pi оставляет первое)
+mkdirSync(join(agentDir, "skills", "no-desc"), { recursive: true });
+writeFileSync(join(agentDir, "skills", "no-desc", "SKILL.md"), "---\nname: no-desc\n---\n\nbody\n");
+mkdirSync(join(agentDir, "skills", "explicit-only"), { recursive: true });
+writeFileSync(join(agentDir, "skills", "explicit-only", "SKILL.md"),
+	"---\nname: explicit-only\ndescription: только по /вызову\ndisable-model-invocation: true\n---\n\nbody\n");
+mkdirSync(join(agentDir, "skills", "demo-skill-copy"), { recursive: true });
+writeFileSync(join(agentDir, "skills", "demo-skill-copy", "SKILL.md"),
+	"---\nname: demo-skill\ndescription: дубль имени\n---\n\nbody\n");
 
-await check("surface: description блоком и AGENTS.md учтены, чужие копии пропущены", () => {
+await check("surface: правила загрузки скиллов pi (описание, флаги, коллизии, разметка)", () => {
 	const envFix = { ...env, PI_CODING_AGENT_DIR: agentDir,
 		// ~/.agents на хосте содержит свои скиллы — тест не должен их видеть
 		SESSION_INSIGHTS_SKILL_ROOTS: "" };
 	const s = JSON.parse(execFileSync("python3", [join(SCRIPTS, "surface.py"), "--json"], { encoding: "utf8", env: envFix }));
-	assert(s.totals.skills_count === 1, `skills=${s.totals.skills_count}`);
+	assert(s.totals.skills_count === 1, `skills=${s.totals.skills_count} (no-desc/disable/коллизия не должны считается)`);
 	const one = s.skills[0];
 	assert(one.name === "demo-skill", one.name);
 	// блочный скаляр целиком, а не первая строка
 	assert(one.description_chars > 60, `description_chars=${one.description_chars}`);
-	assert(one.always_on_chars >= one.description_chars, "описание не может весить больше всего скилла");
+	// 97 символов xml-разметки на скилл + name + description + путь
+	assert(one.always_on_chars === 97 + one.name.length + one.description_chars + one.path.length,
+		`always_on_chars=${one.always_on_chars}`);
+	assert(s.totals.skills_always_on_chars >= 281 + one.always_on_chars, "шапка блока не учтена");
 	assert(one.body_chars < one.description_chars * 100, "тело не должно входить в always-on");
 	assert(s.agents_md.length === 1 && s.totals.agents_md_chars > 0, JSON.stringify(s.agents_md));
 });
