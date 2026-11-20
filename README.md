@@ -212,7 +212,9 @@ ln -sfn /tmp/pi-ext/skills/session-insights ~/.pi/agent/skills/session-insights
   drafts/                # черновики улучшений (SKILL.md, блок AGENTS.md, TS-экстеншен)
 ```
 
-Черновиками агент не меняет ничего — только создаёт файлы на проверку.
+Черновиками агент не меняет ничего — только создаёт файлы на проверку. Журнал
+вмешательств (что поменяли в harness и помогло ли) лежит отдельно и глобально:
+`~/.pi/agent/session-insights/ledger.md`.
 
 Ручной запуск digest без агента (Python 3, без зависимостей):
 
@@ -220,11 +222,26 @@ ln -sfn /tmp/pi-ext/skills/session-insights ~/.pi/agent/skills/session-insights
 python3 <путь>/scripts/insights.py --since 30d            # markdown-digest
 python3 <путь>/scripts/insights.py --since 60d --cwd pi  # фильтр по проекту
 python3 <путь>/scripts/insights.py --errors-only --json  # JSON
+python3 <путь>/scripts/surface.py                        # вес always-on (AGENTS.md, скиллы)
+python3 <путь>/scripts/ledger.py list                    # журнал вмешательств и verdict'ы
 ```
 
-Фильтры: `--since/--until 7d|2w|ISO`, `--cwd <подстрока>` (повторяемо),
-`--min-cost`, `--errors-only`, `--top N`, `--json`, `--all`
-(включить автоматические сессии — OM-извлечения по умолчанию скрываются).
+Фильтры: `--since/--until 7d|2w|ISO` (`--since` по умолчанию 30d),
+`--cwd <подстрока>` (повторяемо), `--min-cost`, `--errors-only`, `--top N`, `--json`,
+`--all` (включить автоматические сессии — OM-извлечения по умолчанию скрываются).
+
+Digest разделяет повторяющиеся строки промптов на `noise` (логи и вывод команд —
+не кандидаты в правила), `rule` (императивные правки) и `fact` (конкретика
+проекта), а ошибки инструментов сворачивает в сигнатуры (uuid/hex/числа/пути),
+чтобы 40 вариантов одной аварии не выглядели сорока разными проблемами. Когда
+провайдер не отдаёт цены (`cost = 0`), топ сортируется по токенам.
+
+`ledger.py` ведёт `~/.pi/agent/session-insights/ledger.md`: запись заводится до
+правки (cue / component / lesson / evidence / confidence), verdict (`helped`,
+`hurt`, `no observed effect`, `confounded`, `reverted`) выставляется после замера
+частоты pattern'а до и после даты принятия: `ledger.py check --apply`.
+
+Тесты скритов: `node test/session-insights.test.mjs` (нужен python3; без него — skip).
 
 ### Несколько расширений
 

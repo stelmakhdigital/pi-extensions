@@ -438,13 +438,18 @@ const noUiCtx = {
 			}));
 		}
 		writeFileSync(join(sessDir, `${nowIso.slice(0, 19).replace(/:/g, "-")}_fixture-0001.jsonl`), records.join("\n") + "\n");
-		const env = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome };
+		// sessions.py берёт корень из PI_CODING_AGENT_DIR (в этом процессе он указан на
+		// guard-фикстуру, строка 15), поэтому перекатываем явно оба варианта
+		const env = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome,
+			PI_CODING_AGENT_DIR: join(fakeHome, ".pi", "agent"),
+			SESSION_INSIGHTS_ROOT: sessDir,
+			SESSION_INSIGHTS_LEDGER: join(fakeHome, "ledger.md") };
 
 		await check("session-insights: insights.py --json валиден (на фикстуре)", async () => {
 			const r = spawnSync("python3", [script, "--since", "90d", "--json"], { encoding: "utf8", timeout: 120000, env });
 			if (r.status !== 0) throw new Error("exit " + r.status + ": " + (r.stderr || "").slice(0, 200));
 			const d = JSON.parse(r.stdout);
-			for (const k of ["totals", "sessions_top", "tool_errors", "max_tool_output_chars", "repeated_prompt_lines", "prompt_keywords"]) {
+			for (const k of ["totals", "sessions_top", "tool_errors", "max_tool_output_chars", "signals", "corrections", "by_project", "prompt_keywords"]) {
 				if (!(k in d)) throw new Error("нет ключа " + k);
 			}
 			if (!Number.isInteger(d.totals.sessions) || d.totals.sessions <= 0) throw new Error("sessions = " + d.totals.sessions);

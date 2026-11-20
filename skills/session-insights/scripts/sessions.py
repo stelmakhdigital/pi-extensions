@@ -26,14 +26,45 @@ import json
 import os
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
-SESSIONS_ROOT = Path(os.path.expanduser("~/.pi/agent/sessions"))
+AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR") or "~/.pi/agent").expanduser()
+SESSIONS_ROOT = Path(os.environ.get("SESSION_INSIGHTS_ROOT") or (AGENT_DIR / "sessions"))
 
 _REL_RE = re.compile(r"^(\d+)([dwhm])$")
+
+# Маркеры поправки человека: строка, с которой пользователь одёргивает агента.
+# Только начало строки — иначе «again»/«не надо» внутри цитаты считается поправкой.
+CORRECTION_RE = re.compile(
+    r"^(нет,|не надо|не нужно|не так|не делай|хватит|перестань|зачем ты|"
+    r"почему ты|я же (говорил|просил|сказал)|ещё раз|опять|откат|верни|no,|don't|"
+    r"stop\b|why did you|i told you|i asked|again\b|we discussed)",
+    re.IGNORECASE,
+)
+
+_SIG_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+_SIG_PATH = re.compile(r"(?:/[\w.\-]+){2,}")
+_SIG_HEX = re.compile(r"\b0x[0-9a-f]+\b|\b[0-9a-f]{6,}\b", re.I)
+_SIG_NUM = re.compile(r"\d+(?:\.\d+)*")
+
+
+def redact(text: str, limit: int = 120) -> str:
+    """Свернуть изменчивое (uuid/hex/числа/пути), чтобы одно и то же событие
+    с новым id или таймстемпом не считалось новым."""
+    t = re.sub(r"\s+", " ", text or "").strip()
+    t = _SIG_UUID.sub("<id>", t)
+    t = _SIG_PATH.sub("<path>", t)
+    t = _SIG_HEX.sub("<hex>", t)
+    t = _SIG_NUM.sub("<n>", t)
+    return t[:limit]
+
+
+def error_signature(text: str) -> str:
+    return redact(text, 120)
 
 
 def parse_when(value: str) -> datetime:
@@ -126,7 +157,11 @@ class SessionSummary:
     tok_cache_write: int = 0
 
     errors_by_tool: dict = field(default_factory=dict)   # tool -> count
+    error_sig_by_tool: dict = field(default_factory=dict)  # tool -> Counter(сигнатур)
     tool_output_max: dict = field(default_factory=dict)  # tool -> max len(content)
+    tool_output_total: int = 0
+    correction_count: int = 0
+    corrections: list = field(default_factory=list)      # строки-поправки пользователя
     tool_call_total: int = 0
     retries: int = 0  # повтор вызова с теми же аргументами сразу после его ошибки
     _failed_key: Optional[tuple] = None  # (name, args[:100]) упавшего вызова
@@ -183,6 +218,11 @@ def summarize_session(path: Path) -> Optional[SessionSummary]:
                     if len(s.user_texts) == 1 and AUTOMATION_RE.match(
                             re.sub(r"\s+", " ", s.user_texts[0].lower())):
                         s.is_automation = True
+                    for cline in text.splitlines():
+                        cline = cline.strip()
+                        if cline and CORRECTION_RE.match(cline):
+                            s.correction_count += 1
+                            s.corrections.append(re.sub(r"\s+", " ", cline)[:160])
             elif role == "assistant":
                 s.assistant_count += 1
                 if m.get("model"):
@@ -211,9 +251,13 @@ def summarize_session(path: Path) -> Optional[SessionSummary]:
                 tool = m.get("toolName", "?")
                 text = _extract_text(m.get("content"))
                 s.tool_output_max[tool] = max(s.tool_output_max.get(tool, 0), len(text))
+                s.tool_output_total += len(text)
                 if m.get("isError"):
                     s.error_count += 1
                     s.errors_by_tool[tool] = s.errors_by_tool.get(tool, 0) + 1
+                    sig = error_signature(text)
+                    if sig:
+                        s.error_sig_by_tool.setdefault(tool, Counter())[sig] += 1
                     s._failed_key = calls.get(m.get("toolCallId"))
             elif role == "bashExecution":
                 s.bash_exec_count += 1
