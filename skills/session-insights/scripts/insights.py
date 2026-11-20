@@ -62,6 +62,22 @@ VOLATILE_RE = re.compile(
     r"\b\d{2}:\d{2}:\d{2}\b|(?:/\w[\w.\-]*){2,}",
     re.IGNORECASE,
 )
+# Вывод команд (go/git/docker/psql/k8s) — тоже данные, а не текст пользователя.
+CMD_OUTPUT_RE = re.compile(
+    r"^(?:go: |ok\s+\S+\s+\d|--- (?:FAIL|PASS)|=== (?:RUN|PAUSE|CONT)|FAIL\s\S+\s"
+    r"|Initialized empty Git|Receiving objects|Resolving deltas|Cloning into|HEAD is now"
+    r"|Running with |Using (?:Kubernetes|Docker|image )|Executing \"|=> => |Step \d+/"
+    r"|\(no output\)|\$ |\(setsid\)|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S+\.go:\d+"
+    r"|[\w./-]+\.go:\d+|\s*SELECT\s|\s*\|.*\|\s*$|^=> "
+    r"|^\s*#\d+\s|\[no test files\]|^\s*\S+\s{2,}\||^\s*(?:✔|✓|✗)"
+    r"|^(?:Attaching to|Container |Network |Volume |Checking out|Creating |Created |Pulling )"
+    r"|ContainersNot\w+|Readiness probe failed|exited with code \d"
+    r"|^on shared \S+, system ID:|^If this is a private repository|^\S+@\S+:\S*\$"
+    r")",
+    re.IGNORECASE,
+)
+# Колонки из 3+ пробелов — выравнивание вывода (go test, docker compose, kubectl get).
+PADDING_RE = re.compile(r"\S\s{3,}\S")
 # Императивная правка пользователя (только начало строки).
 RULE_RE = re.compile(
     r"^(добавь|используй|проверь|всегда|никогда|помни|правило|делай|пиши|читай|"
@@ -87,7 +103,11 @@ def classify(line: str) -> str:
     """noise | rule | fact | other — по первой же подействовавшей проверке."""
     if len(line) < MIN_SIGNAL_CHARS:
         return "other"
-    if LOG_RE.search(line) or len(VOLATILE_RE.findall(line)) >= 2:
+    if len(line) > 300 or LOG_RE.search(line) or CMD_OUTPUT_RE.match(line) \
+            or len(VOLATILE_RE.findall(line)) >= 2:
+        return "noise"
+    # выравнивание вывода без кириллицы — почти всегда вывод, а не правка
+    if PADDING_RE.search(line) and not re.search(r"[а-яё]", line, re.IGNORECASE):
         return "noise"
     if RULE_RE.match(line):
         return "rule"
