@@ -108,6 +108,30 @@ const touchExternal = () => utimesSync(file, new Date(), new Date(Date.now() + 5
 		editFresh.default(pi2);
 		if (pi2.handlers.tool_call) throw new Error("хендлеры зарегистрированы несмотря на флаг");
 	});
+
+	await check("read+edit в одном ходе (preflight без tool_result) не блокируется", async () => {
+		const f = join(cwd, "batch.txt");
+		writeFileSync(f, "one\n");
+		// префлайт: tool_call(read) затем tool_call(edit), results ещё не пришли
+		await onCall({ type: "tool_call", toolName: "read", toolCallId: "b1", input: { path: "batch.txt" } }, ctx);
+		const res = await onCall({ type: "tool_call", toolName: "edit", toolCallId: "b2", input: { path: "batch.txt", edits: [] } }, ctx);
+		if (res !== undefined) throw new Error("ложный блок read+edit в одном ходе: " + JSON.stringify(res));
+	});
+
+	await check("write+edit нового файла в одном ходе не блокируется", async () => {
+		await onCall({ type: "tool_call", toolName: "write", toolCallId: "b3", input: { path: "new-batch.txt", content: "x" } }, ctx);
+		const res = await onCall({ type: "tool_call", toolName: "edit", toolCallId: "b4", input: { path: "new-batch.txt", edits: [] } }, ctx);
+		if (res !== undefined) throw new Error("ложный блок write+edit: " + JSON.stringify(res));
+	});
+
+	await check("неудавшийся write снимает пендинг (edit существующего файла снова блокируется)", async () => {
+		const f = join(cwd, "wfail.txt");
+		writeFileSync(f, "one\n");
+		await onCall({ type: "tool_call", toolName: "write", toolCallId: "b5", input: { path: "wfail.txt", content: "y" } }, ctx);
+		await onResult({ type: "tool_result", toolName: "write", toolCallId: "b5", input: { path: "wfail.txt" }, content: [], isError: true }, ctx);
+		const res = await onCall({ type: "tool_call", toolName: "edit", toolCallId: "b6", input: { path: "wfail.txt", edits: [] } }, ctx);
+		if (!res?.block) throw new Error("после failed-write edit не заблокирован (пендинг не снят)");
+	});
 }
 
 rmSync(base, { recursive: true, force: true });

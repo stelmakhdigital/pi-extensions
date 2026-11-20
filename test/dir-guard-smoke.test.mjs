@@ -168,6 +168,24 @@ writeFileSync(join(outside, "secret.txt"), "s3cr3t");
 		if (res === undefined) throw new Error("/etc/hosts не заблокировался — allowlist шире задуманного");
 	});
 
+	await check("(e10) двойной слэш (cat //etc/passwd) блокируется как обычный путь", async () => {
+		const res = await handler({ toolName: "bash", input: { command: "cat //etc/passwd" } }, ctx);
+		if (res === undefined) throw new Error("//etc/passwd не заблокирован (bash читает его как /etc/passwd)");
+	});
+
+	await check("(e11) локальные бинари (brew /usr/local, /opt/homebrew) в allowlist", async () => {
+		// Проверяем только реально установленные на этой машине brew-бинари
+		// (на другой машине их нет — тест переносимый). Символические ссылки
+		// за пределы brew-root блокируются канон-проверкой и должны отсутствовать.
+		const { existsSync } = await import("node:fs");
+		for (const command of ["/opt/homebrew/bin/rg foo", "/usr/local/bin/rg foo"]) {
+			const bin = command.split(" ")[0];
+			if (!existsSync(bin)) continue;
+			const res = await handler({ toolName: "bash", input: { command } }, ctx);
+			if (res !== undefined) throw new Error(`ложный блок на "${command}": ${JSON.stringify(res)}`);
+		}
+	});
+
 	await check("(f) symlink-escape блокируется (symlink в CWD → наружу)", async () => {
 		const link = join(cwd, "sneaky-link");
 		if (!existsSync(link)) symlinkSync(outside, link);

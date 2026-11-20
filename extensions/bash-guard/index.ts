@@ -95,9 +95,12 @@ function analyzeSegment(seg: Token[], depth = 0, strictGit = false, skipRm = fal
 
 	const ops = seg.filter(isOpToken).map((o) => o.op);
 	const args = tokensToStrings(seg);
+	// Префиксные присваивания окружения (`LC_ALL=C git push …`) — не команда.
+	while (args.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(args[0])) args.shift();
 	if (args.length === 0) return null;
 
-	const cmd = args[0];
+	// Полный путь к бинарю (`/bin/rm`) — та же утилита, что и по имени.
+	const cmd = args[0].slice(args[0].lastIndexOf("/") + 1);
 	const rest = args.slice(1);
 
 	// Редирекции/конвейеры обрабатываются на всю команду, но часть проверок оставляем и по сегментам.
@@ -118,7 +121,7 @@ function analyzeSegment(seg: Token[], depth = 0, strictGit = false, skipRm = fal
 		const ci = rest.indexOf("-c");
 		const inner = rest[ci + 1];
 		if (typeof inner === "string" && inner.trim()) {
-			const innerRisk = analyzeBashCommand(inner, depth + 1, strictGit);
+			const innerRisk = analyzeBashCommand(inner, depth + 1, strictGit, skipRm);
 			if (innerRisk) {
 				if (innerRisk.severity === "high") severity = "high";
 				for (const r of innerRisk.reasons) reasons.push(`${cmd} -c: ${r}`);
@@ -443,11 +446,23 @@ const _isSubagent = Number.isFinite(_subagentDepth) && _subagentDepth >= 1;
 // Меньше ложных срабатываний важнее широкого покрытия — остальное в главной
 // сессии закрывает интерактивный запрос. `sessionOnly: true` — действует только
 // в сессиях, а не в «поле» автономного режима главной сессии.
+// Аргументы `sh/bash/zsh -c "…"` разворачиваем в отдельные варианты: якорные
+// паттерны пола (sudo/shutdown) ловят `bash -c "sudo …"`, но не слово sudo
+// внутри аргументов grep или кавычек безобидных команд.
+export function floorVariants(command: string): string[] {
+	const out = [command];
+	for (const m of command.matchAll(/(?:^|\s)(?:(?:ba|z|da)?sh|fish)\s+-[a-zA-Z]*c\s+"((?:[^"\\]|\\.)*)"/g)) out.push(m[1]);
+	for (const m of command.matchAll(/(?:^|\s)(?:(?:ba|z|da)?sh|fish)\s+-[a-zA-Z]*c\s+'((?:[^'\\]|\\.)*)'/g)) out.push(m[1]);
+	return out;
+}
+
 export const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean; rmOnly?: boolean }> = [
 	// Рекурсивное удаление (rmOnly — снимается /bash-guard:rm в главной сессии)
 	{ pattern: /(?<!\bgit\s+)\brm\b[^#\n]*\s-(?:[a-zA-Z]*[rR]|-\brecursive\b)/, reason: "рекурсивное удаление (rm -r / -rf / -Rf)", rmOnly: true },
-	// Повышение привилегий
-	{ pattern: /\bsudo\b/, reason: "повышенные привилегии (sudo)" },
+	// Повышение привилегиями (якорь на позицию команды + env-префиксы: внутри
+	// аргументов grep/строк `sudo` — не команда; sh -c содержимое разворачивает
+	// floorVariants перед матчингом)
+	{ pattern: /(?:^|[;&|\n]\s*)(?:[A-Za-z_]\w*=\S*\s+)*sudo\b/, reason: "повышенные привилегии (sudo)" },
 	// Удалённое выполнение кода через pipe-to-shell
 	{ pattern: /\b(curl|wget)\b[^#\n]*\|\s*(ba?sh|zsh|fish|dash|sh)\b/, reason: "конвейер в шелл (удалённое выполнение кода)" },
 	// Разрушение дисков/файловых систем
@@ -459,8 +474,9 @@ export const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionO
 	{ pattern: /\b(parted|fdisk|gdisk|sgdisk)\b/, reason: "управление таблицей разделов" },
 	{ pattern: /\bcryptsetup\b/, reason: "управление шифрованием дисков" },
 	{ pattern: /\bzpool\b/, reason: "управление пулами ZFS" },
-	// Электропитание системы
-	{ pattern: /(?<!\.)\b(shutdown|reboot|halt|poweroff)\b/, reason: "операции электропитания системы" },
+	// Электропитание системы (тот же якорь позиции; `.shutdown`-методы и
+	// текст в аргументах grep не матчатся)
+	{ pattern: /(?:^|[;&|\n]\s*)(?:[A-Za-z_]\w*=\S*\s+)*(?:shutdown|reboot|halt|poweroff)\b/, reason: "операции электропитания системы" },
 	// Снос инфраструктуры
 	{ pattern: /\bterraform\s+destroy\b/, reason: "снос инфраструктуры (terraform destroy)" },
 	{ pattern: /\bkubectl\s+delete\b/, reason: "удаление ресурсов Kubernetes" },
@@ -505,8 +521,9 @@ export default function (pi: ExtensionAPI) {
 		pi.on("tool_call", async (event) => {
 			if (!isToolCallEventType("bash", event)) return;
 			const command = event.input.command;
+			const variants = floorVariants(command);
 			for (const { pattern, reason } of HEADLESS_BLOCKED) {
-				if (pattern.test(command)) {
+				if (variants.some((v) => pattern.test(v))) {
 					return {
 						block: true,
 						reason:
@@ -619,9 +636,10 @@ export default function (pi: ExtensionAPI) {
 		// Отключённый (автономный) режим: без интерактивных запросов, но
 		// сохраняем «пол» жёсткого блока для катастрофических операций.
 		if (disabled) {
+			const variants = floorVariants(command);
 			for (const { pattern, reason, rmOnly } of MAIN_DISABLED_BLOCKED) {
 				if (rmAllowed && rmOnly) continue;
-				if (pattern.test(command)) {
+				if (variants.some((v) => pattern.test(v))) {
 					return {
 						block: true,
 						reason:

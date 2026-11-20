@@ -24,19 +24,25 @@ const NOTE =
 	"\n[exit 1 — штатный код: «нет совпадений» (grep/rg/pgrep) или «файлы различаются» (diff/cmp/comm). " +
 	"Это не ошибка: продолжай без ретрая, при необходимости переформулируй запрос.]";
 
-/** Первая команда пайп-сегмента — утилита (после `VAR=value`-префиксов). */
+/** Первая команда пайп-сегмента — утилита (снимая `VAR=value`-префиксы и путь бинаря). */
 function headUtility(segment: string): string | null {
 	const parts = segment.trim().split(/\s+/);
 	for (const tok of parts) {
 		if (!tok || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue; // присваивание окружения
-		return tok.replace(/^\/usr\/bin\//, "");
+		const base = tok.slice(tok.lastIndexOf("/") + 1); // путь к бинарю → basename
+		return base;
 	}
 	return null;
 }
 
-/** Код каждой `;`/`&&`-цепочки исполняется последней командой — проверяем все. */
+/**
+ * Код каждой цепочки исполняется последней командой — проверяем все.
+ * Разделители цепочек в bash: `&&`, `||`, `;`, перевод строки. `||` сюда же:
+ * иначе `grep a f || make deploy` проходил бы как «grep-цепочка» и маскировал
+ * падение make. Пайп `|` не разделитель цепочки — там код = последняя команда.
+ */
 function isProbeChain(command: string): boolean {
-	const segments = command.split(/&&|;/).filter((s) => s.trim());
+	const segments = command.split(/&&|\|\||;|\n/).filter((s) => s.trim());
 	if (segments.length === 0) return false;
 	return segments.every((seg) => {
 		const lastPipe = seg.split("|").filter((s) => s.trim()).pop();

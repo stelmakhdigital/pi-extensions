@@ -39,7 +39,10 @@ export function saveGuard(key: string, patch: Record<string, unknown>): void {
 	const all = readAll();
 	all[key] = { ...(all[key] ?? {}), ...patch };
 	fs.mkdirSync(path.dirname(stateFile()), { recursive: true });
-	fs.writeFileSync(stateFile(), JSON.stringify(all, null, 2));
+	// Атомарно: tmp с pid + rename (два процесса pi не должны читать полурезанный JSON).
+	const tmp = `${stateFile()}.${process.pid}.tmp`;
+	fs.writeFileSync(tmp, JSON.stringify(all, null, 2));
+	fs.renameSync(tmp, stateFile());
 }
 
 /**

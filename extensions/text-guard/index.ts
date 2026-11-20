@@ -648,6 +648,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		// Смена сессии внутри процесса может сменить cwd — конфиг-файл проекта
+		// перечитаем на первом же вызове (ensureReady).
+		ready = false;
 		// Новая сессия → дефолт (warn, автофикс выкл) + persist; продолжение
 		// (pi -c / --session / resume / reload / fork) → сохранённое состояние.
 		if (shouldResetGuards(event, ctx as unknown as Parameters<typeof shouldResetGuards>[1])) {
@@ -655,14 +658,14 @@ export default function (pi: ExtensionAPI) {
 			autofix = false;
 			saveGuard("text-guard", { mode, autofix });
 		}
-		if (event.reason === "startup") {
-			if (pi.getFlag("text-guard-off") === true && mode !== "off") {
-				mode = "off";
-				saveGuard("text-guard", { mode });
-			} else if (pi.getFlag("text-guard-strict") === true && mode !== "strict") {
-				mode = "strict";
-				saveGuard("text-guard", { mode });
-			}
+		// Флаги стартового режима — на каждой новой сессии процесса (единообразно
+		// с bash-guard/dir-guard), не только на startup.
+		if (pi.getFlag("text-guard-off") === true && mode !== "off") {
+			mode = "off";
+			saveGuard("text-guard", { mode });
+		} else if (pi.getFlag("text-guard-strict") === true && mode !== "strict") {
+			mode = "strict";
+			saveGuard("text-guard", { mode });
 		}
 		refreshStatus(ctx);
 	});

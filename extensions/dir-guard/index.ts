@@ -78,19 +78,22 @@ type Verdict = { blocked: boolean; reason?: string };
  */
 function extractBashPaths(command: string): string[] {
 	const found = new Set<string>();
+	// Двойные слэши схлопываем: bash трактует `//etc/x` как `/etc/x`, а матчер
+	// иначе пропускал матч с `/` перед ним (ложный «хвост длинного токена»).
 	// Абсолютные пути (мульти-сегментные). Пропускаем матчи, за которыми сразу
 	// идёт `$`/`*` (продолжение в переменную/глоб — неразрешимо) и матчи после
 	// `:` (URL-схемы: `https://host/path`).
-	for (const m of command.matchAll(/\/[A-Za-z0-9_.\-]+(?:\/[A-Za-z0-9_.\-]+)*/g)) {
+	const collapsed = command.replace(/\/\/+/g, "/");
+	for (const m of collapsed.matchAll(/\/[A-Za-z0-9_.\-]+(?:\/[A-Za-z0-9_.\-]+)*/g)) {
 		const idx = m.index ?? 0;
-		const before = command[idx - 1];
+		const before = collapsed[idx - 1];
 		// URL-хост после схемы (`https://host/…`): предыдущий символ — `:` (схема)
 		// или `/` (второй слэш из `//host`) — это не файловый путь. Буква/точка —
 		// хвост более длинного неразрешимого токена (`$HOME/tmpdir`, `x//etc/x`).
 		// `~` — хвост home-пути `~/…` (обрабатывается отдельным правилом ниже;
 		// без этого исключения `~/.pi/agent` давал ложный токен `/.pi/agent`).
 		if (before && (before === ":" || before === "/" || before === "~" || /[A-Za-z0-9_.`}$]/.test(before))) continue;
-		const after = command[idx + m[0].length];
+		const after = collapsed[idx + m[0].length];
 		if (after === "$" || after === "*") continue;
 		// Односегментные токены (`/models`, `/app`, `/Flag`) — почти всегда пути
 		// внутри контейнера (docker exec) или обрезанные флаги, а не хостовые
@@ -102,7 +105,10 @@ function extractBashPaths(command: string): string[] {
 	for (const m of command.matchAll(/(^|\s)~(?:\/[A-Za-z0-9_.\-]+)*/g)) {
 		found.add(m[0].slice(m[1].length));
 	}
-	// Относительные токены с .. — единственный способ уйти ВЫШЕ CWD из относительного пути
+	// Относительные токены с .. — резолвятся от CWD процесса. Без cd-трекинга
+	// возможны обе ошибки после `cd подкаталог` (`cd out && cat ../f` — ложный
+	// негатив, `cd sub && cat ../f` — ложный блок); полный трекинг cd в строке
+	// bash неразрешим, принять как документированное ограничение эвристики.
 	for (const tok of command.split(/\s+/)) {
 		if (!tok.includes("..")) continue;
 		if (/[$`*]/.test(tok)) continue; // неразрешимо
@@ -134,7 +140,15 @@ export default function (pi: ExtensionAPI) {
 	// даёт ложный блок. Риск осознанный: запись в /tmp не ограничивается.
 	// shortcut: /tmp наружу открыт; при жалобе на мусор в /tmp убрать и держать
 	// per-project allowlist в .dir-guard.json.
-	const raw: string[] = [path.join(os.homedir(), ".pi"), "/tmp", "/private/tmp", "/dev", "/bin", "/usr/bin", "/sbin"];
+	const raw: string[] = [
+		path.join(os.homedir(), ".pi"),
+		"/tmp", "/private/tmp",            // scratch (на macOS /tmp — symlink в /private/tmp)
+		"/dev",                            // устройства, уже был частный кейс /dev/null
+		"/bin", "/usr/bin", "/sbin",       // вызов системных бинарей
+		// Локально установленные бинари (Intel/Apple Silicon). Целые root'ы:
+		// brew-бинари — симлинки в Cellar, canonical-проверка иначе резонно блокирует.
+		"/usr/local", "/opt/homebrew",
+	];
 		const flagVal = pi.getFlag("dir-guard-allow");
 		// Парсер флагов pi знает только одиночные значения (Map, последнее
 		// переопределяет) → поддерживаем коммат-список в одном флаге.
@@ -221,6 +235,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		// Смена сессии внутри процесса (/resume, /new, /fork) может сменить cwd —
+		// сбрасываем пин root/allowlist, ensureReady пересчитает на первом же вызове.
+		ready = false;
 		// Новая сессия (startup с пустой историей, new) → дефолт (защита ON) + persist;
 		// продолжение (pi -c / --session / resume / reload / fork) → сохранённое состояние.
 		// Субагент не сбрасывает.
@@ -228,7 +245,9 @@ export default function (pi: ExtensionAPI) {
 			disabled = false;
 			saveGuard("dir-guard", { disabled });
 		}
-		if (event.reason === "startup" && pi.getFlag("dir-guard-disabled") === true && !disabled) {
+		// Флаг «запустить отключённым» применяется на каждой новой сессии процесса
+		// (единообразно с bash-guard), а не только на startup.
+		if (pi.getFlag("dir-guard-disabled") === true && !disabled) {
 			disabled = true;
 			saveGuard("dir-guard", { disabled });
 		}

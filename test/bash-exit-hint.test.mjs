@@ -58,6 +58,23 @@ const ev = (command, code = 1) => ({
 		if (res !== undefined) throw new Error("снят реальный сбой: " + JSON.stringify(res));
 	});
 
+	await check("многострочная команда: падение make после grep не прикрывается", async () => {
+		const res = await pi.handler(ev("grep -q pat file\nmake deploy"));
+		if (res !== undefined) throw new Error("прикрыт make с exit 1: " + JSON.stringify(res));
+	});
+
+	await check("цепочка ||: падение второй команды не прикрывается", async () => {
+		const res = await pi.handler(ev("grep a f || make deploy"));
+		if (res !== undefined) throw new Error("прикрыта вторая команда ||: " + JSON.stringify(res));
+		const ok = await pi.handler(ev("grep a f || grep b f"));
+		if (!ok || ok.isError !== false) throw new Error("две probe-команды через || не прикрыты");
+	});
+
+	await check("бинарь по полному пути (/bin/grep) тоже штатный", async () => {
+		const res = await pi.handler(ev("/bin/grep x f"));
+		if (!res || res.isError !== false) throw new Error("не снят isError для /bin/grep");
+	});
+
 	await check("успешный результат не трогается", async () => {
 		const e = ev("grep foo a.txt");
 		e.isError = false;

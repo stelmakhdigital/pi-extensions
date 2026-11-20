@@ -27,6 +27,7 @@ import * as path from "node:path";
 const STATUS_KEY = " a-edit-fresh";
 
 const fresh = new Map<string, number>(); // канон. путь → mtimeMs на момент read/write/edit
+const PENDING_WRITE = -1; // write вызван, tool_result ещё не обработан
 
 function mtimeMs(abs: string): number | null {
 	try {
@@ -48,11 +49,26 @@ export default function (pi: ExtensionAPI) {
 
 	const onToolCall = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> => {
 		if (disabled) return;
+		// Параллельные вызовы одного ассистентского сообщения префлайтятся
+		// последовательно, а tool_result'ы приходят позже всех tool_call'ов
+		// (docs/extensions.md, Tool Events). Поэтому read/write из того же хода
+		// помечаем здесь — иначе соседний edit ложно блокируется.
+		if (isToolCallEventType("read", event)) {
+			const absR = resolve(ctx, String(event.input.path ?? ""));
+			const mtR = mtimeMs(absR);
+			if (mtR !== null) fresh.set(absR, mtR);
+			return;
+		}
+		if (isToolCallEventType("write", event)) {
+			fresh.set(resolve(ctx, String(event.input.path ?? "")), PENDING_WRITE);
+			return;
+		}
 		if (!isToolCallEventType("edit", event)) return;
 		const abs = resolve(ctx, String(event.input.path ?? ""));
 		const mt = mtimeMs(abs);
 		if (mt === null) return; // файла нет — пусть edit сообщит об этом сам
 		const seen = fresh.get(abs);
+		if (seen === PENDING_WRITE) return; // write того же хода: mtime поставит его tool_result
 		if (seen === undefined) {
 			return {
 				block: true,
@@ -72,11 +88,16 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const onToolResult = async (event: ToolResultEvent, ctx: ExtensionContext): Promise<undefined> => {
-		if (disabled || event.isError) return;
-		if (event.toolName !== "read" && event.toolName !== "write" && event.toolName !== "edit") return;
+		if (disabled) return;
 		const raw = String((event.input as { path?: unknown }).path ?? "");
 		if (!raw) return;
 		const abs = resolve(ctx, raw);
+		if (event.isError) {
+			// Неудавшийся write не делает файл свежим — снимаем пендинг.
+			if (event.toolName === "write" && fresh.get(abs) === PENDING_WRITE) fresh.delete(abs);
+			return;
+		}
+		if (event.toolName !== "read" && event.toolName !== "write" && event.toolName !== "edit") return;
 		const mt = mtimeMs(abs);
 		if (mt !== null) fresh.set(abs, mt);
 	};
