@@ -92,6 +92,10 @@ function extractBashPaths(command: string): string[] {
 		if (before && (before === ":" || before === "/" || before === "~" || /[A-Za-z0-9_.`}$]/.test(before))) continue;
 		const after = command[idx + m[0].length];
 		if (after === "$" || after === "*") continue;
+		// Односегментные токены (`/models`, `/app`, `/Flag`) — почти всегда пути
+		// внутри контейнера (docker exec) или обрезанные флаги, а не хостовые
+		// пути; мусорный хостовый путь из одного сегмента в корне не существует.
+		if (!m[0].slice(1).includes("/")) continue;
 		found.add(m[0]);
 	}
 	// Путь из дома: ~/… (и сам ~); только в начале токена (не `file~1`)
@@ -125,7 +129,12 @@ export default function (pi: ExtensionAPI) {
 		const cwd = ctx.cwd || process.cwd();
 		root = canonical(cwd);
 
-		const raw: string[] = [path.join(os.homedir(), ".pi")]; // встроенный дефолт
+		// Встроенный дефолт: ~/.pi + read-only системные root'ы и scratch /tmp —
+	// иначе каждый `bash /bin/...`, `tar -C /tmp` и `docker exec ... /tmp/...`
+	// даёт ложный блок. Риск осознанный: запись в /tmp не ограничивается.
+	// shortcut: /tmp наружу открыт; при жалобе на мусор в /tmp убрать и держать
+	// per-project allowlist в .dir-guard.json.
+	const raw: string[] = [path.join(os.homedir(), ".pi"), "/tmp", "/private/tmp", "/dev", "/bin", "/usr/bin", "/sbin"];
 		const flagVal = pi.getFlag("dir-guard-allow");
 		// Парсер флагов pi знает только одиночные значения (Map, последнее
 		// переопределяет) → поддерживаем коммат-список в одном флаге.

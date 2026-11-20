@@ -147,6 +147,27 @@ writeFileSync(join(outside, "secret.txt"), "s3cr3t");
 		if (res !== undefined) throw new Error("ложный блок на ~/…: " + JSON.stringify(res));
 	});
 
+	await check("(e8) односегментные токены (docker exec … /models, /app) не блокируются", async () => {
+		for (const command of ["docker exec ctr ls /models", "cd /app && make", "grep -r x /MTP"]) {
+			const res = await handler({ toolName: "bash", input: { command } }, ctx);
+			if (res !== undefined) throw new Error(`ложный блок на "${command}": ${JSON.stringify(res)}`);
+		}
+	});
+
+	await check("(e9) /tmp и read-only системные root'ы в дефолтном allowlist", async () => {
+		for (const command of [
+			"tar xzf a.tgz -C /tmp/out",
+			"echo hi > /private/tmp/scratch.txt",
+			"bash /bin/bash -c 'echo hi'",
+			"/usr/bin/env python3 s.py",
+		]) {
+			const res = await handler({ toolName: "bash", input: { command } }, ctx);
+			if (res !== undefined) throw new Error(`ложный блок на "${command}": ${JSON.stringify(res)}`);
+		}
+		const res = await handler({ toolName: "bash", input: { command: "cat /etc/hosts" } }, ctx);
+		if (res === undefined) throw new Error("/etc/hosts не заблокировался — allowlist шире задуманного");
+	});
+
 	await check("(f) symlink-escape блокируется (symlink в CWD → наружу)", async () => {
 		const link = join(cwd, "sneaky-link");
 		if (!existsSync(link)) symlinkSync(outside, link);
