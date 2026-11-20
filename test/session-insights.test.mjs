@@ -183,12 +183,31 @@ await check("insights: --cwd фильтрует, пустая выборка => 
 
 // ── surface.py ──
 
-await check("surface: считает вес always-on по файлам на диске", () => {
-	const s = JSON.parse(run("surface.py", ["--json"]));
-	assert(s.totals.always_on_chars > 0, "always_on_chars должен быть > 0");
-	assert(s.totals.skills_count >= 1, `skills=${s.totals.skills_count}`);
+// Фикстура agent-директории: surface не должен зависеть от реально
+// установленных скиллов (на CI-раннере ~/.pi/agent пуст).
+const agentDir = join(tmp, "agent");
+mkdirSync(join(agentDir, "skills", "demo-skill"), { recursive: true });
+writeFileSync(join(agentDir, "AGENTS.md"), "# Правила\n\n- перечитывай файл перед edit\n");
+writeFileSync(join(agentDir, "skills", "demo-skill", "SKILL.md"),
+	"---\nname: demo-skill\ndescription: >-\n  Короткое описание в первую строку не влезает,\n  поэтому оно написано блоком с переносами.\n---\n\n# Тело скилла\n\naaa\n");
+
+await check("surface: description блоком и AGENTS.md учтены, чужие копии пропущены", () => {
+	const envFix = { ...env, PI_CODING_AGENT_DIR: agentDir };
+	const s = JSON.parse(execFileSync("python3", [join(SCRIPTS, "surface.py"), "--json"], { encoding: "utf8", env: envFix }));
+	assert(s.totals.skills_count === 1, `skills=${s.totals.skills_count}`);
 	const one = s.skills[0];
+	assert(one.name === "demo-skill", one.name);
+	// блочный скаляр целиком, а не первая строка
+	assert(one.description_chars > 60, `description_chars=${one.description_chars}`);
 	assert(one.always_on_chars >= one.description_chars, "описание не может весить больше всего скилла");
+	assert(one.body_chars < one.description_chars * 100, "тело не должно входить в always-on");
+	assert(s.agents_md.length === 1 && s.totals.agents_md_chars > 0, JSON.stringify(s.agents_md));
+});
+
+await check("surface: пустой агент-каталог не роняет и даёт нули", () => {
+	const envEmpty = { ...env, PI_CODING_AGENT_DIR: join(tmp, "agent-empty") };
+	const s = JSON.parse(execFileSync("python3", [join(SCRIPTS, "surface.py"), "--json"], { encoding: "utf8", env: envEmpty }));
+	assert(s.totals.always_on_chars === 0 && s.totals.skills_count === 0, JSON.stringify(s.totals));
 });
 
 // ── ledger.py ──
