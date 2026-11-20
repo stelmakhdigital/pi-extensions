@@ -32,7 +32,7 @@
       "extensions/dir-guard/index.ts",
       "extensions/edit-fresh/index.ts",
       "extensions/bash-exit-hint/index.ts",
-			"extensions/text-guard/index.ts",
+      "extensions/text-guard/index.ts",
       "extensions/ask-user-question/index.ts",
       "extensions/subagents/index.ts",
       "extensions/sandbox/index.ts",

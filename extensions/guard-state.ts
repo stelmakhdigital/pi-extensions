@@ -11,8 +11,8 @@
  * читается — свежее включённое состояние (fail-safe по умолчанию).
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import * as fs from "node:fs";
 import * as path from "node:path";
+import { readJson, writeJson } from "./json-store.ts";
 
 type GuardState = Record<string, Record<string, unknown>>;
 
@@ -21,12 +21,8 @@ function stateFile(): string {
 }
 
 function readAll(): GuardState {
-	try {
-		const parsed: unknown = JSON.parse(fs.readFileSync(stateFile(), "utf8"));
-		return (parsed && typeof parsed === "object" ? parsed : {}) as GuardState;
-	} catch {
-		return {};
-	}
+	const parsed = readJson<GuardState>(stateFile());
+	return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
 }
 
 /** Состояние одного расширения ({} при отсутствии файла/ключа). */
@@ -38,11 +34,7 @@ export function loadGuard(key: string): Record<string, unknown> {
 export function saveGuard(key: string, patch: Record<string, unknown>): void {
 	const all = readAll();
 	all[key] = { ...(all[key] ?? {}), ...patch };
-	fs.mkdirSync(path.dirname(stateFile()), { recursive: true });
-	// Атомарно: tmp с pid + rename (два процесса pi не должны читать полурезанный JSON).
-	const tmp = `${stateFile()}.${process.pid}.tmp`;
-	fs.writeFileSync(tmp, JSON.stringify(all, null, 2));
-	fs.renameSync(tmp, stateFile());
+	writeJson(stateFile(), all);
 }
 
 /**

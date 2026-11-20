@@ -3,10 +3,11 @@
  * Files: ~/.pi/agent/subagents.json and <cwd>/.pi/subagents.json
  * (project file honored only for trusted projects).
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { readJson } from "../json-store.ts";
 
 export interface TmuxConfig {
 	handoff: "ask" | "auto" | "never";
@@ -47,13 +48,8 @@ export function projectConfigPath(cwd: string): string {
 }
 
 function readJsonFile(path: string): Record<string, unknown> | undefined {
-	if (!existsSync(path)) return undefined;
-	try {
-		const parsed = JSON.parse(readFileSync(path, "utf8"));
-		return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : undefined;
-	} catch {
-		return undefined;
-	}
+	const parsed = readJson<Record<string, unknown>>(path);
+	return parsed && typeof parsed === "object" ? parsed : undefined;
 }
 
 function deepMerge(base: SubagentsConfig, overlay: Record<string, unknown>): SubagentsConfig {

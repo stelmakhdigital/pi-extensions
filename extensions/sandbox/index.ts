@@ -36,10 +36,11 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, statSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, statSync, mkdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readJson, writeJson } from "../json-store.ts";
 
 type Level = "off" | "dev" | "untrusted" | "vm";
 type Platform = "linux" | "macos" | "unsupported";
@@ -61,11 +62,7 @@ const TRUST_PROMPT_OPTIONS: Array<{ label: string; level: Level }> = [
 const trustStoreFile = (): string => process.env.PI_SANDBOX_TRUST_FILE ?? join(homedir(), ".pi", "agent", "sandbox-trust.json");
 type TrustStore = Record<string, { level: Level; at: number }>;
 function loadTrustStore(): TrustStore {
-	try {
-		return JSON.parse(readFileSync(trustStoreFile(), "utf8")) as TrustStore;
-	} catch {
-		return {};
-	}
+	return readJson<TrustStore>(trustStoreFile()) ?? {};
 }
 function savedLevel(root: string): Level | null {
 	const e = loadTrustStore()[root];
@@ -83,13 +80,10 @@ function forgetLevel(root: string) {
 	delete store[root];
 	saveTrustStore(store);
 }
-// tmp+rename (как в guard-state): полусторый JSON не должен переживать падение процесса
+// tmp+rename и права 0o600 — в writeJson (json-store)
 function saveTrustStore(store: TrustStore) {
 	try {
-		mkdirSync(dirname(trustStoreFile()), { recursive: true });
-		const tmp = trustStoreFile() + "." + process.pid + ".tmp";
-		writeFileSync(tmp, JSON.stringify(store, null, 2), { mode: 0o600 });
-		renameSync(tmp, trustStoreFile());
+		writeJson(trustStoreFile(), store, 0o600);
 	} catch {
 		// не критично: решение действует в этой сессии в любом случае
 	}

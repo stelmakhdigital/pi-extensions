@@ -43,6 +43,7 @@ import {
 	resolveSessionMode,
 } from "./agents.ts";
 import { EMPTY_CHILD_USAGE, createChildSession, lastAssistantText, readChildUsage, sessionsRootFor } from "./session.ts";
+import { readJson as readJsonSafe } from "../json-store.ts";
 
 const CHILD_SCRIPT = fileURLToPath(new URL("./child.ts", import.meta.url));
 const PARENT_SCRIPT = fileURLToPath(new URL("./index.ts", import.meta.url));
@@ -194,15 +195,6 @@ export async function waitForShellReady(
 		}
 		if (Date.now() >= deadline) return false;
 		await sleep(Math.min(pollMs, Math.max(1, deadline - Date.now())));
-	}
-}
-
-function readJsonSafe<T>(file: string): T | undefined {
-	try {
-		if (!existsSync(file)) return undefined;
-		return JSON.parse(readFileSync(file, "utf8")) as T;
-	} catch {
-		return undefined;
 	}
 }
 

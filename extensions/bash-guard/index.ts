@@ -57,10 +57,16 @@ function anyArgStartsWith(args: string[], prefix: string): boolean {
 	return args.some((a) => a.startsWith(prefix));
 }
 
-/** Кластерный флажок с буквой (-r, -rf, -Rf), а не путь/строка, содержащая «-r». */
+/**
+ * Кластерный флажок с буквой в ЛЮБОЙ позиции (-r, -rf, -Rf, -fr), а не путь
+ * или строка, содержащая «-r». Буква не обязана быть последней: без этого
+ * `rm -rf` не давал причину «рекурсивное удаление». Cluster — только короткие
+ * флагопакеты (до 4 букв): `-recursive` не считается (это не кластер).
+ */
 function hasShortFlagWith(args: string[], letters: string): boolean {
-	const re = new RegExp(`^-[a-zA-Z]*[${letters}]$`);
-	return args.some((a) => re.test(a));
+	const cluster = /^-[a-zA-Z]{1,4}$/;
+	const letter = new RegExp(`[${letters}]`);
+	return args.some((a) => cluster.test(a) && letter.test(a));
 }
 
 /** Read-only git-подкоманды: не мутируют репозиторий и конфиг. Консервативный список: в сомнении — не read-only. */
@@ -89,9 +95,52 @@ function isGitReadonly(sub: string | undefined, subArgs: string[]): boolean {
 	}
 }
 
+/**
+ * Деструктивные утилиты дисков/томов (Linux: mkfs.*, wipefs, parted, fdisk,
+ * gdisk/sgdisk, lsblk, cryptsetup, LVM, zpool; macOS: diskutil, hdiutil, gpt,
+ * newfs_*, asr). «*» на конце — префикс имени. Sev по умолчанию «high»;
+ * исключение помечено явно.
+ */
+const DISK_COMMANDS: Array<{ match: string; reason: string; sev?: Severity }> = [
+	{ match: "mkfs*", reason: "mkfs (форматирование файловой системы)" },
+	{ match: "newfs_*", reason: "newfs_* (форматирование файловой системы)" },
+	{ match: "wipefs", reason: "wipefs (стирание сигнатуры диска)" },
+	{ match: "diskutil", reason: "diskutil (команда управления дисками)" },
+	{ match: "hdiutil", reason: "hdiutil (команда управления образами дисков)" },
+	{ match: "gpt", reason: "gpt (манипуляции с таблицей разделов)" },
+	{ match: "asr", reason: "asr (Apple Software Restore; может перезаписать тома)" },
+	{ match: "parted", reason: "parted (управление дисками/разделами)" },
+	{ match: "fdisk", reason: "fdisk (управление дисками/разделами)" },
+	{ match: "gdisk", reason: "gdisk (управление дисками/разделами)" },
+	{ match: "sgdisk", reason: "sgdisk (управление дисками/разделами)" },
+	{ match: "cryptsetup", reason: "cryptsetup (управление шифрованием дисков)" },
+	{ match: "pvcreate", reason: "pvcreate (управление томами LVM)" },
+	{ match: "vgcreate", reason: "vgcreate (управление томами LVM)" },
+	{ match: "lvcreate", reason: "lvcreate (управление томами LVM)" },
+	{ match: "zpool", reason: "zpool (управление пулами ZFS)" },
+	// lsblk обычно read-only, но тоже про диски; спрашиваем по требованию.
+	{ match: "lsblk", reason: "lsblk (список дисков)", sev: "medium" },
+];
+
+/** Слить частичные риски: severity — максимальный, причины — без дубликатов.
+ *  Пустой (или только с пустыми причинами) вход — null: «чисто». */
+function mergeRisks(parts: Array<Risk | null>): Risk | null {
+	const hit = parts.filter((r): r is Risk => !!r && r.reasons.length > 0);
+	if (hit.length === 0) return null;
+	return {
+		severity: hit.some((r) => r.severity === "high") ? "high" : "medium",
+		reasons: [...new Set(hit.flatMap((r) => r.reasons))],
+	};
+}
+
 function analyzeSegment(seg: Token[], depth = 0, strictGit = false, skipRm = false): Risk | null {
 	const reasons: string[] = [];
+	// Уровень по умолчанию — «medium»; проверки лишь поднимают его до «high».
 	let severity: Severity = "medium";
+	const high = (reason: string) => {
+		severity = "high";
+		reasons.push(reason);
+	};
 
 	const ops = seg.filter(isOpToken).map((o) => o.op);
 	const args = tokensToStrings(seg);
@@ -105,14 +154,12 @@ function analyzeSegment(seg: Token[], depth = 0, strictGit = false, skipRm = fal
 
 	// Редирекции/конвейеры обрабатываются на всю команду, но часть проверок оставляем и по сегментам.
 	if (ops.includes("|") && (args.includes("sh") || args.includes("bash") || args.includes("zsh") || args.includes("fish"))) {
-		reasons.push("конвейер в шелл (возможное выполнение удалённого кода)");
-		severity = "high";
+		high("конвейер в шелл (возможное выполнение удалённого кода)");
 	}
 
 	// sudo
 	if (cmd === "sudo") {
-		reasons.push("sudo (повышенные привилегии)");
-		severity = "high";
+		high("sudo (повышенные привилегии)");
 	}
 
 	// Вложенная команда внутри sh -c / bash -c / zsh -c / …: разбираем её тоже (глубина ≤ 2).
@@ -131,19 +178,17 @@ function analyzeSegment(seg: Token[], depth = 0, strictGit = false, skipRm = fal
 
 	// rm/rmdir/unlink
 	if (!skipRm && (cmd === "rm" || cmd === "rmdir" || cmd === "unlink")) {
-		severity = "high";
-		reasons.push(`${cmd} (удаление файлов)`);
+		high(`${cmd} (удаление файлов)`);
 		if (hasShortFlagWith(rest, "rR") || rest.includes("--recursive")) reasons.push("рекурсивное удаление (-r/-R)");
 		if (hasShortFlagWith(rest, "f") || rest.includes("--force")) reasons.push("принудительное удаление (-f)");
 	}
 
 	// find -delete
 	if (cmd === "find" && rest.includes("-delete")) {
-		severity = "high";
-		reasons.push("find -delete (массовое удаление)");
+		high("find -delete (массовое удаление)");
 	}
 
-		// git-операции: спрашиваем на мутирующие команды; read-only (status/log/diff/…)
+	// git-операции: спрашиваем на мутирующие команды; read-only (status/log/diff/…)
 	// — без запроса, если не задан --bash-guard-git-strict
 	if (cmd === "git") {
 		const sub = rest[0];
@@ -190,164 +235,89 @@ function analyzeSegment(seg: Token[], depth = 0, strictGit = false, skipRm = fal
 
 	// truncate
 	if (cmd === "truncate") {
-		severity = severity === "high" ? "high" : "medium";
 		reasons.push("truncate (изменение размера на месте, может стереть содержимое)");
 	}
 
 	// dd of=
 	if (cmd === "dd" && (anyArgStartsWith(rest, "of=") || rest.includes("of"))) {
-		severity = "high";
-		reasons.push("dd с файлом/устройством вывода (может перезаписать данные)");
+		high("dd с файлом/устройством вывода (может перезаписать данные)");
 	}
 
-	// Управление дисками/томами (спрашивать агрессивно; высокий риск)
-	// Linux: mkfs.*, wipefs, parted, fdisk, gdisk/sgdisk, lsblk, cryptsetup, LVM-инструменты, zpool
-	// macOS: diskutil, hdiutil, gpt, newfs_*, asr
-	if (cmd.startsWith("mkfs")) {
-		severity = "high";
-		reasons.push("mkfs (форматирование файловой системы)");
-	}
-	if (cmd.startsWith("newfs_")) {
-		severity = "high";
-		reasons.push("newfs_* (форматирование файловой системы)");
-	}
-	if (cmd === "wipefs") {
-		severity = "high";
-		reasons.push("wipefs (стирание сигнатуры диска)");
-	}
-	if (cmd === "diskutil") {
-		severity = "high";
-		reasons.push("diskutil (команда управления дисками)");
-		if (rest.includes("eraseDisk") || rest.includes("eraseVolume")) {
+	// Управление дисками/томами — по таблице DISK_COMMANDS
+	const disk = DISK_COMMANDS.find((r) => (r.match.endsWith("*") ? cmd.startsWith(r.match.slice(0, -1)) : cmd === r.match));
+	if (disk) {
+		if (disk.sev === "high" || disk.sev === undefined) severity = "high";
+		reasons.push(disk.reason);
+		if (cmd === "diskutil" && (rest.includes("eraseDisk") || rest.includes("eraseVolume"))) {
 			reasons.push("diskutil erase (разрушительная операция с диском)");
 		}
-	}
-	if (cmd === "hdiutil") {
-		severity = "high";
-		reasons.push("hdiutil (команда управления образами дисков)");
-	}
-	if (cmd === "gpt") {
-		severity = "high";
-		reasons.push("gpt (манипуляции с таблицей разделов)");
-	}
-	if (cmd === "asr") {
-		severity = "high";
-		reasons.push("asr (Apple Software Restore; может перезаписать тома)");
-	}
-	if (cmd === "parted" || cmd === "fdisk" || cmd === "gdisk" || cmd === "sgdisk") {
-		severity = "high";
-		reasons.push(`${cmd} (управление дисками/разделами)`);
-	}
-	if (cmd === "lsblk") {
-		// Обычно read-only, но тоже про диски; спрашиваем по требованию.
-		severity = severity === "high" ? "high" : "medium";
-		reasons.push("lsblk (список дисков)");
-	}
-	if (cmd === "cryptsetup") {
-		severity = "high";
-		reasons.push("cryptsetup (управление шифрованием дисков)");
-	}
-	if (cmd === "pvcreate" || cmd === "vgcreate" || cmd === "lvcreate") {
-		severity = "high";
-		reasons.push(`${cmd} (управление томами LVM)`);
-	}
-	if (cmd === "zpool") {
-		severity = "high";
-		reasons.push("zpool (управление пулами ZFS)");
 	}
 
 	// chmod/chown рекурсивные
 	if (cmd === "chmod" && (rest.includes("-R") || rest.includes("--recursive"))) {
-		severity = severity === "high" ? "high" : "medium";
 		reasons.push("chmod -R (рекурсивное изменение прав)");
 	}
 	if (cmd === "chown" && (rest.includes("-R") || rest.includes("--recursive"))) {
-		severity = severity === "high" ? "high" : "medium";
 		reasons.push("chown -R (рекурсивное изменение владельцев)");
 	}
 
 	// mv/cp с перезаписью
 	if (cmd === "mv" && (rest.includes("-f") || rest.includes("--force"))) {
-		severity = severity === "high" ? "high" : "medium";
 		reasons.push("mv --force/-f (может перезаписать файлы)");
 	}
 	if (cmd === "cp" && (rest.includes("-f") || rest.includes("--force"))) {
-		severity = severity === "high" ? "high" : "medium";
 		reasons.push("cp --force/-f (может перезаписать файлы)");
 	}
 
 	// sed/perl in-place
 	if (cmd === "sed" && (hasFlag(rest, "-i") || rest.includes("--in-place"))) {
-		severity = severity === "high" ? "high" : "medium";
 		reasons.push("sed -i (изменение файла на месте)");
 	}
 	if (cmd === "perl" && (rest.includes("-pi") || (rest.includes("-p") && rest.includes("-i")))) {
-		severity = severity === "high" ? "high" : "medium";
 		reasons.push("perl -pi/-i (изменение файла на месте)");
 	}
 
 	// kill/shutdown/systemctl
 	if (cmd === "kill" || cmd === "pkill" || cmd === "killall") {
-		severity = severity === "high" ? "high" : "medium";
 		reasons.push(`${cmd} (завершение процессов)`);
-		if (rest.includes("-9")) {
-			severity = "high";
-			reasons.push("SIGKILL (-9)");
-		}
+		if (rest.includes("-9")) high("SIGKILL (-9)");
 	}
 	if (cmd === "shutdown" || cmd === "reboot") {
-		severity = "high";
-		reasons.push(`${cmd} (операции электропитания системы)`);
+		high(`${cmd} (операции электропитания системы)`);
 	}
 	if (cmd === "systemctl" && (rest.includes("stop") || rest.includes("disable"))) {
-		severity = severity === "high" ? "high" : "medium";
 		reasons.push("systemctl stop/disable (остановка сервисов)");
 	}
 
 	// Паттерны удалённого выполнения
 	if ((cmd === "curl" || cmd === "wget") && ops.includes("|")) {
-		severity = "high";
-		reasons.push("конвейер curl/wget (возможное выполнение удалённого кода)");
+		high("конвейер curl/wget (возможное выполнение удалённого кода)");
 	}
 
 	// Удаления в инфраструктуре
 	if (cmd === "kubectl" && rest[0] === "delete") {
-		severity = "high";
-		reasons.push("kubectl delete (удаление ресурсов)");
+		high("kubectl delete (удаление ресурсов)");
 	}
 	if (cmd === "terraform" && rest[0] === "destroy") {
-		severity = "high";
-		reasons.push("terraform destroy (снос инфраструктуры)");
+		high("terraform destroy (снос инфраструктуры)");
 	}
 	if (cmd === "aws" && rest[0] === "s3" && rest[1] === "rm" && rest.includes("--recursive")) {
-		severity = "high";
-		reasons.push("aws s3 rm --recursive (массовое удаление)");
+		high("aws s3 rm --recursive (массовое удаление)");
 	}
 	if (cmd === "gcloud" && rest.includes("delete")) {
-		severity = "high";
-		reasons.push("gcloud delete (удаление ресурсов)");
+		high("gcloud delete (удаление ресурсов)");
 	}
 
 	if (reasons.length === 0) return null;
 	return { severity, reasons };
 }
 
-function analyzeBashCommand(command: string, depth = 0, strictGit = false, skipRm = false): Risk | null {
+export function analyzeBashCommand(command: string, depth = 0, strictGit = false, skipRm = false): Risk | null {
 	// Каждую строку разбираем отдельно: shell-quote теряет переносы строк, и без этого
 	// опасная команда, «спрятанная» за безобидной первой строкой (echo 1\nrm -rf /),
 	// ушла бы незамеченной.
 	const lines = command.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-	const reasons: string[] = [];
-	let severity: Severity = "medium";
-	for (const line of lines) {
-		const lineRisk = analyzeLine(line, depth, strictGit, skipRm);
-		if (!lineRisk) continue;
-		if (lineRisk.severity === "high") severity = "high";
-		for (const r of lineRisk.reasons) reasons.push(r);
-	}
-	const uniq = [...new Set(reasons)];
-	if (uniq.length === 0) return null;
-	return { severity, reasons: uniq };
+	return mergeRisks(lines.map((l) => analyzeLine(l, depth, strictGit, skipRm)));
 }
 
 function analyzeLine(line: string, depth: number, strictGit: boolean, skipRm: boolean): Risk | null {
@@ -360,13 +330,11 @@ function analyzeLine(line: string, depth: number, strictGit: boolean, skipRm: bo
 	}
 
 	const reasons: string[] = [];
-	let severity: Severity = "medium";
 
-	// Проверки операторов на всю команду
+	// Проверки операторов на всю команду (уровень «medium»; высокий дают сегменты ниже)
 	const ops = tokens.filter(isOpToken).map((t) => t.op);
 	if (ops.some((op) => op === ">" || op === ">>" || op === "2>" || op === "2>>")) {
 		reasons.push("редирекция вывода (может перезаписать файлы)");
-		severity = severity === "high" ? "high" : "medium";
 	}
 	if (ops.includes("<")) {
 		reasons.push("редирекция ввода (подозрительно)");
@@ -377,17 +345,10 @@ function analyzeLine(line: string, depth: number, strictGit: boolean, skipRm: bo
 
 	// Сегменты (разбивка по &&, ||, ;)
 	const segments = splitOnOps(tokens, ["&&", "||", ";"]);
-	for (const seg of segments) {
-		const segRisk = analyzeSegment(seg, depth, strictGit, skipRm);
-		if (!segRisk) continue;
-		if (segRisk.severity === "high") severity = "high";
-		for (const r of segRisk.reasons) reasons.push(r);
-	}
-
-	// Убираем дубликаты причин
-	const uniq = [...new Set(reasons)];
-	if (uniq.length === 0) return null;
-	return { severity, reasons: uniq };
+	return mergeRisks([
+		{ severity: "medium", reasons },
+		...segments.map((seg) => analyzeSegment(seg, depth, strictGit, skipRm)),
+	]);
 }
 
 async function promptRunOrAbort(ctx: any, command: string, risk: Risk): Promise<"run" | "abort"> {
