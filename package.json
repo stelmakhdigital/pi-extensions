@@ -1,6 +1,6 @@
 {
   "name": "pi-extensions",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Коллекция небольших расширений для pi (git-пакет: устанавливай целиком или по отдельности через фильтры)",
   "keywords": [
     "pi-package"
@@ -27,6 +27,7 @@
   },
   "pi": {
     "extensions": [
+      "extensions/yolo/index.ts",
       "extensions/prompt-snippets/index.ts",
       "extensions/bash-guard/index.ts",
       "extensions/dir-guard/index.ts",

@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isYolo } from "../yolo-mode.ts";
 
 /**
  * edit-fresh: блокирует вызовы `edit`, если файл не читали в этой сессии или
@@ -38,6 +39,8 @@ function mtimeMs(abs: string): number | null {
 }
 
 export default function (pi: ExtensionAPI) {
+	// yolo: edit без свежего read разрешён (см. extensions/yolo).
+	if (isYolo()) return;
 	pi.registerFlag("edit-fresh-disabled", {
 		description: "Запустить сессию без edit-fresh (блокировки edit без свежего read).",
 		type: "boolean",

@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
+import { isYolo } from "../yolo-mode.ts";
 
 /**
  * dir-guard: жёсткий блок tool-вызовов (read/write/edit/bash), чьи пути уходят
@@ -121,6 +122,8 @@ function extractBashPaths(command: string): string[] {
 }
 
 export default function (pi: ExtensionAPI) {
+	// yolo: путь-блокировки сняты (см. extensions/yolo).
+	if (isYolo()) return;
 	// Состояние персистентно: <agentDir>/guard-state.json (переживает /reload и
 	// продолжение pi -c; новая сессия pi стартует с дефолтом). В субагентах файл
 	// сознательно не читается — свежее включённое состояние (fail-safe по умолчанию).

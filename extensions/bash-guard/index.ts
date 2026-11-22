@@ -4,6 +4,7 @@ import type { SelectItem } from "@earendil-works/pi-tui";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 import { parse as shellParse } from "shell-quote";
 import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
+import { isYolo } from "../yolo-mode.ts";
 
 /**
  * Перехватывает вызовы инструмента `bash` и применяет разную защиту в зависимости
@@ -477,6 +478,9 @@ const MAIN_DISABLED_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnl
 const BASH_GUARD_STATUS_KEY = " z-bash-guard";
 
 export default function (pi: ExtensionAPI) {
+	// yolo: автономный режим — ни запросов, ни блоков, «пол» тоже снят по явному
+	// запросу пользователя (см. extensions/yolo).
+	if (isYolo()) return;
 	if (_isSubagent) {
 		// Режим субагента: жёсткий блок катастрофических операций, без запросов.
 		pi.on("tool_call", async (event) => {

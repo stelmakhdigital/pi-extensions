@@ -7,6 +7,7 @@
 
 | Расширение | Назначение |
 |---|---|
+| [yolo](extensions/yolo/) | Автономный режим `--yolo` / `PI_YOLO=1`: pi стартует без единого вопроса (доверие проекту, tmux-handoff) и без блокировок guard'ов, включая «пол» bash-guard; бейдж `YOLO` бейдж `YOLO` в футере. Подробности — [Автономный запуск без вопросов](#yolo-автономный-запуск-без-вопросов) |
 | [prompt-snippets](extensions/prompt-snippets/) | Комбинируемые одноцелевые промпт-правила: включаются на каждое сообщение через меню (`alt+s` / `/snippets`), вставляются перед или после вашего текста |
 | [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах, toggle персистентны (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
 | [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/bash, чьи пути уходят вне рабочей директории (CWD) и allowlist'а: realpath-канонизация (symlink-escape блокируется), allowlist — `$HOME/.pi` (дефолт) + `--dir-guard-allow` + `.dir-guard.json` в CWD, `/dir-guard` и бейдж `DR OFF`, состояние персистентно (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
@@ -15,6 +16,20 @@
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
 | [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41t/s (0.8s)` (EMA по ответам, на лету при стриминге; в скобках TTFT — время до первого токена; aborted/короткие ответы не считаются) |
 | [subagents](extensions/subagents/) | Асинхронные подагенты в tmux: спавн в панель (не блокирует основную сессию), live-виджет статусов и токенов (starting/active/waiting/stalled), steer-результат, resume/interrupt, agent-definitions (`.pi/agents/*.md`) + 4 bundled-агента (planner/scout/worker/reviewer); команды `/spawn`, `/subagents [doctor|status]`, `/iterate [agent] <task>`, `/plan <task>` (planner→worker→reviewer); `spawning`/`deny-tools` в frontmatter; вне tmux — handoff (перезапуск pi внутри tmux с продолжением сессии) |
+
+## Yolo: автономный запуск без вопросов
+
+```bash
+pi --yolo "сделай задачу"                 # или
+PI_YOLO=1 pi "сделай задачу"              # переменная наследуется дочерними pi
+```
+
+Режим для мест, где в TUI никто не ответит: Orca-автоматизации, CI, `pi -p`,
+RPC. Убирает стартовые вопросы (доверие проекту, tmux-handoff) и снимает
+блокировки всех guard'ов этого репозитория, включая «пол» bash-guard.
+Для Orca проще задать `PI_YOLO=1` в окружении автоматизации, чем менять
+команду запуска. Подробно (что именно выключается и границы)
+в [extensions/yolo/README.md](extensions/yolo/README.md).
 
 ## Скиллы
 
@@ -51,6 +66,7 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 | Расширение | Фильтр |
 |---|---|
 | prompt-snippets | `extensions/prompt-snippets/*` |
+| yolo | `extensions/yolo/*` |
 | bash-guard | `extensions/bash-guard/*` |
 | dir-guard | `extensions/dir-guard/*` |
 | text-guard | `extensions/text-guard/*` |
@@ -274,6 +290,9 @@ Digest разделяет повторяющиеся строки промпто
 ```
 package.json                  # pi-манифест + зависимости (shell-quote)
 extensions/
+  yolo-mode.ts                # isYolo(): PI_YOLO или --yolo в argv
+  yolo/
+    index.ts                  # флаг --yolo, авто-доверие проекту, бейдж
   prompt-snippets/
     index.ts                  # расширение
     snippets/                 # сниппеты (по одному .md на правило)

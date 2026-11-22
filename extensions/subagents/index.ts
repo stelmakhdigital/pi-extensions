@@ -44,6 +44,7 @@ import {
 } from "./agents.ts";
 import { EMPTY_CHILD_USAGE, createChildSession, lastAssistantText, readChildUsage, sessionsRootFor } from "./session.ts";
 import { readJson as readJsonSafe } from "../json-store.ts";
+import { isYolo } from "../yolo-mode.ts";
 
 const CHILD_SCRIPT = fileURLToPath(new URL("./child.ts", import.meta.url));
 const PARENT_SCRIPT = fileURLToPath(new URL("./index.ts", import.meta.url));
@@ -796,6 +797,9 @@ function runTmuxHandoff(ctx: ExtensionContext): void {
 }
 
 async function maybeHandoff(ctx: ExtensionContext): Promise<void> {
+	// yolo: никто не ответит на вопрос «перезапустить ли pi в tmux» — не спрашиваем
+	// и сами в tmux не переезжаем (см. extensions/yolo).
+	if (isYolo()) return;
 	if (!handoffPossible(ctx)) return;
 	const config = configRef!;
 	if (config.tmux.handoff === "auto") {

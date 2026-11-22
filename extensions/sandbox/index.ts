@@ -41,6 +41,7 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readJson, writeJson } from "../json-store.ts";
+import { isYolo } from "../yolo-mode.ts";
 
 type Level = "off" | "dev" | "untrusted" | "vm";
 type Platform = "linux" | "macos" | "unsupported";
@@ -262,6 +263,9 @@ function wrapCommand(command: string, workspace: string, level: Level): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	// yolo: без пер-командной изоляции и без стартового вопроса о доверии проекту
+	// (на вопрос pi про проект отвечает расширение yolo).
+	if (isYolo()) return;
 	const platform = detectPlatform();
 	let backendOk: boolean | null = null;
 	function checkBackend(): boolean {

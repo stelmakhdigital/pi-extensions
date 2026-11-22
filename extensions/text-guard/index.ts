@@ -3,6 +3,7 @@ import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
+import { isYolo } from "../yolo-mode.ts";
 
 /**
  * text-guard: контроль текста, который пишет модель (документация, комментарии,
@@ -447,6 +448,8 @@ function validMode(v: unknown): Mode {
 }
 
 export default function (pi: ExtensionAPI) {
+	// yolo: контроль стиля текста не мешается (см. extensions/yolo).
+	if (isYolo()) return;
 	// Состояние персистентно: <agentDir>/guard-state.json (переживает /reload и
 	// продолжение pi -c; новая сессия pi стартует с дефолтом warn). В субагентах
 	// файл сознательно не читается — fail-safe: strict, автофикс выключен.
