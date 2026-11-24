@@ -41,7 +41,7 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readJson, writeJson } from "../json-store.ts";
-import { isYolo } from "../yolo-mode.ts";
+import { isYolo, onYoloChange } from "../yolo-mode.ts";
 
 type Level = "off" | "dev" | "untrusted" | "vm";
 type Platform = "linux" | "macos" | "unsupported";
@@ -263,9 +263,9 @@ function wrapCommand(command: string, workspace: string, level: Level): string {
 }
 
 export default function (pi: ExtensionAPI) {
-	// yolo: без пер-командной изоляции и без стартового вопроса о доверии проекту
-	// (на вопрос pi про проект отвечает расширение yolo).
-	if (isYolo()) return;
+	// yolo проверяется в хендлерах (а не в factory): тогда `/yolo` снимает и
+	// возвращает изоляцию посреди сессии (см. extensions/yolo).
+	let lastCtx: ExtensionContext | undefined;
 	const platform = detectPlatform();
 	let backendOk: boolean | null = null;
 	function checkBackend(): boolean {
@@ -324,6 +324,9 @@ export default function (pi: ExtensionAPI) {
 	/** Нативное событие pi: спрашивается при старте, если у проекта есть .pi-ресурсы.
 	 *  Отвечаем за pi: показываем свой (более богатый) выбор уровня. */
 	pi.on("project_trust", async (event, tctx) => {
+		// В yolo доверие отдаёт расширение yolo (оно первым в pi.extensions);
+		// здесь только не мешаем и не заводим своих промптов.
+		if (isYolo()) return { trusted: "undecided" as const };
 		const root = projectRoot(event.cwd);
 		trustPromptedRoots.add(root);
 		const marker = markerLevel(root);
@@ -339,7 +342,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		lastCtx = ctx;
 		badge(ctx, activeLevel(ctx));
+		if (isYolo()) return;
 		// Фолбэк для проектов БЕЗ .pi-ресурсов (pi их сам не спрашивает):
 		// первый интерактивный старт в неизвестной директории — разовый промпт.
 		if (event.reason !== "startup" || !ctx.hasUI) return;
@@ -362,6 +367,11 @@ export default function (pi: ExtensionAPI) {
 
 	function badge(ctx: ExtensionContext, level: Level) {
 		if (!ctx.hasUI) return;
+		// В yolo команды не оборачиваются — бейдж о песочнице был бы ложью.
+		if (isYolo()) {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+			return;
+		}
 		if (level === "off") {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			return;
@@ -371,7 +381,13 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus(STATUS_KEY, level === "untrusted" ? t.fg("warning", label) : t.fg("accent", label));
 	}
 
+	// `/yolo` меняет и этот бейдж: без изоляции значок песочницы не показываем.
+	onYoloChange(() => {
+		if (lastCtx) badge(lastCtx, activeLevel(lastCtx));
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
+		if (isYolo()) return;
 		if (event.toolName !== "bash") return;
 		const level = activeLevel(ctx);
 		if (level === "off") return;

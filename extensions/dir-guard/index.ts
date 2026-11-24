@@ -122,8 +122,6 @@ function extractBashPaths(command: string): string[] {
 }
 
 export default function (pi: ExtensionAPI) {
-	// yolo: путь-блокировки сняты (см. extensions/yolo).
-	if (isYolo()) return;
 	// Состояние персистентно: <agentDir>/guard-state.json (переживает /reload и
 	// продолжение pi -c; новая сессия pi стартует с дефолтом). В субагентах файл
 	// сознательно не читается — свежее включённое состояние (fail-safe по умолчанию).
@@ -204,7 +202,9 @@ export default function (pi: ExtensionAPI) {
 			!isToolCallEventType("edit", event) && !isToolCallEventType("bash", event)) {
 			return;
 		}
-		if (disabled) return;
+		// yolo: путь-блокировки сняты (см. extensions/yolo). Проверка в хендлере,
+		// а не в factory: тогда `/yolo` работает и на включение, и на возврат защиты.
+		if (disabled || isYolo()) return;
 		ensureReady(ctx);
 
 		if (isToolCallEventType("bash", event)) {

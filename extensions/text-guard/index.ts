@@ -3,7 +3,7 @@ import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
-import { isYolo } from "../yolo-mode.ts";
+import { isYolo, onYoloChange } from "../yolo-mode.ts";
 
 /**
  * text-guard: контроль текста, который пишет модель (документация, комментарии,
@@ -448,8 +448,6 @@ function validMode(v: unknown): Mode {
 }
 
 export default function (pi: ExtensionAPI) {
-	// yolo: контроль стиля текста не мешается (см. extensions/yolo).
-	if (isYolo()) return;
 	// Состояние персистентно: <agentDir>/guard-state.json (переживает /reload и
 	// продолжение pi -c; новая сессия pi стартует с дефолтом warn). В субагентах
 	// файл сознательно не читается — fail-safe: strict, автофикс выключен.
@@ -458,6 +456,10 @@ export default function (pi: ExtensionAPI) {
 
 	let cfg: Config = { allow: [], skip: [], words: [], ignore: new Set(), categories: new Set(ALL_CATEGORIES) };
 	let ready = false;
+	// yolo даёт «off» поверх сохранённого режима; проверяется в хендлере, тогда
+	// `/yolo` работает и на включение, и на возврат контроля (extensions/yolo).
+	const effectiveMode = (): Mode => (isYolo() ? "off" : mode);
+	let lastCtx: ExtensionContext | undefined;
 
 	// Статистика срабатываний за сессию (для /text-guard:stats и бейджа).
 	const stats = { tool: 0, chat: 0, byCategory: {} as Record<string, number>, byToken: {} as Record<string, number> };
@@ -487,6 +489,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function badge(ctx: ExtensionContext): string {
+		if (isYolo()) return "";
 		const { theme } = ctx.ui;
 		if (mode === "off") return theme.bg("toolErrorBg", theme.bold(theme.fg("error", " ⚠ TG OFF ")));
 		if (mode === "strict") return theme.bg("toolErrorBg", theme.bold(theme.fg("error", " ⚠ TG STRICT ")));
@@ -531,12 +534,12 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	const injectStyle = (event: { systemPromptOptions: { sections: Record<string, string> } }) => {
-		if (mode === "off") return;
+		if (effectiveMode() === "off") return;
 		event.systemPromptOptions.sections["writing-style"] = STYLE_SECTION;
 	};
 
 	const onMessageEnd = (event: { message?: { role?: string; content?: unknown } }, ctx: ExtensionContext) => {
-		if (mode === "off") return;
+		if (effectiveMode() === "off") return;
 		ensureReady(ctx);
 		const msg = event.message;
 		if (!msg || msg.role !== "assistant") return;
@@ -554,7 +557,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const onToolCall = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> => {
-		if (mode === "off") return;
+		if (effectiveMode() === "off") return;
 		ensureReady(ctx);
 
 		if (isToolCallEventType("write", event)) {
@@ -651,6 +654,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		lastCtx = ctx;
 		// Смена сессии внутри процесса может сменить cwd — конфиг-файл проекта
 		// перечитаем на первом же вызове (ensureReady).
 		ready = false;
@@ -671,6 +675,11 @@ export default function (pi: ExtensionAPI) {
 			saveGuard("text-guard", { mode });
 		}
 		refreshStatus(ctx);
+	});
+
+	// Бейдж TG STRICT/TG OFF не должен висеть, когда режим сняли командой /yolo.
+	onYoloChange(() => {
+		if (lastCtx) refreshStatus(lastCtx);
 	});
 
 	pi.registerCommand("text-guard", {

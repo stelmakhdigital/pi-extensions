@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isYolo } from "../yolo-mode.ts";
+import { isYolo, onYoloChange } from "../yolo-mode.ts";
 
 /**
  * edit-fresh: блокирует вызовы `edit`, если файл не читали в этой сессии или
@@ -39,8 +39,9 @@ function mtimeMs(abs: string): number | null {
 }
 
 export default function (pi: ExtensionAPI) {
-	// yolo: edit без свежего read разрешён (см. extensions/yolo).
-	if (isYolo()) return;
+	// yolo проверяется в хендлере (см. extensions/yolo): тогда `/yolo` работает
+	// и на включение, и на возврат блокировок посреди сессии.
+	let lastCtx: ExtensionContext | undefined;
 	pi.registerFlag("edit-fresh-disabled", {
 		description: "Запустить сессию без edit-fresh (блокировки edit без свежего read).",
 		type: "boolean",
@@ -51,7 +52,7 @@ export default function (pi: ExtensionAPI) {
 	const resolve = (ctx: ExtensionContext, p: string) => path.resolve(ctx.cwd || process.cwd(), p);
 
 	const onToolCall = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> => {
-		if (disabled) return;
+		if (disabled || isYolo()) return;
 		// Параллельные вызовы одного ассистентского сообщения префлайтятся
 		// последовательно, а tool_result'ы приходят позже всех tool_call'ов
 		// (docs/extensions.md, Tool Events). Поэтому read/write из того же хода
@@ -105,11 +106,19 @@ export default function (pi: ExtensionAPI) {
 		if (mt !== null) fresh.set(abs, mt);
 	};
 
+	const badge = (ctx: ExtensionContext) =>
+		ctx.ui.setStatus(STATUS_KEY, isYolo() ? undefined : ctx.ui.theme.fg("dim", " edit-fresh "));
+
 	if (!disabled) {
 		pi.on("tool_call", onToolCall);
 		pi.on("tool_result", onToolResult);
 		pi.on("session_start", async (_event, ctx) => {
-			ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", " edit-fresh "));
+			lastCtx = ctx;
+			badge(ctx);
+		});
+		// Бейдж «edit-fresh» не должен врать, что защита стоит, когда её сняли.
+		onYoloChange(() => {
+			if (lastCtx) badge(lastCtx);
 		});
 	}
 }

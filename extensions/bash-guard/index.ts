@@ -478,12 +478,11 @@ const MAIN_DISABLED_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnl
 const BASH_GUARD_STATUS_KEY = " z-bash-guard";
 
 export default function (pi: ExtensionAPI) {
-	// yolo: автономный режим — ни запросов, ни блоков, «пол» тоже снят по явному
-	// запросу пользователя (см. extensions/yolo).
-	if (isYolo()) return;
+	// yolo проверяется в хендлере: `/yolo` работает в обе стороны.
 	if (_isSubagent) {
 		// Режим субагента: жёсткий блок катастрофических операций, без запросов.
 		pi.on("tool_call", async (event) => {
+			if (isYolo()) return;
 			if (!isToolCallEventType("bash", event)) return;
 			const command = event.input.command;
 			const variants = floorVariants(command);
@@ -590,6 +589,9 @@ export default function (pi: ExtensionAPI) {
 	const normalizeCmd = (c: string) => c.replace(/\s+/g, " ").trim();
 
 	pi.on("tool_call", async (event, ctx) => {
+		// yolo: ни запросов, ни блоков, «пол» тоже снят по явному запросу
+		// пользователя (см. extensions/yolo).
+		if (isYolo()) return;
 		if (!isToolCallEventType("bash", event)) return;
 
 		// sandbox-расширение уже обёрнуло команду в bwrap/Seatbelt (маркер на событии) —
