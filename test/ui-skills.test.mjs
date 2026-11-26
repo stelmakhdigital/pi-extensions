@@ -9,14 +9,15 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { deflateSync } from "node:zlib";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..");
 const SCRIPT = join(repo, "skills", "ui-review", "scripts", "a11y.mjs");
+const LINT = join(repo, "skills", "ui-review", "scripts", "lint-ui.mjs");
 
 const results = [];
 function check(name, fn) {
@@ -65,8 +66,19 @@ for (const name of ["ui-review", "ui-design"]) {
 	});
 }
 
+/** Весь текст скилла: SKILL.md плюс всё из references/ (прогрессивная загрузка — проверки идут по всему корпусу). */
+function skillText(name) {
+	const root = join(repo, "skills", name);
+	const walk = (dir) =>
+		readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+			const path = join(dir, entry.name);
+			return entry.isDirectory() ? walk(path) : [readFileSync(path, "utf8")];
+		});
+	return walk(root).join("\n");
+}
+
 check("ui-review: чеклист покрывает разделы, которые не ловит скрипт", () => {
-	const text = read("skills", "ui-review", "SKILL.md");
+	const text = skillText("ui-review");
 	for (const needle of [
 		"aria-current",
 		"aria-expanded",
@@ -75,16 +87,40 @@ check("ui-review: чеклист покрывает разделы, которы
 		"drag-and-drop",
 		"prefers-contrast",
 		"100dvh",
+		"minmax(0, 1fr)",
+		"aria-live",
 		"--baseline",
+		"lint-ui.mjs",
+		"Skip это не pass",
 	]) {
-		assert(text.includes(needle), `в чеклисте нет про ${needle}`);
+		assert(text.includes(needle), `в скилле нет про ${needle}`);
 	}
 });
 
-check("ui-design: референсы, DESIGN.md и анти-шаблоны", () => {
-	const text = read("skills", "ui-design", "SKILL.md");
-	for (const needle of ["web_search", "DESIGN.md", "Отвергнуто", "transition: all", "user-scalable=no"]) {
+check("ui-design: план, референсы, preflight и анти-шаблоны", () => {
+	const text = skillText("ui-design");
+	for (const needle of [
+		"web_search",
+		"DESIGN.md",
+		"Отвергнуто",
+		"background-clip: text",
+		"border-left",
+		"ceil(секций / 3)",
+		"Настроение:",
+		"Якорь:",
+		"2.5",
+	]) {
 		assert(text.includes(needle), `в скилле нет про ${needle}`);
+	}
+});
+
+check("скиллы: ссылки на references не битые", () => {
+	for (const name of ["ui-review", "ui-design"]) {
+		const text = read("skills", name, "SKILL.md");
+		for (const ref of new Set(text.match(/(?:\.\.\/)?[\w.-]+\/[\w./-]*\.md/g) || [])) {
+			if (ref.startsWith("http")) continue;
+			assert(existsSync(join(repo, "skills", name, ref)), `${name}: нет файла ${ref}, на который ссылается SKILL.md`);
+		}
 	}
 });
 
@@ -288,6 +324,14 @@ check("report: нарушения, поломки вёрстки и --strict п�
 				overflow: ["div.card 412px при вьюпорте 375px"],
 				tiny_font: [],
 				small_target: ["a.icon 18x18px"],
+				contrast: ['"Подпись" 3.10:1 при нужных 4.5:1 — span.hint'],
+				contrast_checked: 40,
+				contrast_skipped: { disabled: 3, фон: 5 },
+				broken_img: [],
+				dead_link: [],
+				deep_z: [],
+				non_swappable: [],
+				fonts: { loaded: 2, failed: 0, families: ["Inter"], no_display_swap: 1 },
 				css: { transition_all: 2, will_change: ["opacity"], reduced_motion: false, contrast_media: false },
 				viewport: "width=device-width, user-scalable=no",
 			},
@@ -330,14 +374,85 @@ check("report: нарушения, поломки вёрстки и --strict п�
 	assert(text.includes("[minor] landmark"), "minor должен оставаться в отчёте");
 });
 
+// ── lint-ui.mjs: статические правила по исходникам ──
+
+check("lint-ui: находит заведомые поломки и слушается ui-lint-disable", () => {
+	const dir = mkdtempSync(join(tmpdir(), "ui-lint-"));
+	mkdirSync(join(dir, "src"), { recursive: true });
+	writeFileSync(
+		join(dir, "src", "a.css"),
+		[
+			"html { overflow-x: hidden; }",
+			".hero { transition: all .3s; width: 100vw !important; }",
+			".card { border-left: 4px solid #7c3aed; }",
+			"@keyframes fade { from { opacity: 0 } }",
+		].join("\n")
+	);
+	writeFileSync(
+		join(dir, "src", "b.html"),
+		[
+			"<main>",
+			"<p>Learn more · Acme Corp · lorem ipsum</p>",
+			"<button>🚀 Запуск</button>",
+			"<!-- ui-lint-disable no-generic-cta -->",
+			"<button>Подробнее</button>",
+			"</main>",
+		].join("\n")
+	);
+	const r = spawnSync(process.execPath, [LINT, join(dir, "src")], { encoding: "utf8" });
+	assert(r.status === 0, `exit=${r.status}: ${r.stderr.slice(0, 200)}`);
+	for (const id of [
+		"no-transition-all",
+		"no-100vw",
+		"no-important-size",
+		"no-overflow-x-hidden-root",
+		"no-keyframes-without-reduced-motion",
+		"no-placeholder-copy",
+		"no-emoji-icon",
+		"no-side-stripe",
+		"no-purple-gradient",
+	]) {
+		assert(r.stdout.includes(`[${id}]`), `нет правила ${id}`);
+	}
+	assert(!r.stdout.includes("[no-generic-cta]"), "ui-lint-disable не снял правило");
+
+	const strict = spawnSync(process.execPath, [LINT, join(dir, "src"), "--strict"], { encoding: "utf8" });
+	assert(strict.status === 1, `--strict exit=${strict.status}`);
+
+	const allowed = spawnSync(
+		process.execPath,
+		[LINT, join(dir, "src"), "--rule-allow", "no-transition-all,no-100vw,no-important-size,no-overflow-x-hidden-root,no-keyframes-without-reduced-motion,no-placeholder-copy"],
+		{ encoding: "utf8" }
+	);
+	for (const id of ["no-transition-all", "no-placeholder-copy"]) {
+		assert(!allowed.stdout.includes(`[${id}]`), `--rule-allow не снял ${id}`);
+	}
+
+	const json = JSON.parse(spawnSync(process.execPath, [LINT, join(dir, "src"), "--json"], { encoding: "utf8" }).stdout);
+	assert(json.files === 2 && json.findings.length > 0, `json: ${JSON.stringify(json).slice(0, 120)}`);
+	assert(json.findings.every((f) => f.rule && f.file && f.line > 0), "в json не хватает полей");
+});
+
+check("lint-ui: ключевой каталог и пустой каталог — exit 2 с объяснением", () => {
+	const home = spawnSync(process.execPath, [LINT, process.env.HOME], { encoding: "utf8" });
+	assert(home.status === 2 && /ключевой каталог/.test(home.stderr), `HOME exit=${home.status}`);
+	const empty = mkdtempSync(join(tmpdir(), "ui-lint-empty-"));
+	const r = spawnSync(process.execPath, [LINT, empty], { encoding: "utf8" });
+	assert(r.status === 2 && /нет файлов/.test(r.stderr), `пусто exit=${r.status}`);
+});
+
 // ── прогон в браузере (нужен playwright + chromium: оба ставит npm ci этого репозитория) ──
 
 const FIXTURE = `<!doctype html><html><head><meta charset="utf-8"><title>fixture</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<style>.a{transition: all .3s; font-size:10px}.row{display:flex}.row div{white-space:nowrap}</style>
+<style>.a{transition: all .3s; font-size:10px}.row{display:flex}.row div{white-space:nowrap}
+.dim{color:#9aa0a6;background:#fff}</style>
 </head><body><main><h1>Экран</h1>
 <div class="row"><div>очень длинная строка, которая не переносится и вылезает за границы вьюпорта на мобильной ширине</div></div>
-<span class="a">мелкий текст</span><button></button><img src="x.png" width="24" height="24"></main></body></html>`;
+<span class="a">мелкий текст</span><button></button><img src="x.png" width="24" height="24">
+<p class="dim">Серый текст на белом: контраст ниже AA</p>
+<a href="#">Подробнее</a><img src="net-takogo.png" alt="битая картинка">
+</main></body></html>`;
 
 const tmp = mkdtempSync(join(tmpdir(), "ui-a11y-"));
 const pageFile = join(tmp, "bad.html");
@@ -354,10 +469,41 @@ const first = runScript([`file://${pageFile}`, "--widths", "375", "--out", join(
 check("e2e: axe и layout-пробы находят заведомые поломки", () => {
 	if (skipped(first)) return true;
 	assert(first.status === 0, `exit=${first.status}: ${first.stderr.slice(0, 300)}`);
-	for (const needle of ["image-alt", "button-name", "meta-viewport", "html-has-lang", "вылезает за вьюпорт", "transition: all", "шрифт меньше 12px"]) {
+	for (const needle of [
+		"image-alt",
+		"button-name",
+		"meta-viewport",
+		"html-has-lang",
+		"вылезает за вьюпорт",
+		"transition: all",
+		"шрифт меньше 12px",
+		"контраст ниже AA",
+		"контраст: проверено",
+		"ссылка без назначения",
+		"не загрузилась картинка",
+		"контраст: проверено",
+	]) {
 		assert(first.stdout.includes(needle), `нет ${needle}`);
 	}
 	assert(existsSync(join(tmp, "run", "375.png")), "скриншот не записан");
+});
+
+check("e2e: чистая страница не даёт ложных находок по контрасту и медиа", () => {
+	writeFileSync(
+		join(tmp, "clean.html"),
+		[
+			'<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>чисто</title>',
+			'<meta name="viewport" content="width=device-width, initial-scale=1">',
+			"<style>body{margin:0;background:#fff;color:#111;font-size:16px}a{color:#0b57d0}</style></head>",
+			'<body><main><h1>Экран</h1><p>Обычный текст с достаточным контрастом.</p>',
+			'<a href="/x">Открыть отчёт</a></main></body></html>',
+		].join("\n")
+	);
+	const r = runScript([`file://${join(tmp, "clean.html")}`, "--widths", "375", "--out", join(tmp, "clean"), "--wait", "0"]);
+	if (skipped(r)) return true;
+	assert(r.stdout.includes("контраст: проверено"), "расчёт контраста не отработал");
+	assert(!r.stdout.includes("контраст ниже AA"), `ложный контраст:\n${r.stdout}`);
+	assert(!r.stdout.includes("медиа без размеров") && !r.stdout.includes("ссылка без назначения"), `ложные находки:\n${r.stdout}`);
 });
 
 check("e2e: --strict валит прогон на нарушениях moderate+", () => {

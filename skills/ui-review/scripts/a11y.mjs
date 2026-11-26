@@ -104,6 +104,7 @@ function probe() {
 	};
 	const hasOwnText = (el) =>
 		[...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim().length > 2);
+	const cs2 = (el) => getComputedStyle(el);
 
 	const doc = document.documentElement;
 	const vw = Math.max(doc.clientWidth, window.innerWidth || 0);
@@ -114,6 +115,14 @@ function probe() {
 		overflow: [],
 		tiny_font: [],
 		small_target: [],
+		contrast: [],
+		contrast_checked: 0,
+		contrast_skipped: { disabled: 0, фон: 0 },
+		broken_img: [],
+		dead_link: [],
+		deep_z: [],
+		non_swappable: [],
+		fonts: { loaded: 0, failed: 0, families: [], no_display_swap: 0 },
 		css: { transition_all: 0, will_change: [], reduced_motion: false, contrast_media: false },
 		viewport: "",
 	};
@@ -135,8 +144,107 @@ function probe() {
 		const size = Number.parseFloat(getComputedStyle(el).fontSize);
 		if (size && size < 12 && hasOwnText(el)) f.tiny_font.push(`${sel(el)} ${size}px`);
 
+		if (/^(img|iframe|video|embed|object)$/.test(el.tagName) && !(el.getAttribute("width") && el.getAttribute("height")) && !/aspect-ratio/.test(pos.aspectRatio ? el.getAttribute("style") || "" : "")) {
+			const csAspect = pos.aspectRatio && pos.aspectRatio !== "auto" ? pos.aspectRatio : "";
+			const styleAspect = /aspect-ratio/.test(el.getAttribute("style") || "");
+			if (!csAspect && !styleAspect) f.non_swappable.push(sel(el));
+		}
+
 		const clickable = el.matches("a[href],button,input,select,summary,[role=button],[role=link],[role=checkbox],[role=tab]");
 		if (clickable && (r.width < 24 || r.height < 24)) f.small_target.push(`${sel(el)} ${Math.round(r.width)}x${Math.round(r.height)}px`);
+
+		const pos = cs2(el);
+		if (/^(fixed|absolute|sticky)$/.test(pos.position) && Number.parseInt(pos.zIndex, 10) > 1000) {
+			f.deep_z.push(`${sel(el)} z-index ${pos.zIndex}`);
+		}
+	}
+
+	// Контраст по WCAG: свой расчёт, потому что axe по умолчанию не смотрит на текст внутри
+	// картинного/градиентного фона и вообще пропускает часть случаев. Фактический пиксель
+	// страницы не читается, поэтому фон собирается по ancestor chain с пресетом альфы;
+	// фон с картинкой или градиентом помечается как пропущенный, а не как «прошёл».
+	const rgba = (value) => {
+		const m = /rgba?\(([^)]+)\)/.exec(value);
+		if (!m) return null;
+		const parts = m[1].split(/[,\s/]+/).filter((x) => x !== "").map(Number);
+		return [parts[0], parts[1], parts[2], parts.length > 3 ? parts[3] : 1];
+	};
+	const lum = ([r, g, b]) => {
+		const f2 = (v) => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+		return 0.2126 * f2(r) + 0.7152 * f2(g) + 0.0722 * f2(b);
+	};
+	const over = (fg, bg) => [
+		fg[0] * fg[3] + bg[0] * (1 - fg[3]),
+		fg[1] * fg[3] + bg[1] * (1 - fg[3]),
+		fg[2] * fg[3] + bg[2] * (1 - fg[3]),
+	];
+	const backgroundOf = (el) => {
+		let bg = [255, 255, 255];
+		for (let node = el; node; node = node.parentElement) {
+			const cs = cs2(node);
+			if (cs.backgroundImage !== "none") return { skip: "фон картинкой или градиентом" };
+			const c = rgba(cs.backgroundColor);
+			if (!c || c[3] === 0) continue;
+			bg = over(c, [...bg, 1]);
+			if (c[3] === 1) break;
+			if (node === document.documentElement || node === document.body) break;
+		}
+		return { bg };
+	};
+	const ownText = (el) =>
+		[...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join(" ").trim();
+
+	for (const el of document.querySelectorAll("h1,h2,h3,h4,h5,h6,p,li,a,button,label,td,th,span,small,time,figcaption,summary")) {
+		const text = ownText(el);
+		if (!text) continue;
+		const cs = cs2(el);
+		const r = box(el);
+		if (r.width === 0 || r.height === 0 || cs.visibility === "hidden" || cs.display === "none" || Number(cs.opacity) < 0.05) continue;
+		if (el.disabled === true || el.getAttribute("aria-disabled") === "true") {
+			f.contrast_skipped.disabled++;
+			continue;
+		}
+		const bgInfo = backgroundOf(el);
+		if (bgInfo.skip) {
+			f.contrast_skipped["фон"]++;
+			continue;
+		}
+		if (Number(cs.opacity) < 1) {
+			f.contrast_skipped["фон"]++;
+			continue; // просвечивающий родитель меняет и текст, и фон: расчёт по color/bg тут врёт
+		}
+		const fgRaw = rgba(cs.color);
+		if (!fgRaw || fgRaw[3] === 0) continue;
+		const fg = fgRaw[3] < 1 ? over(fgRaw, [...bgInfo.bg, 1]) : fgRaw;
+		const l1 = lum(fg);
+		const l2 = lum(bgInfo.bg);
+		const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+		const size = Number.parseFloat(cs.fontSize) || 0;
+		const weight = Number.parseInt(cs.fontWeight, 10) || 400;
+		const required = size >= 24 || (size >= 18.66 && weight >= 700) ? 3 : 4.5;
+		f.contrast_checked++;
+		if (ratio < required && f.contrast.length < 15) {
+			f.contrast.push(`"${text.slice(0, 40)}" ${ratio.toFixed(2)}:1 при нужных ${required}:1 — ${sel(el)}`);
+		}
+	}
+
+	for (const img of document.querySelectorAll("img")) {
+		if (img.complete && img.naturalWidth === 0) f.broken_img.push(`${sel(img)} src=${img.getAttribute("src") || "(пусто)"}`);
+	}
+	for (const link of document.querySelectorAll('a')) {
+		const href = link.getAttribute("href");
+		if ((href === null || href === "#" || href === "") && ownText(link)) f.dead_link.push(`${sel(link)} "${ownText(link).slice(0, 30)}"`);
+	}
+
+	if (document.fonts) {
+		const families = new Set();
+		for (const face of document.fonts) {
+			if (face.status === "loaded") f.fonts.loaded++;
+			if (face.status === "error") f.fonts.failed++;
+			if (face.family) families.add(face.family.replace(/^["']|["']$/g, ""));
+			if (!face.display || face.display === "auto") f.fonts.no_display_swap++;
+		}
+		f.fonts.families = [...families].slice(0, 6);
 	}
 
 	// transition: all в cssText не найти: Chromium сериализует `transition: all .3s` как `transition: 0.3s`,
@@ -245,6 +353,13 @@ function report(opts, pages) {
 			for (const o of f.overflow) lines.push(`- вылезает за вьюпорт: ${o} (проверить min-width: 0 у детей flex/grid)`);
 			for (const t of f.tiny_font) lines.push(`- шрифт меньше 12px: ${t}`);
 			for (const t of f.small_target) lines.push(`- кликабельная цель меньше 24px: ${t}`);
+			for (const c of f.contrast) lines.push(`- контраст ниже AA: ${c}`);
+			if (f.contrast_checked) lines.push(`- контраст: проверено ${f.contrast_checked} текстовых узлов, пропущено disabled ${f.contrast_skipped.disabled}, фон с картинкой/градиентом ${f.contrast_skipped["фон"]}`);
+			for (const i of f.broken_img) lines.push(`- не загрузилась картинка: ${i}`);
+			for (const l of f.dead_link) lines.push(`- ссылка без назначения: ${l}`);
+			for (const z of f.deep_z) lines.push(`- z-index больше 1000: ${z} (заведи шкалу)`);
+			for (const n of f.non_swappable.slice(0, 8)) lines.push(`- медиа без размеров и aspect-ratio: ${n} (skip=нижний контент) — добавь width/height или aspect-ratio и loading="lazy"`);
+			if (f.fonts.families.length) lines.push(`- шрифты: ${f.fonts.families.join(", ")}; загружено ${f.fonts.loaded}, с ошибкой ${f.fonts.failed}, без font-display: swap ${f.fonts.no_display_swap}`);
 			if (f.css.transition_all) lines.push(`- transition: all в ${f.css.transition_all} правилах — перечисляй свойства явно`);
 			if (f.css.will_change.length) lines.push(`- will-change: ${[...new Set(f.css.will_change)].join(", ")} — только на слоях, которые реально дёргаются`);
 			if (!f.css.reduced_motion) lines.push("- нет prefers-reduced-motion (анимации не отключаются)");
