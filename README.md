@@ -219,9 +219,11 @@ ln -sfn /tmp/pi-ext/skills/ui-review ~/.pi/agent/skills/ui-review
 
 После установки `/reload` (или перезапуск pi). `ui-review` требует playwright и
 chromium в том проекте, который проверяется (скилл сам печатает команду установки,
-если пакета нет): `npm i -D playwright && npx playwright install chromium`. В этом
-репозитории обе зависимости уже в devDependencies, поэтому e2e-проверки скриншотов
-и diff-а выполняются обычным `npm test`; без chromium они печатают skip.
+если пакета нет): `npm i -D playwright && npx playwright install chromium`. Скрипт
+ищет пакет от каталога запуска, поэтому запускать надо из корня проверяемого
+проекта. В этом репозитории playwright и axe-core уже в devDependencies, поэтому
+e2e-проверки скриншотов и diff-а выполняются обычным `npm test`; без chromium они
+печатают skip (код выхода 4 — «среды нет», а не «нарушений нет»).
 
 #### Использование
 

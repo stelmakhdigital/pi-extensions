@@ -26,7 +26,7 @@ node "$(dirname "$SKILL_FILE")/scripts/a11y.mjs" http://localhost:3000 \
 
 Коды выхода: 0 — прогон прошёл, 1 — `--strict` и есть moderate+, 2 — неверные аргументы, 3 — нет playwright, 4 — chromium не запустился (3 и 4 означают «проверку не выполняли», а не «нарушений нет»).
 
-Один раз на проверяемый проект: `npm i -D playwright && npx playwright install chromium`. Без `playwright` скрипт сам скажет, что установить, и выйдет с кодом 3. Для офлайна: `--axe ./node_modules/axe-core/axe.min.js` (иначе axe берётся с CDN). Статичный HTML можно давать как `file://`.
+Один раз на проверяемый проект: `npm i -D playwright && npx playwright install chromium`. Скрипт ищет пакет от каталога запуска, поэтому запускать надо из корня проверяемого проекта; без `playwright` он сам скажет, что установить, и выйдет с кодом 3. Для офлайна: `--axe ./node_modules/axe-core/axe.min.js` (иначе axe берётся с CDN). Статичный HTML можно давать как `file://`.
 
 Что скрипт ловит: нарушения axe (роли, имена, контраст, landmarks, `meta viewport`, `tabindex`, `aria-*` на невалидных элементах), горизонтальный скролл и элемент шире вьюпорта, шрифт < 12px, цели клика < 24px, `transition: all`, `will-change`, отсутствие `prefers-reduced-motion` / `prefers-contrast`, `<html lang>`, `user-scalable=no`.
 
