@@ -80,7 +80,10 @@ glob `*`), бейдж `IG n` в футере, режим персистенте�
 |---|---|
 | [session-insights](skills/session-insights/) | Анализ собственных pi-сессий (`~/.pi/agent/sessions`) → отчёт с рекомендациями и черновиками улучшений (новые скиллы, правила для AGENTS.md, каркасы экстеншенов). Read-only, Python 3 stdlib |
 | [ui-design](skills/ui-design/) | Дизайн нового экрана по порядку: референсы, taste preflight, токен-план в `DESIGN.md` проекта, вёрстка на надутых данных, самопроверка. `references/anti-patterns.md` — признаки генерации и счётные ограничители |
-| [ui-review](skills/ui-review/) | Ревью вёрстки двумя скриптами: `lint-ui.mjs` по исходникам, `a11y.mjs` по экрану (axe-core, свой расчёт контраста, layout/motion/тап-целы), скриншоты в трёх ширинах с побитовым diff. Чеклист вынесен в `references/checklist.md` |
+| [ui-motion](skills/ui-motion/) | Движение: выбор носителя (CSS / View Transitions / библиотека), motion-токены, `prefers-reduced-motion` без пропажи контента, проверка в движении через `INP`/`TBT`. `references/patterns.md` — сниппеты |
+| [ui-dashboard](skills/ui-dashboard/) | Экраны с данными: вопрос → тип графика, оси и форматтеры (`Intl`), вырожденные данные (0 строк, 1 точка, спайк, пропуск, нет прав), состояния, плотность таблицы. `references/charts.md` — responsive-SVG-шаблон и реакции на вырожденные данные |
+| [frontend-perf](skills/frontend-perf/) | Производительность: замер через `perf.mjs` (LCP/CLS/INP/TBT, вес по типам, oversized-картинки, кто двигает макет), порядок правок, keep-or-revert, бюджет в CI |
+| [ui-review](skills/ui-review/) | Ревью вёрстки тремя скриптами: `lint-ui.mjs` по исходникам, `a11y.mjs` по экрану (axe-core, свой расчёт контраста, layout/motion/тап-целы), `perf.mjs` по скорости; скриншоты в трёх ширинах с побитовым diff. Чеклист — `references/checklist.md`, поведение виджетов — `references/aria-patterns.md` |
 
 ## Установка
 
@@ -275,15 +278,18 @@ tmux (`tmux new -A -s pi 'pi'`); вне tmux при старте предлож�
 mkdir -p ~/.pi/agent/skills
 git clone --depth 1 https://github.com/stelmakhdigital/pi-extensions /tmp/pi-ext
 ln -sfn /tmp/pi-ext/skills/session-insights ~/.pi/agent/skills/session-insights
-ln -sfn /tmp/pi-ext/skills/ui-design ~/.pi/agent/skills/ui-design
-ln -sfn /tmp/pi-ext/skills/ui-review ~/.pi/agent/skills/ui-review
+for s in ui-design ui-motion ui-dashboard frontend-perf ui-review; do
+  ln -sfn "/tmp/pi-ext/skills/$s" ~/.pi/agent/skills/"$s"
+done
 ```
 
-После установки `/reload` (или перезапуск pi). `ui-review` требует playwright и
-chromium в том проекте, который проверяется (скилл сам печатает команду установки,
-если пакета нет): `npm i -D playwright && npx playwright install chromium`. Скрипт
-ищет пакет от каталога запуска, поэтому запускать надо из корня проверяемого
-проекта. В этом репозитории playwright и axe-core уже в devDependencies, поэтому
+После установки `/reload` (или перезапуск pi). Браузерные скрипты (`a11y.mjs`,
+`perf.mjs`) требуют playwright и chromium в том проекте, который проверяется
+(скилл сам печатает команду установки, если пакета нет): `npm i -D playwright &&
+npx playwright install chromium`. Скрипт ищет пакет от каталога запуска, поэтому
+запускать надо из корня проверяемого проекта. Коды выхода: 0 — чисто, 1 — есть
+находки или что-то не проверилось, 2 — неверные аргументы, 3 — playwright не найден,
+4 — chromium не запустился; «не проверилось» и «нарушений нет» не смешиваются. В этом репозитории playwright и axe-core уже в devDependencies, поэтому
 e2e-проверки скриншотов и diff-а выполняются обычным `npm test`; без chromium они
 печатают skip (код выхода 4 — «среды нет», а не «нарушений нет»).
 
@@ -403,13 +409,24 @@ skills/
   ui-design/
     SKILL.md                  # референсы → preflight → DESIGN.md → вёрстка → самопроверка
     references/anti-patterns.md   # признаки генерации и счётные ограничители
+  ui-motion/
+    SKILL.md                  # носитель движения → токены → сборка → проверка в движении
+    references/patterns.md    # токен-шит, reduced-motion, scroll reveal, View Transitions, списки
+  ui-dashboard/
+    SKILL.md                  # вопрос → тип графика → данные → форматирование → состояния
+    references/charts.md      # выбор типа, оси, Intl-форматтеры, responsive SVG, вырожденные данные
+  frontend-perf/
+    SKILL.md                  # замер → где вес → правки по одной → keep-or-revert → CI-гард
   ui-review/
     SKILL.md                  # контекст → машинная проверка → рендер → находки
     references/checklist.md   # семантика/layout/motion/состояния/данные + эвристики Нильсена
+    references/aria-patterns.md   # роли, клавиатура и возврат фокуса у самодельных виджетов
     scripts/
       a11y.mjs                # axe-core, контраст, layout-пробы, скриншоты по ширинам (playwright)
+      perf.mjs                # LCP/CLS/INP/TBT, вес по типам, oversized-картинки, бюджет (playwright)
       lint-ui.mjs             # статические правила по исходникам, без браузера и зависимостей
       png-diff.mjs            # декодер/энкодер PNG и побитовое сравнение кадров, без зависимостей
+      browser.mjs             # где искать playwright, chromium и axe-core (общий для браузерных скриптов)
 ```
 
 Скиллы грузятся пакетом через манифест `package.json` → `pi.skills`
@@ -430,6 +447,17 @@ skills/
   состояний, токен по смыслу. MIT.
 - `arham777/ui-ux-kit` — счётные ограничители (eyebrow, зигзаги, семейства
   раскладки, одна CTA) и разбор hero-композиций. MIT.
+- `addyosmani/agent-skills` — порядок работы с производительностью (measure →
+  fix → verify → keep-or-revert, регресс-гард) и разделы про empty/error-состояния.
+- `SvaraNova/skills` — формат `references/` со сниппетами (токен-шит, компонент,
+  review-чеклист), motion-паттерны и шаблоны графиков без зависимостей.
+- `plugin87/ux-ui-agent-skills` дополнительно — конспект ARIA-паттернов
+  (`skills/ui-review/references/aria-patterns.md`) по WAI-ARIA Authoring
+  Practices. MIT.
+
+Витрины тем (`anthropics/skills` → theme-factory), готовые библиотеки токенов и
+чужие on-disk киты в репозиторий не переносились: они завязаны на свой тулинг и
+под свой формат, а польза от них — в правилах, которые уже в скиллах.
 
 ## Лицензия
 

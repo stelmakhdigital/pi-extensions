@@ -22,13 +22,15 @@ description: "Ревью готового UI по чеклисту: машинн
 ## Шаг 1 — машинная проверка
 
 ```bash
-# 1) по исходникам, без браузера
-node "$(dirname "$SKILL_FILE")/scripts/lint-ui.mjs" src --strict
+# S — каталог этого скилла (pi сообщает путь к SKILL.md при загрузке), запускать из корня проверяемого проекта
+S=<каталог скилла ui-review>
 
-# 2) по отрендеренному экрану
-node "$(dirname "$SKILL_FILE")/scripts/a11y.mjs" http://localhost:3000 \
+node "$S/scripts/lint-ui.mjs" src --strict          # 1) по исходникам, без браузера
+node "$S/scripts/a11y.mjs" http://localhost:3000 \  # 2) по отрендеренному экрану
   --widths 375,768,1440 --out ui-review/run-1 --wait 800
 ```
+
+Экран тяжёлый (картинки, список, сторонние скрипты) или пользователь жалуется на скорость — тот же каталог `scripts/` держит `perf.mjs` (LCP/CLS/INP/TBT, вес по типам, кто двигает макет): порядок работы с ним в `/skill:frontend-perf`.
 
 Полезные флаги `a11y.mjs`: `--click "button.open-menu,button.new-item"` (модалка/меню), `--baseline ui-review/run-1` (регрессия к прошлому прогону), `--diff-threshold 0.2`, `--strict` и `--json` для CI, `--axe ./node_modules/axe-core/axe.min.js` для офлайна, `file://` для статичного HTML. Один раз на проверяемый проект: `npm i -D playwright && npx playwright install chromium`; пакет ищется от каталога запуска, поэтому запускать из корня проекта.
 
@@ -52,7 +54,7 @@ node "$(dirname "$SKILL_FILE")/scripts/a11y.mjs" http://localhost:3000 \
 
 ## Шаг 3 — чеклист и отчёт
 
-Разделы чеклиста (что именно смотреть): `references/checklist.md`; признаки генерации, с которыми сверяем новый дизайн, — `../ui-design/references/anti-patterns.md`. Тяжесть: `blocker` (ломает использование или недоступно), `major` (портит экран заметно), `minor` (косметика).
+Разделы чеклиста (что именно смотреть): `references/checklist.md`; поведение самодельных виджетов (модалка, комбобокс, табы, меню, live-объявления) — `references/aria-patterns.md`; признаки генерации, с которыми сверяем новый дизайн, — `../ui-design/references/anti-patterns.md`. Тяжесть: `blocker` (ломает использование или недоступно), `major` (портит экран заметно), `minor` (косметика).
 
 ```
 src/InvoiceTable.tsx:118 — blocker — ячейка суммы вылезает за вьюпорт на 375: у td нет min-width: 0

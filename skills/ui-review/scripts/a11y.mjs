@@ -13,11 +13,11 @@
  * axe-core берётся с CDN; для офлайна — --axe ./node_modules/axe-core/axe.min.js
  */
 import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { decodePng, diffImages, encodePng } from "./png-diff.mjs";
+import { findAxe, launchChromium, loadPlaywright } from "./browser.mjs";
 
 const AXE_CDN = "https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js";
 const IMPACT_RANK = { minor: 0, moderate: 1, serious: 2, critical: 3 };
@@ -63,34 +63,12 @@ function parseArgs(argv) {
 				break;
 		}
 	}
+	if (opts.url?.startsWith("--")) usage(`первым аргументом нужен url, получен флаг ${opts.url}`);
 	if (!opts.url || !/^(https?|file):\/\//.test(opts.url)) usage("нужен http(s):// или file:// url");
 	if (!opts.widths.length) usage("--widths пустой");
 	opts.out ??= join("ui-review", new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19));
 	return opts;
 }
-/**
- * playwright ищется от каталога, из которого запустили скрипт (обычно корень проверяемого
- * проекта), а не от каталога скилла: скилл живёт в пакете pi-extensions, а зависимость — в проекте.
- */
-async function loadPlaywright() {
-	const hints = [];
-	try {
-		return createRequire(join(process.cwd(), "index.js"))("playwright");
-	} catch (e) {
-		hints.push(`из ${process.cwd()}: ${e?.code ?? e?.message}`);
-	}
-	try {
-		return await import("playwright");
-	} catch (e) {
-		hints.push(`от скрипта: ${e?.code ?? e?.message}`);
-	}
-	console.error(
-		`playwright не найден (${hints.join("; ")}).\n` +
-			"Один раз в проверяемом проекте: npm i -D playwright && npx playwright install chromium,"
-	);
-	process.exit(3);
-}
-
 /** Проверки, которые решаются в браузере. Возвращает плоский объект под формат отчёта. */
 function probe() {
 	const sel = (el) => {
@@ -295,15 +273,6 @@ function sha256(file) {
 	return createHash("sha256").update(readFileSync(file)).digest("hex").slice(0, 16);
 }
 
-/** axe ищется в проверяемом проекте, а при запуске из репозитория скиллов — рядом со скриптом. */
-function findAxe() {
-	const candidates = [
-		join(process.cwd(), "node_modules", "axe-core", "axe.min.js"),
-		join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "node_modules", "axe-core", "axe.min.js"),
-	];
-	return candidates.find((candidate) => existsSync(candidate)) ?? null;
-}
-
 /**
  * Сравнение кадра с baseline: совпали хеши — decoding не нужен; различаются — побитовый
  * diff и размеченный PNG, чтобы было видно, что именно сдвинулось, а не только «что-то».
@@ -337,7 +306,8 @@ function report(opts, pages) {
 	lines.push(`# ui-check ${opts.url}`);
 
 	for (const p of pages) {
-		lines.push(`\n## ${p.width}px — нарушений axe: ${p.violations.length}`);
+		// Незагруженная страница — не «нарушений 0», а «не проверено»: проход с ошибкой не должен выглядеть успехом.
+		lines.push(`\n## ${p.width}px — ${p.error ? "НЕ ПРОВЕРЕНО" : `нарушений axe: ${p.violations.length}`}`);
 		if (p.error) {
 			lines.push(`ошибка прогона: ${p.error}`);
 			continue;
@@ -377,26 +347,22 @@ function report(opts, pages) {
 	}
 
 	if (opts.baseline) lines.push("\nКрасным в *-diff.png залиты изменившиеся пиксели: прочитай diff-кадр и скажи, что изменилось по делу.");
-	if (!worst.length) lines.push("\nНарушений axe moderate+ нет. Глазами всё равно смотри: иерархию, плотность, состояния данных.");
+	if (pages.some((p) => p.error)) lines.push("\nЕсть ширины без проверки — результат не считается чистым, exit 1.");
+	else if (!worst.length) lines.push("\nНарушений axe moderate+ нет. Глазами всё равно смотри: иерархию, плотность, состояния данных.");
 	console.log(lines.join("\n"));
-	return worst.length;
+	return worst.length || pages.some((p) => p.error) ? 1 : 0;
 }
 
 async function main() {
 	const opts = parseArgs(process.argv.slice(2));
 	mkdirSync(opts.out, { recursive: true });
 	const pw = await loadPlaywright();
-	let browser;
-	try {
-		browser = await pw.chromium.launch();
-	} catch (e) {
-		console.error(`chromium не запущен (${String(e?.message ?? e).split("\n")[0]}). npx playwright install chromium`);
-		process.exit(4);
-	}
+	const browser = await launchChromium(pw);
 	const context = await browser.newContext();
 	const page = await context.newPage();
 
-	const axePath = opts.axe ?? findAxe();
+	const axePath = findAxe(opts.axe);
+	if (opts.axe && !axePath) usage(`--axe: файл не найден: ${opts.axe}`);
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 	const pages = [];
 
@@ -430,9 +396,11 @@ async function main() {
 	await browser.close();
 
 	const moderatePlus = worstViolations(pages).length;
-	if (opts.json) console.log(JSON.stringify({ url: opts.url, out: opts.out, moderatePlus, pages }, null, 1));
+	const unverifiable = pages.some((p) => !p.violations || p.error);
+	if (opts.json) console.log(JSON.stringify({ url: opts.url, out: opts.out, moderatePlus, unverifiable, pages }, null, 1));
 	else report(opts, pages);
-	process.exit(opts.strict && moderatePlus > 0 ? 1 : 0);
+	// Непроверившаяся ширина валит прогон всегда: «не увидели» не бывает успешным исходом.
+	process.exit(unverifiable || (opts.strict && moderatePlus > 0) ? 1 : 0);
 }
 
 export { parseArgs, probe, report, runAxe, worstViolations };

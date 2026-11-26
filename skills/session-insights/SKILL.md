@@ -16,7 +16,7 @@ description: "Анализ pi-сессий (~/.pi/agent/sessions) для улу�
 ## Шаг 1 — digest
 
 ```bash
-cd "$(dirname "$SKILL_FILE")/scripts"
+cd <каталог скилла session-insights>/scripts   # путь pi сообщает при загрузке скилла
 python3 insights.py --since 30d              # markdown
 python3 insights.py --since 30d --json       # машиночитаемо
 python3 surface.py                            # вес always-on

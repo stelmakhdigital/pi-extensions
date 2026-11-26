@@ -1,5 +1,5 @@
 /**
- * Смоук-тесты для скиллов ui-review / ui-design.
+ * Смоук-тесты для скиллов ui-review / ui-design / ui-motion / ui-dashboard / frontend-perf.
  * Run: node test/ui-skills.test.mjs
  *
  * Оффлайн-часть (проверка сборки: файлы, frontmatter, манифест, сниппеты, CLI-контракт)
@@ -18,6 +18,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..");
 const SCRIPT = join(repo, "skills", "ui-review", "scripts", "a11y.mjs");
 const LINT = join(repo, "skills", "ui-review", "scripts", "lint-ui.mjs");
+const PERF = join(repo, "skills", "ui-review", "scripts", "perf.mjs");
+const UI_SKILLS = ["ui-review", "ui-design", "ui-motion", "ui-dashboard", "frontend-perf"];
 
 const results = [];
 function check(name, fn) {
@@ -54,11 +56,10 @@ function runScript(args) {
 
 check("скиллы зарегистрированы в манифесте", () => {
 	const skills = JSON.parse(read("package.json")).pi.skills;
-	assert(skills.includes("skills/ui-review"), "ui-review нет в pi.skills");
-	assert(skills.includes("skills/ui-design"), "ui-design нет в pi.skills");
+	for (const name of UI_SKILLS) assert(skills.includes(`skills/${name}`), `${name} нет в pi.skills`);
 });
 
-for (const name of ["ui-review", "ui-design"]) {
+for (const name of UI_SKILLS) {
 	check(`скилл ${name}: frontmatter`, () => {
 		const meta = frontmatter(read("skills", name, "SKILL.md"));
 		assert(meta.name === name, `name=${meta.name}, ждали ${name}`);
@@ -114,8 +115,55 @@ check("ui-design: план, референсы, preflight и анти-шабло
 	}
 });
 
+check("ui-motion: носитель по задаче, reduced-motion без пропажи контента, проверка в движении", () => {
+	const text = skillText("ui-motion");
+	for (const needle of [
+		"prefers-reduced-motion",
+		"transform",
+		"transition: all",
+		"will-change",
+		"View Transitions",
+		"IntersectionObserver",
+		"INP",
+		"scroll reveal",
+	]) {
+		assert(text.includes(needle), `в скилле нет про ${needle}`);
+	}
+});
+
+check("ui-dashboard: формы, вырожденные данные, форматтеры, состояния", () => {
+	const text = skillText("ui-dashboard");
+	for (const needle of [
+		"Intl.NumberFormat",
+		"aria-sort",
+		"спайк",
+		"виртуализац",
+		"role=\"img\"",
+		"скелетон",
+		"нет прав",
+	]) {
+		assert(text.includes(needle), `в скилле нет про ${needle}`);
+	}
+});
+
+check("frontend-perf: measure-first, CWV-пороги, keep-or-revert, CI-гард", () => {
+	const text = skillText("frontend-perf");
+	for (const needle of ["perf.mjs", "lcp=2500", "cls=0.1", "inp=200", "--strict", "--click", "откатываем", "RUM"]) {
+		assert(text.includes(needle), `в скилле нет про ${needle}`);
+	}
+	// браузерные скрипты лежат в ui-review: скилл обязан называть это место, а не выдуманный путь
+	assert(text.includes("perf.mjs") && text.includes("каталог скилла ui-review"), "не указан путь к perf.mjs");
+	});
+
+check("ui-review: поведение виджетов описано и не противоречит чеклисту", () => {
+	const text = skillText("ui-review");
+	for (const needle of ["aria-patterns.md", "aria-activedescendant", "showModal", "aria-live", "aria-sort", "skip-link"]) {
+		assert(text.includes(needle), `в скилле нет про ${needle}`);
+	}
+});
+
 check("скиллы: ссылки на references не битые", () => {
-	for (const name of ["ui-review", "ui-design"]) {
+	for (const name of UI_SKILLS) {
 		const text = read("skills", name, "SKILL.md");
 		for (const ref of new Set(text.match(/(?:\.\.\/)?[\w.-]+\/[\w./-]*\.md/g) || [])) {
 			if (ref.startsWith("http")) continue;
@@ -153,6 +201,45 @@ check("порог diff вне (0..1] отклоняется", () => {
 		assert(r.status === 2 && /--diff-threshold/.test(r.stderr), `${bad}: exit=${r.status}`);
 	}
 });
+
+
+const runPerf = (args) => spawnSync(process.execPath, [PERF, ...args], { encoding: "utf8" });
+
+check("perf.mjs: аргументы — usage и exit 2", () => {
+	const cases = [
+		[[], /usage/],
+		[["--nope"], /первым аргументом нужен url/],
+		[["https://x.test", "--nope"], /неизвестный флаг/],
+		[["https://x.test", "--budget", "fps=60"], /--budget/],
+		[["example.com"], /file:\/\//],
+	];
+	for (const [args, re] of cases) {
+		const r = runPerf(args);
+		assert(r.status === 2 && re.test(r.stderr), `${args.join(" ")}: exit=${r.status} ${r.stderr.slice(0, 120)}`);
+	}
+});
+
+const perf = await import(PERF);
+
+check("perf.mjs: report печатает метрики, условия и вердикт по бюджету", () => {
+	const { parseArgs, report } = perf;
+	const opts = parseArgs(["https://x.test", "--budget", "lcp=1000", "--slow"]);
+	const m = { lcp: 1200, cls: 0.02, inp: null, ttfb: 300, dcl: 900, load: 1000, tbt: 40, longtasks: [90], shifts: [{ value: 0.02, sources: ["img"] }], res: { total: 12, kb: 2048, groups: [{ key: ".png", count: 4, kb: 1800, ms: 400 }], slowest: [], heaviest: [] }, oversized: [{ ratio: 3.2, natural: 1600, shown: 500, src: "http://x/a.png" }], error: null };
+	const text = report(opts, m).join("\n");
+	assert(/LCP: 1200 мс — ПРЕВЫШЕН БЮДЖЕТ 1000/.test(text), `нет вердикта по LCP: ${text}`);
+	assert(/CLS: 0.02 — в бюджете/.test(text), "нет строки CLS");
+	assert(/INP: не измерено/.test(text), "INP без действий обязан быть «не измерено»");
+	assert(/сеть 4G/.test(text), "не указано условие замера");
+	assert(/2.0 МБ|2048 КБ/.test(text) && /запросов: 12/.test(text), "нет разбивки по весу");
+	assert(/3.2x/.test(text), "не показаны oversized-картинки");
+});
+
+check("perf.mjs: незамеренная страница — НЕ ЗАМЕРЕНО, а не пустой успех", () => {
+	const { parseArgs, report } = perf;
+	const text = report(parseArgs(["https://x.test"]), { error: "page.goto: timeout" }).join("\n");
+	assert(/НЕ ЗАМЕРЕНО/.test(text) && /не считается прошедшим/.test(text), text);
+});
+
 
 const png = await import(`file://${join(repo, "skills", "ui-review", "scripts", "png-diff.mjs")}`);
 const mod = await import(`file://${SCRIPT}`);
@@ -536,5 +623,37 @@ check("e2e: --json отдаёт нарушения и diff в машиночит
 	assert(data.pages[0].baseline.changed > 0, "в json нет числа изменённых пикселей");
 });
 
+check("e2e: perf.mjs меряет LCP/CLS/TBT и валит --strict при превышении бюджета", () => {
+	const page = join(tmp, "perf.html");
+	writeFileSync(
+		page,
+		`<!doctype html><html lang=ru><head><meta charset=utf-8><title>perf</title></head><body><main><h1>Замер</h1>
+<button id=b>Жми</button><script>
+b.addEventListener('click', () => { const t = Date.now(); while (Date.now() - t < 120); });
+</script></main></body></html>`
+	);
+	const run = runPerf([`file://${page}`, "--width", "375", "--click", "#b", "--wait", "400", "--out", join(tmp, "perf")]);
+	if (skipped(run)) return true;
+	assert(run.status === 0, `exit=${run.status}: ${run.stderr.slice(0, 200)}`);
+	assert(/- LCP: \d+ мс/.test(run.stdout), "нет LCP");
+	assert(/- CLS: [\d.]+/.test(run.stdout), "нет CLS");
+	assert(/- INP: \d+ мс/.test(run.stdout), "после --click обязан появиться INP");
+	assert(/TBT по длинным задачам: \d+ мс/.test(run.stdout), "нет TBT");
+	assert(existsSync(join(tmp, "perf", "perf.md")), "perf.md не записан");
+
+	const strict = runPerf([`file://${page}`, "--width", "375", "--budget", "lcp=1", "--wait", "100", "--out", join(tmp, "perf2"), "--strict"]);
+	if (skipped(strict)) return true;
+	assert(strict.status === 1, `при бюджете lcp=1 ожидаем exit 1, получили ${strict.status}`);
+	assert(/ПРЕВЫШЕН БЮДЖЕТ/.test(strict.stdout), "в отчёте нет пометки о превышении");
+});
+
+check("e2e: a11y.mjs на незагружаемой странице — НЕ ПРОВЕРЕНО и exit 1", () => {
+	const run = runScript([`file://${join(tmp, "net-takogo.html")}`, "--widths", "375", "--out", join(tmp, "dead"), "--wait", "0"]);
+	if (skipped(run)) return true;
+	assert(/НЕ ПРОВЕРЕНО/.test(run.stdout), "нет пометки о непроверенной ширине");
+	assert(run.status === 1, `exit=${run.status}, ждали 1: непроверенный экран не считается чистым`);
+});
+
 console.log(results.join("\n"));
 process.exit(results.some((r) => r.startsWith("FAIL")) ? 1 : 0);
+
