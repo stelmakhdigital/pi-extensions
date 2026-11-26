@@ -342,6 +342,51 @@ Digest разделяет повторяющиеся строки промпто
 
 Тесты скритов: `node test/session-insights.test.mjs` (нужен python3; без него — skip).
 
+### Как пользоваться UI-скиллами
+
+Скиллы включаются сами по описанию в задаче; если не подхватились — явно
+`/skill:ui-design`, `/skill:ui-motion`, `/skill:ui-dashboard`,
+`/skill:frontend-perf`, `/skill:ui-review`. Для `ui-design` и `ui-review` есть
+ещё prompt-сниппеты (они подмешивают короткий каркас в первое сообщение).
+
+Порядок в одном тикете: `ui-design` (или правка экрана) → `ui-motion`, если
+появилось движение → `ui-review` → `frontend-perf`, если экран тяжёлый. Экран с
+данными собирается через `ui-dashboard`, дальше тот же `ui-review`.
+
+Первый запуск в проверяемом проекте (один раз, если playwright там нет):
+
+```bash
+npm i -D playwright && npx playwright install chromium
+```
+
+Браузерные скрипты ищут playwright от каталога запуска, поэтому запускать нужно
+из корня проекта. Коды выхода: `0` чисто, `1` находки или что-то не проверилось,
+`2` неверные аргументы, `3` playwright не найден, `4` chromium не запустился.
+
+```bash
+S=$HOME/.pi/agent/git/github.com/stelmakhdigital/pi-extensions/skills/ui-review/scripts
+
+node "$S/lint-ui.mjs" src --strict                    # по исходникам, браузер не нужен
+node "$S/a11y.mjs" http://localhost:3000 \            # по экрану: axe, контраст, геометрия, скриншоты
+  --widths 375,768,1440 --out ui-review/run-1 --wait 800 \
+  --click "button.menu,button.new-item"
+node "$S/a11y.mjs" http://localhost:3000 --out ui-review/run-2 --baseline ui-review/run-1
+node "$S/perf.mjs" http://localhost:3000 --click "button.menu" --wait 1500
+node "$S/perf.mjs" http://localhost:3000 --budget lcp=2500,cls=0.1,inp=200 --strict --json
+```
+
+`--baseline` сравнивает кадры с прошлым прогоном побитово и пишет `*-diff.png`;
+`--axe ./node_modules/axe-core/axe.min.js` — для офлайна; `file://` годится для
+статичного HTML, но там неполная ресурсная статистика и нет TTFB.
+
+В CI: `lint-ui.mjs src --strict` и `a11y.mjs <preview-url> --strict --json` на
+каждый push, `perf.mjs <preview-url> --budget ... --strict` с бюджетом от текущих
+чисел с запасом 10-15 процентов.
+
+Ложное срабатывание лимта снимается на строку (`// ui-lint-disable <id>`) или на
+правило целиком (`--rule-allow <id>`). Найденное правило не отключается «чтобы
+не мешало»: в `ui-review` это находка с обоснованием.
+
 ### Несколько расширений
 
 Несколько паттернов в одном пакете (или в разных записях пакета — так же):
