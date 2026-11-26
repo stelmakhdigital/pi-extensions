@@ -1,5 +1,7 @@
-# Смоук-тесты — самодостаточные скрипты (jiti + стаб ExtensionAPI): без сети,
-# без tmux, без моделей. bubblewrap ставится, чтобы sandbox e2e-проверки
+# Смоук-тесты — самодостаточные скрипты (jiti + стаб ExtensionAPI): без tmux и
+# без моделей. Сеть нужна только e2e-проверке ui-review: она гоняет реальный
+# chromium (playwright ставится вместе с npm ci, системные библиотеки — шагом
+# ниже) и axe-core из node_modules. bubblewrap ставится, чтобы sandbox e2e-проверки
 # выполнялись, а не пропускались; если user namespaces в раннере не работают,
 # проверки печатают skip и прогон остаётся зелёным (см. hasBwrap в smoke.test.mjs).
 name: ci
@@ -27,6 +29,11 @@ jobs:
           sudo apt-get install -y -qq bubblewrap
       - name: Install
         run: npm ci --no-audit --no-fund
+      - name: Системные библиотеки chromium для ui e2e
+        # Без них chromium не стартует, и ui-skills e2e печатают skip (exit 4) —
+        # прогон остаётся зелёным, как sandbox без bwrap.
+        continue-on-error: true
+        run: sudo npx playwright install-deps chromium
       - name: Test
         # npm test is a `for f in ...; do node $f || exit 1; done` loop, so a
         # red run otherwise shows only "exit code 1". Capture the full output

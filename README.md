@@ -39,6 +39,8 @@ RPC. Убирает стартовые вопросы (доверие проек
 | Скилл | Назначение |
 |---|---|
 | [session-insights](skills/session-insights/) | Анализ собственных pi-сессий (`~/.pi/agent/sessions`) → отчёт с рекомендациями и черновиками улучшений (новые скиллы, правила для AGENTS.md, каркасы экстеншенов). Read-only, Python 3 stdlib |
+| [ui-design](skills/ui-design/) | Дизайн нового экрана по порядку: референсы → токен-план в `DESIGN.md` проекта → вёрстка на надутых данных → самопроверка. Список анти-шаблонов, от которых экран становится «как у модели» |
+| [ui-review](skills/ui-review/) | Ревью вёрстки: машинная проверка `scripts/a11y.mjs` (axe-core + типовые поломки layout/motion/тап-цел) вместо «надеюсь, модель заметила», скриншоты в трёх ширинах, побитовый diff с предыдущим прогоном, чеклист по секциям |
 
 ## Установка
 
@@ -201,7 +203,7 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 tmux (`tmux new -A -s pi 'pi'`); вне tmux при старте предложит handoff.
 Детали — в `extensions/subagents/README.md`.
 
-### Только session-insights
+### Только скиллы
 
 Скиллы из пакета ставятся вместе с ним (манифест `package.json` → `pi.skills`).
 Вручную — без установки пакета:
@@ -211,9 +213,15 @@ tmux (`tmux new -A -s pi 'pi'`); вне tmux при старте предлож�
 mkdir -p ~/.pi/agent/skills
 git clone --depth 1 https://github.com/stelmakhdigital/pi-extensions /tmp/pi-ext
 ln -sfn /tmp/pi-ext/skills/session-insights ~/.pi/agent/skills/session-insights
+ln -sfn /tmp/pi-ext/skills/ui-design ~/.pi/agent/skills/ui-design
+ln -sfn /tmp/pi-ext/skills/ui-review ~/.pi/agent/skills/ui-review
 ```
 
-После установки `/reload` (или перезапуск pi).
+После установки `/reload` (или перезапуск pi). `ui-review` требует playwright и
+chromium в том проекте, который проверяется (скилл сам печатает команду установки,
+если пакета нет): `npm i -D playwright && npx playwright install chromium`. В этом
+репозитории обе зависимости уже в devDependencies, поэтому e2e-проверки скриншотов
+и diff-а выполняются обычным `npm test`; без chromium они печатают skip.
 
 #### Использование
 
@@ -322,6 +330,13 @@ skills/
   session-insights/
     SKILL.md                  # workflow: digest → рекомендации → отчёт + черновики
     scripts/                  # Python 3 stdlib: sessions.py (библиотека), insights.py (digest)
+  ui-design/
+    SKILL.md                  # референсы → DESIGN.md → анти-шаблоны → вёрстка → самопроверка
+  ui-review/
+    SKILL.md                  # машинная проверка → скриншоты → чеклист по секциям
+    scripts/
+      a11y.mjs                # axe-core + layout/motion-пробы + скриншоты по ширинам (playwright)
+      png-diff.mjs            # декодер/энкодер PNG и побитовое сравнение кадров, без зависимостей
 ```
 
 Скиллы грузятся пакетом через манифест `package.json` → `pi.skills`
