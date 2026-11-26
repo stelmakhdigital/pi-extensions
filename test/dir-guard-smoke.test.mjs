@@ -98,6 +98,7 @@ writeFileSync(join(outside, "secret.txt"), "s3cr3t");
 	await check("dir-guard: зарегистрированы флаги и команда", () => {
 		if (!pi.flags.some((f) => f.name === "dir-guard-disabled")) throw new Error("нет флага dir-guard-disabled");
 		if (!pi.flags.some((f) => f.name === "dir-guard-allow")) throw new Error("нет флага dir-guard-allow");
+		if (!pi.flags.some((f) => f.name === "dir-guard-allow-secrets")) throw new Error("нет флага dir-guard-allow-secrets");
 		if (!pi.commands.some((c) => c.name === "dir-guard")) throw new Error("нет /dir-guard");
 	});
 
@@ -105,6 +106,34 @@ writeFileSync(join(outside, "secret.txt"), "s3cr3t");
 		const res = await handler({ toolName: "read", input: { path: "/etc/passwd" } }, ctx);
 		if (!res?.block) throw new Error("ожидалось block, получили: " + JSON.stringify(res));
 		if (!res.reason.includes("dir-guard")) throw new Error("причина: " + res.reason);
+	});
+
+	await check("(a2) секрет сверх allowlist блокируется ($HOME/.pi/agent/auth.json)", async () => {
+		const res = await handler({ toolName: "read", input: { path: join(base, ".pi/agent/auth.json") } }, ctx);
+		if (!res?.block) throw new Error("ожидалось block, получили: " + JSON.stringify(res));
+		if (!/учётными|секр/.test(res.reason)) throw new Error("причина не про секреты: " + res.reason);
+	});
+
+	await check("(a3) ~/.ssh и ~/.aws блокируются, bash-путь к ключу тоже", async () => {
+		for (const p of [join(base, ".ssh/id_ed25519"), join(base, ".aws/credentials")]) {
+			const res = await handler({ toolName: "read", input: { path: p } }, ctx);
+			if (!res?.block) throw new Error(`не заблокирован ${p}: ` + JSON.stringify(res));
+		}
+		const bash = await handler({ toolName: "bash", input: { command: `cat ${base}/.ssh/id_rsa` } }, ctx);
+		if (!bash?.block) throw new Error("bash к ключу не заблокирован: " + JSON.stringify(bash));
+	});
+
+	await check("(a4) секрет-файл внутри CWD — обычный рабочий файл", async () => {
+		writeFileSync(join(cwd, ".env"), "TOKEN=x");
+		const res = await handler({ toolName: "read", input: { path: join(cwd, ".env") } }, ctx);
+		if (res !== undefined) throw new Error("ложный блок на .env в CWD: " + JSON.stringify(res));
+	});
+
+	await check("(a5) обычный файл в allowlist ($HOME/.pi) не блокируется", async () => {
+		mkdirSync(join(base, ".pi/agent"), { recursive: true });
+		writeFileSync(join(base, ".pi/agent/guard-state.json"), "{}");
+		const res = await handler({ toolName: "read", input: { path: join(base, ".pi/agent/guard-state.json") } }, ctx);
+		if (res !== undefined) throw new Error("allowlist-файл заблокирован: " + JSON.stringify(res));
 	});
 
 	await check("(b) read внутри CWD пропущен (относительный)", async () => {

@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
+import { isSecretPath } from "../secret-paths.ts";
 import { isYolo } from "../yolo-mode.ts";
 
 /**
@@ -25,6 +26,11 @@ import { isYolo } from "../yolo-mode.ts";
  *   флаг --dir-guard-allow (коммат-список) и файл .dir-guard.json в CWD.
  *   Symlink-escape блокируется ВСЕГДА: проверка идёт по canonical (realpath)
  *   пути, а не по строковому виду.
+ * - Файлы учётных данных (secret-paths.ts: ~/.ssh, ~/.aws, auth.json, *.pem,
+ *   .env…) блокируются СВЕРХУ allowlist'а: дефолтный корень $HOME/.pi иначе
+ *   открывал бы ~/.pi/agent/auth.json с токенами провайдеров. Только для путей
+ *   вне CWD — `.env` и тестовые ключи внутри проекта остаются рабочими файлами.
+ *   Снять: "secrets": "allow" в .dir-guard.json или --dir-guard-allow-secrets.
  *
  * Субагент (PI_SUBAGENT_DEPTH >= 1): те же правила, жёсткий блок, без UI.
  */
@@ -129,6 +135,7 @@ export default function (pi: ExtensionAPI) {
 	let ready = false;
 	let root = "";
 	let allowRoots: string[] = [];
+	let secretsBlocked = true;
 
 	/** Pin'ит CWD (однократно) и собирает allowlist. */
 	function ensureReady(ctx: ExtensionContext): void {
@@ -164,6 +171,7 @@ export default function (pi: ExtensionAPI) {
 				if (Array.isArray(allow)) {
 					raw.push(...allow.filter((x): x is string => typeof x === "string"));
 				}
+				if ((parsed as { secrets?: unknown }).secrets === "allow") secretsBlocked = false;
 			} catch {
 				if (ctx.hasUI) {
 					ctx.ui.notify(`dir-guard: невалидный JSON в ${cfgFile} — файл проигнорирован`, "warning");
@@ -171,6 +179,7 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 		allowRoots = [...new Set(raw.map((p) => canonical(expandHome(p))))];
+		if (pi.getFlag("dir-guard-allow-secrets") === true) secretsBlocked = false;
 		ready = true;
 	}
 
@@ -180,6 +189,16 @@ export default function (pi: ExtensionAPI) {
 		const abs = path.isAbsolute(expanded) ? expanded : path.resolve(root, expanded);
 		const resolved = canonical(abs);
 		if (isInside(resolved, root)) return { blocked: false };
+		// Сверху allowlist'а: $HOME/.pi открыт целиком, а auth.json с токенами — там.
+		if (secretsBlocked && isSecretPath(resolved)) {
+			return {
+				blocked: true,
+				reason:
+					`dir-guard: ${raw} (→ ${resolved}) — файл с учётными данными вне рабочей директории. ` +
+					"Читай и меняй их только по явной просьбе пользователя; если доступ нужен постоянно — " +
+					'"secrets": "allow" в .dir-guard.json или флаг --dir-guard-allow-secrets.',
+			};
+		}
 		for (const a of allowRoots) {
 			if (isInside(resolved, a)) return { blocked: false };
 		}
@@ -235,6 +254,12 @@ export default function (pi: ExtensionAPI) {
 	pi.registerFlag("dir-guard-allow", {
 		description: "Разрешённые пути вне CWD, список через запятую (например: ~/notes,/opt/reference).",
 		type: "string",
+	});
+
+	pi.registerFlag("dir-guard-allow-secrets", {
+		description: "Не блокировать файлы учётных данных вне рабочей директории (~/.ssh, ~/.aws, auth.json, *.pem, .env).",
+		type: "boolean",
+		default: false,
 	});
 
 	pi.on("session_start", async (event, ctx) => {

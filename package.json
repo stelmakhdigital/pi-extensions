@@ -1,6 +1,6 @@
 {
   "name": "pi-extensions",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "Коллекция небольших расширений для pi (git-пакет: устанавливай целиком или по отдельности через фильтры)",
   "keywords": [
     "pi-package"
@@ -33,6 +33,7 @@
       "extensions/prompt-snippets/index.ts",
       "extensions/bash-guard/index.ts",
       "extensions/dir-guard/index.ts",
+      "extensions/injection-guard/index.ts",
       "extensions/edit-fresh/index.ts",
       "extensions/bash-exit-hint/index.ts",
       "extensions/text-guard/index.ts",

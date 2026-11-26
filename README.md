@@ -10,7 +10,8 @@
 | [yolo](extensions/yolo/) | Автономный режим `--yolo` / `PI_YOLO=1` / `/yolo`: без стартовых вопросов (доверие проекту, tmux-handoff) и без блокировок guard'ов, включая «пол» bash-guard; бейдж `YOLO` в футере, `/yolo` переключает посреди сессии. Подробности — [Автономный запуск без вопросов](#yolo-автономный-запуск-без-вопросов) |
 | [prompt-snippets](extensions/prompt-snippets/) | Комбинируемые одноцелевые промпт-правила: включаются на каждое сообщение через меню (`alt+s` / `/snippets`), вставляются перед или после вашего текста |
 | [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах, toggle персистентны (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
-| [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/bash, чьи пути уходят вне рабочей директории (CWD) и allowlist'а: realpath-канонизация (symlink-escape блокируется), allowlist — `$HOME/.pi` (дефолт) + `--dir-guard-allow` + `.dir-guard.json` в CWD, `/dir-guard` и бейдж `DR OFF`, состояние персистентно (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
+| [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/bash, чьи пути уходят вне рабочей директории (CWD) и allowlist'а: realpath-канонизация (symlink-escape блокируется), allowlist — `$HOME/.pi` (дефолт) + `--dir-guard-allow` + `.dir-guard.json` в CWD, файлы учётных данных (`~/.ssh`, `~/.aws`, `auth.json`, `*.pem`, `.env`) блокируются сверх allowlist'а (`--dir-guard-allow-secrets` / `"secrets": "allow"`), `/dir-guard` и бейдж `DR OFF`, состояние персистентно (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
+| [injection-guard](extensions/injection-guard/) | Защита от prompt injection: результаты внешних инструментов (веб, сеть, MCP, файлы недоверенного репо) оборачиваются в метки `UNTRUSTED` с обезвреживанием поддельных меток + секция правил в системном промпте; блок корреляции «чтение секрета + сетевой уход»; в strict опасные действия (файлы агента, отправка наружу, установка пакетов, git push) после внешнего контента спрашиваются. Режимы off/label/strict (`/injection-guard`, дефолт label), бейдж `IG`, `/injection-guard:stats`, `.injection-guard.json` в CWD |
 | [text-guard](extensions/text-guard/) | Контроль текста модели (документация, комментарии, коммиты, чат) — без эмодзи, стрелок, слов-маркеров ИИ-стиля («давайте», delve…) и умных названий: секция стиля в системном промпте, скан write/edit/bash (коммиты, heredoc, echo), режимы off/warn/strict (`/text-guard`, дефолт warn), автофикс эмодзи/стрелок, `.text-guard.json` в CWD (allow/skip/words/ignore), `/text-guard:stats`, бейдж `TG OFF`, состояние персистентно |
 | [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: задаёт пользователю один вопрос (текст, выбор одного, мультивыбор) и ждёт ответа |
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
@@ -27,12 +28,51 @@ PI_YOLO=1 pi "сделай задачу"              # переменная н�
 
 Режим для мест, где в TUI никто не ответит: Orca-автоматизации, CI, `pi -p`,
 RPC. Убирает стартовые вопросы (доверие проекту, tmux-handoff) и снимает
-блокировки всех guard'ов этого репозитория, включая «пол» bash-guard.
+интерактивные блокировки guard'ов этого репозитория, включая «пол» bash-guard.
+Кроме «пола» injection-guard: маркировка внешних данных и блок «секрет + сеть»
+остаются включёнными даже при `/injection-guard` в off — в автономной сессии
+инъекцию смотреть некому.
+
 Для Orca проще задать `PI_YOLO=1` в окружении автоматизации, чем менять
 команду запуска. Команда `/yolo` работает в обе стороны и держит `PI_YOLO` в
 синхроне (дочерние агенты наследуют состояние), но вопросы старта она не
 отменяет — они случаются до первой команды. Подробно (что именно выключается и
 границы) в [extensions/yolo/README.md](extensions/yolo/README.md).
+
+## Защита от prompt injection
+
+Инъекция приходит с данными: веб-страница, `curl`, склонированный репозиторий,
+MCP-инструмент, снапшот браузера. `injection-guard` не ищет «плохие слова»
+(регулярки обходятся и валят легитимный текст), он работает на трёх границах.
+
+1. Маркировка. `tool_result` оборачивает вывод внешних инструментов в
+   `<UNTRUSTED tool=... src=...>`, из содержимого вырезаются попытки закрыть
+   фрейс досрочно. Секция `<untrusted-content>` в системном промпте объясняет
+   модели, что внутри фрейса — данные, а не команды. Файловые инструменты
+   недоверенного проекта (`ctx.isProjectTrusted()` false) получают короткую
+   пометку вместо фрейса, чтобы не раздувать контекст.
+2. Эксфильтрация. Корреляция вместо паттерна: в одной bash-команде чтение
+   секрета (`~/.ssh`, `~/.aws`, `auth.json`, ключевые файлы — общий список в
+   `extensions/secret-paths.ts`) И сетевой уход — жёсткий блок с причиной.
+   Работает в label и в yolo. Тот же слой блокирует доступ к секрету вне CWD
+   через read/write/edit, но только в окне недоверия — это резерв на случай
+   выключённого dir-guard.
+3. Эскалация (strict). Пока активно «окно недоверия» (с момента внешнего
+   результата до живой реплики пользователя), опасные действия спрашиваются:
+   правка файлов агента (`AGENTS.md`, `.pi/settings.json`, guard'ы), отправка
+   данных наружу, установка пакетов, `git push`. В субагенте и в yolo вместо
+   вопроса блок.
+
+```bash
+/injection-guard            # off -> label (дефолт) -> strict
+/injection-guard:stats      # что маркировано, что заблокировано, текущее окно
+```
+
+Флаги `--injection-guard-off` / `--injection-guard-strict`, настройка
+`.injection-guard.json` в CWD (`untrusted` / `trusted` — имена инструментов,
+glob `*`), бейдж `IG n` в футере, режим персистентен (`guard-state.json`).
+В `label` guard не мешает работе, но оставляет модели явную границу
+«данные / команды».
 
 ## Скиллы
 
@@ -74,6 +114,7 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 | yolo | `extensions/yolo/*` |
 | bash-guard | `extensions/bash-guard/*` |
 | dir-guard | `extensions/dir-guard/*` |
+| injection-guard | `extensions/injection-guard/*` |
 | text-guard | `extensions/text-guard/*` |
 | ask-user-question | `extensions/ask-user-question/*` |
 | sandbox | `extensions/sandbox/*` |
@@ -129,8 +170,29 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 
 Даст жёсткий блок read/write/edit/bash вне рабочей директории (CWD) и allowlist'а
 (дефолт `$HOME/.pi`, плюс `--dir-guard-allow` и `.dir-guard.json` в CWD),
-команду `/dir-guard` и флаги `--dir-guard-disabled` / `--dir-guard-allow`.
+блок файлов учётных данных сверх allowlist'а, команду `/dir-guard` и флаги
+`--dir-guard-disabled` / `--dir-guard-allow` / `--dir-guard-allow-secrets`.
 Без зависимостей.
+
+### Только injection-guard
+
+```json
+{
+	"packages": [
+		{
+			"source": "git:github.com/stelmakhdigital/pi-extensions@master",
+			"extensions": ["extensions/injection-guard/*"]
+		}
+	]
+}
+```
+
+Даст маркировку внешних результатов метками `UNTRUSTED`, секцию `<untrusted-content>`
+в системном промпте, блок «секрет + сеть» и (в strict) подтверждение опасных
+действий после внешнего контента: `/injection-guard`, `/injection-guard:stats`,
+флаги `--injection-guard-off` / `--injection-guard-strict`, `.injection-guard.json` в CWD.
+Работает вместе с dir-guard (у него общий список секретов, `extensions/secret-paths.ts`),
+но не зависит от него. Подробности — [Защита от prompt injection](#защита-от-prompt-injection).
 
 ### Только text-guard
 
@@ -304,6 +366,10 @@ Digest разделяет повторяющиеся строки промпто
 package.json                  # pi-манифест + зависимости (shell-quote)
 extensions/
   yolo-mode.ts                # isYolo(): /yolo, PI_YOLO или --yolo в argv
+  guard-state.ts              # персистентность режимов guard'ов (<agentDir>/guard-state.json)
+  json-store.ts               # readJson / writeJson (tmp + rename)
+  secret-paths.ts             # пути учётных данных (dir-guard + injection-guard)
+  untrusted.ts                # «окно недоверия»: флаг внешнего контента в контексте
   yolo/
     index.ts                  # флаг --yolo, команда /yolo, авто-доверие проекту, бейдж
   prompt-snippets/
@@ -311,6 +377,8 @@ extensions/
     snippets/                 # сниппеты (по одному .md на правило)
   bash-guard/
     index.ts
+  injection-guard/
+    index.ts                  # маркировка UNTRUSTED, блок «секрет + сеть», эскалация
   ask-user-question/
     index.ts
   sandbox/
