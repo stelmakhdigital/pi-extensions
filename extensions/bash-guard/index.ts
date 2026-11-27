@@ -426,8 +426,44 @@ function segmentPositions(argv: string[]): Array<{ head: string; text: string }>
  * сырой строке: `echo "rm -rf /"` — это echo, а не rm; `bash -c "rm -rf /"` —
  * это rm (сегмент развёрнут).
  */
+/**
+ * Обёртки, у которых команда-аргумент лежит внутри argv, а не после флага с
+ * скриптом: `docker run -v /:/host chroot /host rm -rf /`, `find . -exec rm -rf
+ * {} ;`, `xargs rm -rf`. Для них дополнительно разбираем хвосты argv — иначе
+ * «пол» не увидит удаление внутри контейнера (а старый матчинг по сырой строке
+ * видел). Ложных срабатываний это не добавляет: кандидат всё равно должен
+ * угадать голову правила и пройти его паттерн.
+ */
+const CARRIERS = new Set(["docker", "podman", "nerdctl", "kubectl", "chroot", "nsenter", "ssh", "su", "find", "xargs", "parallel", "watch", "timeout"]);
+
+/* «выполняющие» головы: всё после них — команда; и токены, после которых
+ * команда начинается (`--`, `-exec`, вложенный shell). Без этого фильтра
+ * `find . -name rm -print` давал бы кандидата «rm». */
+const PURE_EXECUTORS = new Set(["xargs", "parallel", "watch", "timeout", "time"]);
+const INTRODUCERS = new Set(["--", "-c", "-exec", "-execdir", "chroot", "nsenter", "sh", "bash", "zsh", "dash", "fish", "su", "sudo", "doas", "env", "exec", "run"]);
+
+function carrierPositions(argv: string[], heads: Set<string>): Array<{ head: string; text: string }> {
+	const out: Array<{ head: string; text: string }> = [];
+	for (let j = 1; j < argv.length; j++) {
+		const tok = argv[j];
+		if (!tok || tok.startsWith("-") || tok.includes(" ") || tok.includes("/")) continue;
+		if (!heads.has(tok)) continue;
+		const introduced = argv.slice(0, j).some((t) => INTRODUCERS.has(t));
+		if (!introduced && !PURE_EXECUTORS.has(argv[0])) continue;
+		out.push({ head: tok, text: argv.slice(j).join(" ") });
+	}
+	return out;
+}
+
 export function floorMatch(command: string, rules: FloorRule[]): FloorRule | null {
-	const positions = commandSegments(command, 2, true).flatMap(segmentPositions);
+	const segments = commandSegments(command, 2, true);
+	const heads = new Set<string>();
+	for (const rule of rules) for (const h of rule.head ?? []) if (typeof h === "string") heads.add(h);
+	const positions = segments.flatMap(segmentPositions);
+	segments.forEach((argv) => {
+		const head = segmentPositions(argv)[0]?.head;
+		if (head && CARRIERS.has(head)) positions.push(...carrierPositions(argv, heads));
+	});
 	const lines = physicalLines(command);
 	for (const rule of rules) {
 		if (!rule.head) {
