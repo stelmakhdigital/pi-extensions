@@ -247,6 +247,35 @@ const MD = "doc.md";
 	});
 }
 
+// === номер строки (был O(index) на каждое совпадение) ===
+{
+	const naive = (text, index) => {
+		let n = 1;
+		for (let i = 0; i < index && i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+		return n;
+	};
+
+	await check("lineOf совпадает с наивным подсчётом на всех позициях", async () => {
+		const samples = ["a\nbb\n\nccc\ndd\ne", "", "\n", "\n\n", "no newlines", "\r\n\r\nx\n"];
+		for (const text of samples) {
+			for (let i = 0; i <= text.length; i++) {
+				if (textGuard.lineOf(text, i) !== naive(text, i)) {
+					throw new Error(`позиция ${i} в ${JSON.stringify(text)}: ${textGuard.lineOf(text, i)} ≠ ${naive(text, i)}`);
+				}
+			}
+		}
+	});
+
+	await check("lineOf на большом тексте не зависит от числа вызовов (тот же ответ)", async () => {
+		const big = "row\n".repeat(20000);
+		const at = big.length - 5;
+		const first = textGuard.lineOf(big, at);
+		for (let k = 0; k < 200; k++) textGuard.lineOf(big, k); // смена позиций не должен ломать кэш переводов
+		if (textGuard.lineOf(big, at) !== first) throw new Error("кэш переводов врёт после других позиций");
+		if (first !== naive(big, at)) throw new Error(`неверный номер: ${first} ≠ ${naive(big, at)}`);
+	});
+}
+
 rmSync(base, { recursive: true, force: true });
 rmSync(guardAgentDir, { recursive: true, force: true });
 console.log(results.join("\n"));

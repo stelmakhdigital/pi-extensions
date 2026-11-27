@@ -150,12 +150,29 @@ const RU_RES = WORDS_RU.map(wordRegex);
 const EN_RES = WORDS_EN.map(wordRegex);
 const NAMING_RES = NAMING.map(wordRegex);
 
-function lineOf(text: string, index: number): number {
-	let n = 1;
-	for (let i = 0; i < index && i < text.length; i++) {
-		if (text.charCodeAt(i) === 10) n++;
+/*
+ * Номер строки по индексу символа. Индексы переводов считаются один раз на
+ * текст (текст скана — тот же объект для всех правил), дальше бинарный поиск:
+ * раньше было O(index) на каждое совпадение, и на большом tool_result с
+ * сотнями совпадений это были секунды.
+ */
+let lineIndexCache: { text: string; nl: number[] } | null = null;
+
+export function lineOf(text: string, index: number): number {
+	if (lineIndexCache?.text !== text) {
+		const nl: number[] = [];
+		for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) nl.push(i);
+		lineIndexCache = { text, nl };
 	}
-	return n;
+	const nl = lineIndexCache.nl;
+	let lo = 0;
+	let hi = nl.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (nl[mid] < index) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo + 1;
 }
 
 // ---------------------------------------------------------------------------
