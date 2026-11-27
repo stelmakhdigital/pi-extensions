@@ -79,9 +79,15 @@ export default function (pi: ExtensionAPI) {
 
 	// ---------- копия дефолтного футера pi (FooterComponent) ----------
 
-	const renderStats = (width: number, theme: Theme): string[] => {
-		const ctx = ctxRef;
-		if (!ctx) return [];
+	/*
+	 * Полная сессия пересчитывается не чаще раза в TOTALS_TTL_MS: render
+	 * вызывается на каждый кадр, а счётчики токенов меняются раз в сообщение.
+	 * 500 мс устаревания для строки статуса не виден, O(N) на кадр — заметен.
+	 */
+	const TOTALS_TTL_MS = 500;
+	let totalsCache: { totals: Totals; hitRate?: number; at: number } | null = null;
+
+	const sumUsage = (ctx: ExtensionContext) => {
 		const totals: Totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 		let latestCacheHitRate: number | undefined;
 		for (const entry of ctx.sessionManager.getEntries()) {
@@ -97,6 +103,14 @@ export default function (pi: ExtensionAPI) {
 				addUsage(totals, (entry as { usage?: Usage }).usage);
 			}
 		}
+		return { totals, hitRate: latestCacheHitRate, at: Date.now() };
+	};
+
+	const renderStats = (width: number, theme: Theme): string[] => {
+		const ctx = ctxRef;
+		if (!ctx) return [];
+		if (!totalsCache || Date.now() - totalsCache.at > TOTALS_TTL_MS) totalsCache = sumUsage(ctx);
+		const { totals, hitRate: latestCacheHitRate } = totalsCache;
 
 		const contextUsage = ctx.getContextUsage?.();
 		const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
@@ -206,6 +220,7 @@ export default function (pi: ExtensionAPI) {
 		t0 = 0;
 		firstTokenAt = null;
 		footerInstalled = false;
+		totalsCache = null;
 		installFooter(ctx);
 	});
 

@@ -422,6 +422,7 @@ async function watchTick(): Promise<void> {
 	if (live.length === 0) {
 		lastWidgetJson = "";
 		updateWidget();
+		stopWatch(); // последний субагент завершился — до следующего spawn таймер не нужен
 		return;
 	}
 
@@ -526,12 +527,20 @@ function refreshConfig(): void {
 	configRef = loadConfig({ cwd: latestCtx.cwd, projectTrusted: latestCtx.isProjectTrusted() });
 }
 
+/** Таймер нужен, только пока живёт хотя бы один субагент: без него тик вхолостую
+ * будит процесс раз в секунду на весь срок сессии. */
 function startWatch(): void {
 	if (watchTimer) return;
 	watchTimer = setInterval(() => {
 		void watchTick().catch(() => {});
 	}, configRef?.watch.intervalMs ?? 1000);
 	watchTimer.unref();
+}
+
+function stopWatch(): void {
+	if (!watchTimer) return;
+	clearInterval(watchTimer);
+	watchTimer = undefined;
 }
 
 // ── spawn ──
@@ -934,15 +943,11 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		latestCtx = ctx;
 		refreshConfig();
-		startWatch();
-		void maybeHandoff(ctx);
+		void maybeHandoff(ctx); // watch стартует при первом spawn (см. startWatch)
 	});
 
 	pi.on("session_shutdown", () => {
-		if (watchTimer) {
-			clearInterval(watchTimer);
-			watchTimer = undefined;
-		}
+		stopWatch();
 		for (const r of [...running.values()]) {
 			if (r.finished) continue;
 			try {

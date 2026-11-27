@@ -168,6 +168,30 @@ function buildStructuredResult(
 	} as AskUserQuestionResultDetails;
 }
 
+/**
+ * Гонка UI-ожидания с отменой хода (Esc/abort). Без неё `await` висел бы до
+ * конца сессии: вопрос открыт, агент уже отменён, tool_result никто не ждёт.
+ * `undefined` = отменено.
+ */
+export function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.resolve(undefined);
+	return new Promise<T | undefined>((resolve, reject) => {
+		const onAbort = () => resolve(undefined);
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(
+			(value) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(error) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
+}
+
 function cancelledResult(question: string, mode: AskUserQuestionMode, context?: string) {
 	const message = "Пользователь отменил вопрос";
 	return {
@@ -600,7 +624,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 			return withUILock(async () => {
 				if (mode === "text") {
 					const editorTitle = context ? `${params.question}\n\n${context}` : params.question;
-					const answer = await ctx.ui.editor(editorTitle);
+					const answer = await withAbort(ctx.ui.editor(editorTitle), signal);
 					if (answer === undefined) {
 						return cancelledResult(params.question, mode, context);
 					}
@@ -610,14 +634,14 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 				}
 
 				if (mode === "single-select") {
-					const answer = await askSingleChoice(ctx, params.question, context, options);
+					const answer = await withAbort(askSingleChoice(ctx, params.question, context, options), signal);
 					if (!answer) {
 						return cancelledResult(params.question, mode, context);
 					}
 					return buildResult(params.question, context, mode, [answer]);
 				}
 
-				const answers = await askMultiChoice(ctx, params.question, context, options);
+				const answers = await withAbort(askMultiChoice(ctx, params.question, context, options), signal);
 				if (!answers) {
 					return cancelledResult(params.question, mode, context);
 				}

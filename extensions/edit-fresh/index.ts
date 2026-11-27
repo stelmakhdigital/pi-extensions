@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { isYolo, onYoloChange } from "../yolo-mode.ts";
+import { resolvePath } from "../paths.ts";
 
 /**
  * edit-fresh: блокирует вызовы `edit`, если файл не читали в этой сессии или
@@ -49,7 +49,9 @@ export default function (pi: ExtensionAPI) {
 	});
 	const disabled = pi.getFlag("edit-fresh-disabled") === true;
 
-	const resolve = (ctx: ExtensionContext, p: string) => path.resolve(ctx.cwd || process.cwd(), p);
+	// Канонизация обязательна: read по symlink'у и edit по реальному пути —
+	// один файл, но разные ключи, и edit ложно блокировался бы «не читан».
+	const resolve = (ctx: ExtensionContext, p: string) => resolvePath(ctx.cwd, p);
 
 	const onToolCall = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> => {
 		if (disabled || isYolo()) return;

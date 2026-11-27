@@ -2,7 +2,7 @@
  * Смоук-тест edit-fresh: jiti + стаб ExtensionAPI.
  * Запуск: node test/edit-fresh-smoke.test.mjs
  */
-import { mkdirSync, writeFileSync, utimesSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, utimesSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -136,6 +136,39 @@ const touchExternal = () => utimesSync(file, new Date(), new Date(Date.now() + 5
 		const res = await onCall({ type: "tool_call", toolName: "edit", toolCallId: "b6", input: { path: "wfail.txt", edits: [] } }, ctx);
 		if (!res?.block) throw new Error("после failed-write edit не заблокирован (пендинг не снят)");
 	});
+}
+
+// === один файл под разными путями (symlink) ===
+{
+	const base2 = join(tmpdir(), `edit-fresh-link-${process.pid}`);
+	mkdirSync(base2, { recursive: true });
+	const dir = join(base2, "proj");
+	mkdirSync(dir, { recursive: true });
+	const target = join(dir, "real.txt");
+	writeFileSync(target, "one\n");
+	symlinkSync("real.txt", join(dir, "link.txt"));
+
+	const pi = makePi();
+	editFresh.default(pi);
+	const onCall = pi.handlers.tool_call;
+	const ctx = makeCtx(dir);
+
+	await check("read по symlink'у считает файл прочитанным для edit реального пути", async () => {
+		await onCall({ type: "tool_call", toolName: "read", toolCallId: "l1", input: { path: "link.txt" } }, ctx);
+		const res = await onCall({ type: "tool_call", toolName: "edit", toolCallId: "l2", input: { path: "real.txt", edits: [] } }, ctx);
+		if (res !== undefined) throw new Error("ложный блок после read по symlink: " + JSON.stringify(res));
+	});
+
+	await check("обратный порядок (read реального → edit symlink'а) тоже проходит", async () => {
+		const pi2 = makePi();
+		editFresh.default(pi2);
+		const call2 = pi2.handlers.tool_call;
+		await call2({ type: "tool_call", toolName: "read", toolCallId: "l3", input: { path: "real.txt" } }, ctx);
+		const res = await call2({ type: "tool_call", toolName: "edit", toolCallId: "l4", input: { path: "link.txt", edits: [] } }, ctx);
+		if (res !== undefined) throw new Error("ложный блок после read реального пути: " + JSON.stringify(res));
+	});
+
+	rmSync(base2, { recursive: true, force: true });
 }
 
 rmSync(base, { recursive: true, force: true });

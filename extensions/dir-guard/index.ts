@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
 import { pathCandidates } from "../shell-parse.ts";
 import { isSecretPath } from "../secret-paths.ts";
+import { canonical } from "../paths.ts";
 import { isYolo } from "../yolo-mode.ts";
 
 /**
@@ -61,21 +62,6 @@ function expandHome(p: string): string {
  * пути `cat /etc/new` прошла бы по строковому виду, а symlink-escape в
  * несуществующий хвост — остался бы незамеченным.
  */
-function canonical(p: string): string {
-	let cur = p;
-	const tail: string[] = [];
-	for (;;) {
-		try {
-			return path.join(fs.realpathSync.native(cur), ...tail);
-		} catch {
-			const parent = path.dirname(cur);
-			if (parent === cur) return path.join(p, ...tail); // канонизировать нечего
-			tail.unshift(path.basename(cur));
-			cur = parent;
-		}
-	}
-}
-
 function isInside(p: string, root: string): boolean {
 	const r = root.length > 1 && root.endsWith(path.sep) ? root.slice(0, -1) : root;
 	if (r === path.sep) return p === path.sep || p.startsWith(path.sep);
