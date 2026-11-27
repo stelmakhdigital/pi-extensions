@@ -440,6 +440,8 @@ extensions/
   guard-state.ts              # персистентность режимов guard'ов (<agentDir>/guard-state.json)
   json-store.ts               # readJson / writeJson (tmp + rename)
   secret-paths.ts             # пути учётных данных (dir-guard + injection-guard)
+  shell-parse.ts              # разбор bash-команд: токены, сегменты, головы, кандидаты путей
+  paths.ts                    # canonical / resolvePath (realpath с шагом вверх)
   untrusted.ts                # «окно недоверия»: флаг внешнего контента в контексте
   yolo/
     index.ts                  # флаг --yolo, команда /yolo, авто-доверие проекту, бейдж

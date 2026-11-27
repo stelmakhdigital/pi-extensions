@@ -186,6 +186,10 @@ const URL_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 function candidateFrom(word: string): string | null {
 	const w = word.trim();
 	if (!w || URL_RE.test(w)) return null;
+	// sed/awk-адреса и регулярки (`sed -n '/^## Х/,/^```$/p'`, `y|^|/|`): на вид
+	// абсолютный путь, а по факту текст. `^` в файловом пути — экзотика,
+	// ложный блок на таком токене мешает чаще, чем ловит что-то реальное.
+	if (w.includes("^")) return null;
 	// `//etc/x` bash читает как `/etc/x`, а realpath на POSIX оставляет `//` как есть.
 	const norm = (s: string) => s.replace(/\/\/+/g, "/");
 	// Присваивание окружения: значение и есть путь (`HOME=/etc x cmd`).

@@ -409,6 +409,11 @@ pinGuardState(false);
 		await passed('grep "a ; b" notes.txt', "внутренний разделитель в кавычках");
 	});
 
+	await check("bash: sed/awk-адрес — не путь (ложный блок на текстах)", async () => {
+		await passed("sed -n '/^## Заголовки/,/^```$/p' README.md", "адрес sed");
+		await passed("awk -F: '{print $1}' users.csv | head", "awk по файлу в CWD");
+	});
+
 	await check("bash: относительный путь с .. в середине блокируется", async () => {
 		await blocked("cat src/../../../etc/passwd", ".. в середине");
 	});
