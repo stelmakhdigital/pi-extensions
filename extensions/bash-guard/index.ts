@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
-import { parse as shellParse } from "shell-quote";
+import { commandSegments, headUtility, isOpToken, parseTokens, physicalLines, splitOnOps, tokensToStrings, type Token } from "../shell-parse.ts";
 import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
 import { isYolo } from "../yolo-mode.ts";
 
@@ -22,34 +22,6 @@ type Risk = {
 	severity: Severity;
 	reasons: string[];
 };
-
-type OpToken = { op: string; [k: string]: unknown };
-
-type Token = string | OpToken;
-
-function isOpToken(t: Token): t is OpToken {
-	return typeof t === "object" && t !== null && "op" in t;
-}
-
-function tokensToStrings(tokens: Token[]): string[] {
-	return tokens.filter((t) => typeof t === "string") as string[];
-}
-
-function splitOnOps(tokens: Token[], splitOps: string[]): Token[][] {
-	const out: Token[][] = [];
-	let current: Token[] = [];
-	for (const t of tokens) {
-		if (isOpToken(t) && splitOps.includes(t.op)) {
-			if (current.length) out.push(current);
-			current = [];
-			continue;
-		}
-		current.push(t);
-	}
-	if (current.length) out.push(current);
-	return out;
-}
-
 function hasFlag(args: string[], flag: string): boolean {
 	return args.includes(flag) || args.some((a) => a.startsWith(flag) && flag.length === 2 && a.startsWith("-"));
 }
@@ -317,14 +289,16 @@ export function analyzeBashCommand(command: string, depth = 0, strictGit = false
 	// Каждую строку разбираем отдельно: shell-quote теряет переносы строк, и без этого
 	// опасная команда, «спрятанная» за безобидной первой строкой (echo 1\nrm -rf /),
 	// ушла бы незамеченной.
-	const lines = command.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+	// physicalLines, а не split("\n"): перевод строки внутри кавычек
+	// (`awk 'BEGIN\n{print}'`) — часть команды, а не новая команда.
+	const lines = physicalLines(command);
 	return mergeRisks(lines.map((l) => analyzeLine(l, depth, strictGit, skipRm)));
 }
 
 function analyzeLine(line: string, depth: number, strictGit: boolean, skipRm: boolean): Risk | null {
 	let tokens: Token[];
 	try {
-		tokens = shellParse(line) as Token[];
+		tokens = parseTokens(line);
 	} catch {
 		// Запасной вариант: если разобрать не удалось, считаем команду подозрительной
 		return { severity: "medium", reasons: ["разобрать shell-команду не удалось (безопасный анализ невозможен)"] };
@@ -411,46 +385,117 @@ const _isSubagent = Number.isFinite(_subagentDepth) && _subagentDepth >= 1;
 // Аргументы `sh/bash/zsh -c "…"` разворачиваем в отдельные варианты: якорные
 // паттерны пола (sudo/shutdown) ловят `bash -c "sudo …"`, но не слово sudo
 // внутри аргументов grep или кавычек безобидных команд.
-export function floorVariants(command: string): string[] {
-	const out = [command];
-	for (const m of command.matchAll(/(?:^|\s)(?:(?:ba|z|da)?sh|fish)\s+-[a-zA-Z]*c\s+"((?:[^"\\]|\\.)*)"/g)) out.push(m[1]);
-	for (const m of command.matchAll(/(?:^|\s)(?:(?:ba|z|da)?sh|fish)\s+-[a-zA-Z]*c\s+'((?:[^'\\]|\\.)*)'/g)) out.push(m[1]);
-	return out;
+/** Правила «пола». `head` — утилита-голова сегмента; без неё правило по строке. */
+export type FloorRule = {
+	pattern: RegExp;
+	reason: string;
+	sessionOnly?: boolean;
+	rmOnly?: boolean;
+	/** Утилита-голова (строка — точное имя, RegExp — префикс). Без неё правило матчится по строке. */
+	head?: Array<string | RegExp>;
+};
+
+/**
+ * Обёртки, за которыми прячется настоящая команда: `sudo rm -rf /`,
+ * `env FOO=1 rm …`, `command rm …`. Флаги и `VAR=` между ними пропускаются.
+ */
+const WRAPPERS = new Set(["sudo", "env", "command", "time", "nohup", "nice", "stdbuf", "xon", "doas"]);
+
+/**
+ * Позиции команды в сегменте: сама голова и каждая обёртка на пути к ней.
+ * `FOO=1 sudo rm -rf /` → [{sudo,"sudo rm -rf /"}, {rm,"rm -rf /"}] — чтобы
+ * правило sudo сработало и не мешало правилу rm.
+ */
+function segmentPositions(argv: string[]): Array<{ head: string; text: string }> {
+	const out: Array<{ head: string; text: string }> = [];
+	let i = 0;
+	for (;;) {
+		const head = headUtility(argv.slice(i));
+		if (!head) return out;
+		out.push({ head, text: argv.slice(i).join(" ") });
+		if (!WRAPPERS.has(head)) return out;
+		let j = i + 1;
+		while (j < argv.length && (argv[j].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[j]))) j++;
+		if (j <= i) return out;
+		i = j;
+	}
 }
 
-export const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean; rmOnly?: boolean }> = [
+/**
+ * Первое сработавшее правило «пола». Матчинг по разобранным сегментам, а не по
+ * сырой строке: `echo "rm -rf /"` — это echo, а не rm; `bash -c "rm -rf /"` —
+ * это rm (сегмент развёрнут).
+ */
+export function floorMatch(command: string, rules: FloorRule[]): FloorRule | null {
+	const positions = commandSegments(command, 2, true).flatMap(segmentPositions);
+	const lines = physicalLines(command);
+	for (const rule of rules) {
+		if (!rule.head) {
+			if (lines.some((l) => rule.pattern.test(l))) return rule;
+			continue;
+		}
+		for (const pos of positions) {
+			if (rule.head.some((h) => (typeof h === "string" ? h === pos.head : h.test(pos.head))) && rule.pattern.test(pos.text)) {
+				return rule;
+			}
+		}
+	}
+	return null;
+}
+
+/**
+ * Команда уже обёрнута песочницей (голова — bwrap/sandbox-exec). Проверяем по
+ * тексту, а не по маркеру на событии: порядок загрузки расширений бывает любой,
+ * и при «bash-guard раньше sandbox» маркер просто не успевает появиться.
+ */
+export function sandboxWrapped(command: string): boolean {
+	const BACKENDS = new Set(["bwrap", "sandbox-exec"]);
+	return commandSegments(command, 0, true)
+		.flatMap(segmentPositions)
+		.some((pos) => BACKENDS.has(pos.head));
+}
+
+export const HEADLESS_BLOCKED: FloorRule[] = [
 	// Рекурсивное удаление (rmOnly — снимается /bash-guard:rm в главной сессии)
-	{ pattern: /(?<!\bgit\s+)\brm\b[^#\n]*\s-(?:[a-zA-Z]*[rR]|-\brecursive\b)/, reason: "рекурсивное удаление (rm -r / -rf / -Rf)", rmOnly: true },
-	// Повышение привилегиями (якорь на позицию команды + env-префиксы: внутри
-	// аргументов grep/строк `sudo` — не команда; sh -c содержимое разворачивает
-	// floorVariants перед матчингом)
-	{ pattern: /(?:^|[;&|\n]\s*)(?:[A-Za-z_]\w*=\S*\s+)*sudo\b/, reason: "повышенные привилегии (sudo)" },
-	// Удалённое выполнение кода через pipe-to-shell
+	{ head: ["rm"], pattern: /^rm\b[^#\n]*\s-(?:[a-zA-Z]*[rR]|-\brecursive\b)/, reason: "рекурсивное удаление (rm -r / -rf / -Rf)", rmOnly: true },
+	{ head: ["find"], pattern: /^find\b[^#]*\s-delete\b/, reason: "рекурсивное удаление через find -delete", rmOnly: true },
+	// Рекурсивные права/владелец на корень или домашнюю: восстановление возможно
+	// только по бэкапу, поэтому тоже пол.
+	{
+		head: ["chmod", "chown"],
+		pattern: /^(?:chmod|chown)\b[^#]*\s-(?:[a-zA-Z]*R\b|--recursive)\b[^#]*\s(?:\/|~|\$HOME)(?:\s|\/\*|$)/,
+		reason: "рекурсивная смена прав/владельца для / или домашней директории",
+	},
+	// Повышение привилегиями (head уже учитывает env-префиксы и обёртки)
+	{ head: ["sudo", "doas"], pattern: /^(?:sudo|doas)\b/, reason: "повышенные привилегии (sudo)" },
+	// Удалённое выполнение кода через pipe-to-shell (правило по строке: конвейер
+	// — не сегмент)
 	{ pattern: /\b(curl|wget)\b[^#\n]*\|\s*(ba?sh|zsh|fish|dash|sh)\b/, reason: "конвейер в шелл (удалённое выполнение кода)" },
+	// Форк-бомба: `f() { f | f & }; f`
+	{ pattern: /^[^(){}=]*\(\)\s*\{[^}]*\|[^}]*&[^}]*\}/, reason: "форк-бомба (рекурсивный фоновый процесс)" },
 	// Разрушение дисков/файловых систем
-	{ pattern: /\bmkfs/, reason: "форматирование файловой системы (mkfs)" },
-	{ pattern: /\bnewfs_\w+/, reason: "форматирование файловой системы (newfs_*)" },
-	{ pattern: /\bwipefs\b/, reason: "стирание сигнатуры диска" },
-	{ pattern: /\bdiskutil\s+(erase|zeroDisk|secureErase|reformat)/i, reason: "разрушительная операция с диском (diskutil)" },
-	{ pattern: /\bdd\b[^#\n]*\bof=\/dev\//, reason: "запись сырым образом в диск (dd of=/dev/...)" },
-	{ pattern: /\b(parted|fdisk|gdisk|sgdisk)\b/, reason: "управление таблицей разделов" },
-	{ pattern: /\bcryptsetup\b/, reason: "управление шифрованием дисков" },
-	{ pattern: /\bzpool\b/, reason: "управление пулами ZFS" },
-	// Электропитание системы (тот же якорь позиции; `.shutdown`-методы и
-	// текст в аргументах grep не матчатся)
-	{ pattern: /(?:^|[;&|\n]\s*)(?:[A-Za-z_]\w*=\S*\s+)*(?:shutdown|reboot|halt|poweroff)\b/, reason: "операции электропитания системы" },
+	// /.+/ означает «достаточно головы»: утилита опасна в любомInvocation.
+	{ head: [/^mkfs/, /^newfs_/], pattern: /.+/, reason: "форматирование файловой системы (mkfs/newfs)" },
+	{ head: ["wipefs"], pattern: /^wipefs\b/, reason: "стирание сигнатуры диска" },
+	{ head: ["diskutil"], pattern: /^diskutil\s+(erase|zeroDisk|secureErase|reformat)/i, reason: "разрушительная операция с диском (diskutil)" },
+	{ head: ["dd"], pattern: /^dd\b[^#\n]*\bof=\/dev\//, reason: "запись сырым образом в диск (dd of=/dev/...)" },
+	{ head: ["parted", "fdisk", "gdisk", "sgdisk"], pattern: /.+/, reason: "управление таблицей разделов" },
+	{ head: ["cryptsetup"], pattern: /^cryptsetup\b/, reason: "управление шифрованием дисков" },
+	{ head: ["zpool"], pattern: /^zpool\b/, reason: "управление пулами ZFS" },
+	// Электропитание системы
+	{ head: ["shutdown", "reboot", "halt", "poweroff"], pattern: /.+/, reason: "операции электропитания системы" },
 	// Снос инфраструктуры
-	{ pattern: /\bterraform\s+destroy\b/, reason: "снос инфраструктуры (terraform destroy)" },
-	{ pattern: /\bkubectl\s+delete\b/, reason: "удаление ресурсов Kubernetes" },
-	{ pattern: /\baws\s+s3\s+rm\b[^#\n]*--recursive/, reason: "массовое удаление в S3 (aws s3 rm --recursive)" },
+	{ head: ["terraform"], pattern: /^terraform\s+destroy\b/, reason: "снос инфраструктуры (terraform destroy)" },
+	{ head: ["kubectl"], pattern: /^kubectl\s+delete\b/, reason: "удаление ресурсов Kubernetes" },
+	{ head: ["aws"], pattern: /^aws\s+s3\s+rm\b[^#\n]*--recursive/, reason: "массовое удаление в S3 (aws s3 rm --recursive)" },
 	// Разрушительные git-операции
-	{ pattern: /\bgit\s+commit\b/, reason: "git commit (коммиты — операция главной сессии)", sessionOnly: true },
-	{ pattern: /\bgit\s+pull\b/, reason: "git pull (pull — операция главной сессии)", sessionOnly: true },
-	{ pattern: /\bgit\s+push\b/, reason: "git push (push — операция главной сессии)", sessionOnly: true },
-	{ pattern: /\bgit\s+reset\b[^#\n]*--hard\b/, reason: "сброс всех несохранённых изменений (git reset --hard)" },
-	{ pattern: /\bgit\s+clean\b[^#\n]*-[a-zA-Z]*f/, reason: "удаление неотслеживаемых файлов (git clean -f)" },
-	{ pattern: /\bgit\s+reflog\s+expire\b/, reason: "истечение reflog (удаление истории восстановления)" },
-	{ pattern: /\bgit\s+gc\b[^#\n]*--prune\b/, reason: "очистка недостижимых объектов (git gc --prune)" },
+	{ head: ["git"], pattern: /^git\s+commit\b/, reason: "git commit (коммиты — операция главной сессии)", sessionOnly: true },
+	{ head: ["git"], pattern: /^git\s+pull\b/, reason: "git pull (pull — операция главной сессии)", sessionOnly: true },
+	{ head: ["git"], pattern: /^git\s+push\b/, reason: "git push (push — операция главной сессии)", sessionOnly: true },
+	{ head: ["git"], pattern: /^git\s+reset\b[^#\n]*--hard\b/, reason: "сброс всех несохранённых изменений (git reset --hard)" },
+	{ head: ["git"], pattern: /^git\s+clean\b[^#\n]*-[a-zA-Z]*f/, reason: "удаление неотслеживаемых файлов (git clean -f)" },
+	{ head: ["git"], pattern: /^git\s+reflog\s+expire\b/, reason: "истечение reflog (удаление истории восстановления)" },
+	{ head: ["git"], pattern: /^git\s+gc\b[^#\n]*--prune\b/, reason: "очистка недостижимых объектов (git gc --prune)" },
 ];
 
 // Подмножество HEADLESS_BLOCKED, работающее как «пол» жёсткого блока, когда
@@ -459,7 +504,7 @@ export const HEADLESS_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionO
 // разрешены; блокируются только по-настоящему катастрофические/необратимые
 // паттерны. Помечены явно (sessionOnly), а не матчингом source регулярных
 // выражений — изменение формулировок больше не ломает «пол» молча.
-const MAIN_DISABLED_BLOCKED: Array<{ pattern: RegExp; reason: string; sessionOnly?: boolean; rmOnly?: boolean }> = HEADLESS_BLOCKED.filter(
+export const MAIN_DISABLED_BLOCKED: FloorRule[] = HEADLESS_BLOCKED.filter(
 	(r) => !r.sessionOnly,
 );
 
@@ -485,17 +530,16 @@ export default function (pi: ExtensionAPI) {
 			if (isYolo()) return;
 			if (!isToolCallEventType("bash", event)) return;
 			const command = event.input.command;
-			const variants = floorVariants(command);
-			for (const { pattern, reason } of HEADLESS_BLOCKED) {
-				if (variants.some((v) => pattern.test(v))) {
-					return {
-						block: true,
-						reason:
-							`Заблокировано bash-guard: ${reason}. ` +
-							"Это неинтерактивная сессия субагента — катастрофические операции запрещены. " +
-							"Предложи более безопасный вариант или попроси родительского агента уточнить у пользователя.",
-					};
-				}
+			if (sandboxWrapped(command)) return;
+			const hit = floorMatch(command, HEADLESS_BLOCKED);
+			if (hit) {
+				return {
+					block: true,
+					reason:
+						`Заблокировано bash-guard: ${hit.reason}. ` +
+						"Это неинтерактивная сессия субагента — катастрофические операции запрещены. " +
+						"Предложи более безопасный вариант или попроси родительского агента уточнить у пользователя.",
+				};
 			}
 		});
 		return;
@@ -594,27 +638,25 @@ export default function (pi: ExtensionAPI) {
 		if (isYolo()) return;
 		if (!isToolCallEventType("bash", event)) return;
 
-		// sandbox-расширение уже обёрнуло команду в bwrap/Seatbelt (маркер на событии) —
-		// повторное подтверждение не нужно: команда исполняется в изоляции.
-		if ((event as unknown as { __sandboxWrapped?: unknown }).__sandboxWrapped) return;
-
 		const command = event.input.command;
+		// Команда в песочнице (bwrap/Seatbelt) — повторное подтверждение не нужно:
+		// изоляция уже сделала свою работу.
+		if (sandboxWrapped(command)) return;
 
 		// Отключённый (автономный) режим: без интерактивных запросов, но
 		// сохраняем «пол» жёсткого блока для катастрофических операций.
 		if (disabled) {
-			const variants = floorVariants(command);
-			for (const { pattern, reason, rmOnly } of MAIN_DISABLED_BLOCKED) {
-				if (rmAllowed && rmOnly) continue;
-				if (variants.some((v) => pattern.test(v))) {
-					return {
-						block: true,
-						reason:
-							`Заблокировано bash-guard («пол» автономного режима): ${reason}. ` +
-							"Даже при отключённом bash-guard этот шаблон слишком разрушителен для автономного выполнения. " +
-							"Включи bash-guard через /bash-guard и подтверди интерактивно, или предложи более безопасный вариант.",
-					};
-				}
+			// /bash-guard:rm снимает только rm-правила (rm -r, find -delete)
+			const rules = rmAllowed ? MAIN_DISABLED_BLOCKED.filter((r) => !r.rmOnly) : MAIN_DISABLED_BLOCKED;
+			const hit = floorMatch(command, rules);
+			if (hit) {
+				return {
+					block: true,
+					reason:
+						`Заблокировано bash-guard («пол» автономного режима): ${hit.reason}. ` +
+						"Даже при отключённом bash-guard этот шаблон слишком разрушителен для автономного выполнения. " +
+						"Включи bash-guard через /bash-guard и подтверди интерактивно, или предложи более безопасный вариант.",
+				};
 			}
 			return;
 		}

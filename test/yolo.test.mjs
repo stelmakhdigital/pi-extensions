@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
+import { isolateGuardEnv } from "./env.mjs";
+isolateGuardEnv();
+
 // Изолируем agent dir: guard-state.json не должен трогать реальный ~/.pi/agent.
 const guardAgentDir = join(tmpdir(), `pi-yolo-test-${process.pid}`);
 process.env.PI_CODING_AGENT_DIR = guardAgentDir;

@@ -4,12 +4,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
+import { pathCandidates } from "../shell-parse.ts";
 import { isSecretPath } from "../secret-paths.ts";
 import { isYolo } from "../yolo-mode.ts";
 
 /**
- * dir-guard: жёсткий блок tool-вызовов (read/write/edit/bash), чьи пути уходят
- * ВНЕ рабочей директории сессии (CWD) и её allowlist'а.
+ * dir-guard: жёсткий блок tool-вызовов, чьи пути уходят ВНЕ рабочей директории
+ * сессии (CWD) и её allowlist'а. Проверяются read/write/edit (input.path),
+ * find/grep/ls (input.path — у поиска он тоже есть, и `grep -r x ~/.ssh`
+ * обязан ловиться так же, как `cat ~/.ssh/...`), и bash.
  *
  * Механика:
  * - CWD берётся из ExtensionContext (ctx.cwd), канонизируется (realpath) и
@@ -18,10 +21,12 @@ import { isYolo } from "../yolo-mode.ts";
  *   несуществующего пути — realpath ближайшего существующего родителя + хвост).
  *   Это закрывает symlink-escape: symlink внутри CWD, указывающий наружу,
  *   разрешается в реальный внешний путь и блокируется.
- * - Bash: эвристика, НЕ полный shell-парсинг. Извлекаются path-подобные токены
- *   (абсолютные пути, ~/…, относительные с ..) и проверяются теми же правилами.
- *   Неразрешимые токены ($VAR, глобы `*`, обратные кавычки) сознательно НЕ
- *   блокируются — осознанный компромисс, см. README.
+ * - Bash: токены из shell-quote (extensions/shell-parse.ts), а не `split(/\s+/)`:
+ *   путь в кавычках, путь после флага (`--file=/etc/x`) и путь в присваивании
+ *   (`HOME=/etc cmd`) видны так же хорошо, как без кавычек. Неразрешимые токены
+ *   ($VAR, глобы `*`, обратные кавычки) сознательно НЕ блокируются — осознанный
+ *   компромисс, см. README. Односегментные абсолютные пути (`/models`, `/app`)
+ *   тоже: в bash-командах это пути внутри контейнера.
  * - Allowlist — корневые директории (сам путь и всё в нём): дефолт $HOME/.pi,
  *   флаг --dir-guard-allow (коммат-список) и файл .dir-guard.json в CWD.
  *   Symlink-escape блокируется ВСЕГДА: проверка идёт по canonical (realpath)
@@ -78,54 +83,6 @@ function isInside(p: string, root: string): boolean {
 }
 
 type Verdict = { blocked: boolean; reason?: string };
-
-/**
- * Извлекает path-подобные токены из bash-команды (эвристика).
- * Возвращает только то, что можно разрешить в конкретной файловой системе.
- */
-function extractBashPaths(command: string): string[] {
-	const found = new Set<string>();
-	// Двойные слэши схлопываем: bash трактует `//etc/x` как `/etc/x`, а матчер
-	// иначе пропускал матч с `/` перед ним (ложный «хвост длинного токена»).
-	// Абсолютные пути (мульти-сегментные). Пропускаем матчи, за которыми сразу
-	// идёт `$`/`*` (продолжение в переменную/глоб — неразрешимо) и матчи после
-	// `:` (URL-схемы: `https://host/path`).
-	const collapsed = command.replace(/\/\/+/g, "/");
-	for (const m of collapsed.matchAll(/\/[A-Za-z0-9_.\-]+(?:\/[A-Za-z0-9_.\-]+)*/g)) {
-		const idx = m.index ?? 0;
-		const before = collapsed[idx - 1];
-		// URL-хост после схемы (`https://host/…`): предыдущий символ — `:` (схема)
-		// или `/` (второй слэш из `//host`) — это не файловый путь. Буква/точка —
-		// хвост более длинного неразрешимого токена (`$HOME/tmpdir`, `x//etc/x`).
-		// `~` — хвост home-пути `~/…` (обрабатывается отдельным правилом ниже;
-		// без этого исключения `~/.pi/agent` давал ложный токен `/.pi/agent`).
-		if (before && (before === ":" || before === "/" || before === "~" || /[A-Za-z0-9_.`}$]/.test(before))) continue;
-		const after = collapsed[idx + m[0].length];
-		if (after === "$" || after === "*") continue;
-		// Односегментные токены (`/models`, `/app`, `/Flag`) — почти всегда пути
-		// внутри контейнера (docker exec) или обрезанные флаги, а не хостовые
-		// пути; мусорный хостовый путь из одного сегмента в корне не существует.
-		if (!m[0].slice(1).includes("/")) continue;
-		found.add(m[0]);
-	}
-	// Путь из дома: ~/… (и сам ~); только в начале токена (не `file~1`)
-	for (const m of command.matchAll(/(^|\s)~(?:\/[A-Za-z0-9_.\-]+)*/g)) {
-		found.add(m[0].slice(m[1].length));
-	}
-	// Относительные токены с .. — резолвятся от CWD процесса. Без cd-трекинга
-	// возможны обе ошибки после `cd подкаталог` (`cd out && cat ../f` — ложный
-	// негатив, `cd sub && cat ../f` — ложный блок); полный трекинг cd в строке
-	// bash неразрешим, принять как документированное ограничение эвристики.
-	for (const tok of command.split(/\s+/)) {
-		if (!tok.includes("..")) continue;
-		if (/[$`*]/.test(tok)) continue; // неразрешимо
-		if (!/^[A-Za-z0-9_.\/\-]+$/.test(tok)) continue;
-		found.add(tok);
-	}
-	// /dev/null — ни читать данные, ни записывать их наружу не может (пустой
-	// ввод/вывод), ложное срабатывание на стандартную редирекцию `2>/dev/null`.
-	return [...found].filter((p) => p !== "/dev/null");
-}
 
 export default function (pi: ExtensionAPI) {
 	// Состояние персистентно: <agentDir>/guard-state.json (переживает /reload и
@@ -216,26 +173,31 @@ export default function (pi: ExtensionAPI) {
 		return theme.bg("toolErrorBg", theme.bold(theme.fg("error", " ⚠ DR OFF ")));
 	}
 
-	const onToolCall = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> => {
-		if (!isToolCallEventType("read", event) && !isToolCallEventType("write", event) &&
-			!isToolCallEventType("edit", event) && !isToolCallEventType("bash", event)) {
-			return;
+	/** Какой путь проверяем у не-bash инструмента. У поиска path опционален: без него — CWD. */
+	function checkedPath(event: ToolCallEvent): string | null {
+		for (const tool of ["read", "write", "edit", "find", "grep", "ls"] as const) {
+			if (!isToolCallEventType(tool, event)) continue;
+			const raw = (event.input as { path?: unknown }).path;
+			// Опущенный path у find/grep/ls значит «текущий каталог» — он внутри CWD по определению.
+			return typeof raw === "string" && raw.trim() ? raw : null;
 		}
+		return null;
+	}
+
+	const onToolCall = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> => {
+		const isBash = isToolCallEventType("bash", event);
+		const pathArg = isBash ? null : checkedPath(event);
+		if (!isBash && pathArg === null) return;
 		// yolo: путь-блокировки сняты (см. extensions/yolo). Проверка в хендлере,
 		// а не в factory: тогда `/yolo` работает и на включение, и на возврат защиты.
 		if (disabled || isYolo()) return;
 		ensureReady(ctx);
 
-		if (isToolCallEventType("bash", event)) {
-			for (const tok of extractBashPaths(event.input.command)) {
-				const v = checkPath(tok);
-				if (v.blocked) return { block: true, reason: v.reason };
-			}
-			return;
+		const candidates = isBash ? pathCandidates(event.input.command) : [pathArg as string];
+		for (const tok of candidates) {
+			const v = checkPath(tok);
+			if (v.blocked) return { block: true, reason: v.reason };
 		}
-
-		const v = checkPath(String(event.input.path));
-		if (v.blocked) return { block: true, reason: v.reason };
 	};
 
 	if (_isSubagent) {

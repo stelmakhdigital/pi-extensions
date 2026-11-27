@@ -3,9 +3,9 @@
  *
  * Механика: перехват `tool_call` на `bash` и мутация `event.input.command` —
  * команда оборачивается бэкендом песочницы и исполняется штатным bash-тулом.
- * Пользователь (и bash-guard) видят полную команду, включая бэкенд;
- * если bash-guard загружен после sandbox, маркер __sandboxWrapped на событии
- * ему подскажет, что команда уже в песочнице.
+ * Пользователь (и bash-guard) видят полную команду, включая бэкенд: bash-guard
+ * узнаёт обёртку по голове команды (bwrap/sandbox-exec) и не спрашивает
+ * повторно — на порядок загрузки расширений это не влияет.
  *
  * Бэкенды:
  * - Linux: bubblewrap (bwrap) — mount-namespace (видна только курируемая
@@ -413,8 +413,6 @@ export default function (pi: ExtensionAPI) {
 		const input = event.input as { command: string };
 		const workspace = projectRoot(ctx.cwd);
 		input.command = wrapCommand(input.command, workspace, level);
-		// Маркер для bash-guard (если он загружен позже): команда уже в песочнице.
-		(event as unknown as Record<string, unknown>).__sandboxWrapped = { level, workspace };
 	});
 
 	/** Self-test: короткая команда в песочнице с проверкой изоляции. */

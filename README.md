@@ -10,7 +10,7 @@
 | [yolo](extensions/yolo/) | Автономный режим `--yolo` / `PI_YOLO=1` / `/yolo`: без стартовых вопросов (доверие проекту, tmux-handoff) и без блокировок guard'ов, включая «пол» bash-guard; бейдж `YOLO` в футере, `/yolo` переключает посреди сессии. Подробности — [Автономный запуск без вопросов](#yolo-автономный-запуск-без-вопросов) |
 | [prompt-snippets](extensions/prompt-snippets/) | Комбинируемые одноцелевые промпт-правила: включаются на каждое сообщение через меню (`alt+s` / `/snippets`), вставляются перед или после вашего текста |
 | [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах, toggle персистентны (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
-| [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/bash, чьи пути уходят вне рабочей директории (CWD) и allowlist'а: realpath-канонизация (symlink-escape блокируется), allowlist — `$HOME/.pi` (дефолт) + `--dir-guard-allow` + `.dir-guard.json` в CWD, файлы учётных данных (`~/.ssh`, `~/.aws`, `auth.json`, `*.pem`, `.env`) блокируются сверх allowlist'а (`--dir-guard-allow-secrets` / `"secrets": "allow"`), `/dir-guard` и бейдж `DR OFF`, состояние персистентно (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
+| [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/find/grep/ls/bash, чьи пути уходят вне рабочей директории (CWD) и allowlist'а: realpath-канонизация (symlink-escape блокируется), allowlist — `$HOME/.pi` (дефолт) + `--dir-guard-allow` + `.dir-guard.json` в CWD, файлы учётных данных (`~/.ssh`, `~/.aws`, `auth.json`, `*.pem`, `.env`) блокируются сверх allowlist'а (`--dir-guard-allow-secrets` / `"secrets": "allow"`), `/dir-guard` и бейдж `DR OFF`, состояние персистентно (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
 | [injection-guard](extensions/injection-guard/) | Защита от prompt injection: результаты внешних инструментов (веб, сеть, MCP, файлы недоверенного репо) оборачиваются в метки `UNTRUSTED` с обезвреживанием поддельных меток + секция правил в системном промпте; блок корреляции «чтение секрета + сетевой уход»; в strict опасные действия (файлы агента, отправка наружу, установка пакетов, git push) после внешнего контента спрашиваются. Режимы off/label/strict (`/injection-guard`, дефолт label), бейдж `IG`, `/injection-guard:stats`, `.injection-guard.json` в CWD |
 | [text-guard](extensions/text-guard/) | Контроль текста модели (документация, комментарии, коммиты, чат) — без эмодзи, стрелок, слов-маркеров ИИ-стиля («давайте», delve…) и умных названий: секция стиля в системном промпте, скан write/edit/bash (коммиты, heredoc, echo), режимы off/warn/strict (`/text-guard`, дефолт warn), автофикс эмодзи/стрелок, `.text-guard.json` в CWD (allow/skip/words/ignore), `/text-guard:stats`, бейдж `TG OFF`, состояние персистентно |
 | [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: задаёт пользователю один вопрос (текст, выбор одного, мультивыбор) и ждёт ответа |
@@ -73,6 +73,26 @@ MCP-инструмент, снапшот браузера. `injection-guard` н�
 glob `*`), бейдж `IG n` в футере, режим персистентен (`guard-state.json`).
 В `label` guard не мешает работе, но оставляет модели явную границу
 «данные / команды».
+
+## Границы защиты
+
+Guard'ы — это барьер от случайности модели, а не от атакующего с shell'ом.
+Что они **не** делают:
+
+- **PowerShell не разбирается.** Команды guard'ы анализируют bash'овые
+  (`extensions/shell-parse.ts` — общий разбор токенов). Целевые платформы —
+  Linux и macOS; `powershell` — не целевой инструмент, его вызовы guard'ы не
+  оценивают (песочница `sandbox` на таких вызовах тоже не работает).
+- **Неразрешимые токены не блокируются.** `$ПЕРЕМЕННАЯ`, глобы (`a*.txt`),
+  backtick'и: разрешить путь нельзя, а блокировать наугад — ловить ложные
+  срабатывания на каждом `grep x *.log`. Осознанный компромисс dir-guard.
+- **Односегментные абсолютные пути** (`/models`, `/app`) не считаются
+  хостовыми: в docker/k8s-командах это пути контейнера.
+- **Регистр и алиасы shell'а** (function, alias, `~/scripts/rm`) не
+  разворачиваются — голова команды берётся как есть.
+
+Настоящий барьер — [sandbox](extensions/sandbox/): он ограничивает процесс,
+а не намерение команды, и потому не зависит от качества разбора.
 
 ## Скиллы
 

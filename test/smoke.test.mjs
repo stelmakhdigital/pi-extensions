@@ -10,6 +10,9 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { createJiti } from "jiti";
 
+import { isolateGuardEnv } from "./env.mjs";
+isolateGuardEnv();
+
 // Изолируем agent dir (guard-state.json пишется в <agentDir>/ — не в реальный ~/.pi/agent).
 const guardAgentDir = join(tmpdir(), `pi-guard-state-test-${process.pid}`);
 process.env.PI_CODING_AGENT_DIR = guardAgentDir;
@@ -256,7 +259,10 @@ const noUiCtx = {
 		await pi.handlers.tool_call(ev, ctxSbx);
 		const cmd = String(ev.input.command);
 		if (!/bwrap|sandbox-exec/.test(cmd)) throw new Error("не обёрнуто: " + cmd.slice(0, 120));
-		if (!ev.__sandboxWrapped) throw new Error("нет маркера __sandboxWrapped");
+		// Обёртку должен узнавать bash-guard (по голове команды, без маркеров и
+		// зависимости от порядка загрузки расширений).
+		if (!bashGuard.sandboxWrapped(cmd)) throw new Error("bash-guard не узнал обёртку: " + cmd.slice(0, 120));
+		if (bashGuard.sandboxWrapped("rm -rf build")) throw new Error("обычная команда принята за обёртку");
 	}, needsBackend);
 
 	async function runWrapped(command, cwd) {
@@ -471,6 +477,7 @@ for p in S.iter_session_files(include_subagents=False):
 assert found > 0, "нет сессий с сообщениями"
 print(found)`,
 				lib,
+
 			], { encoding: "utf8", timeout: 120000, env });
 			if (r.status !== 0) throw new Error((r.stderr || "").slice(0, 300));
 		});

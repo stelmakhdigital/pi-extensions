@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { createJiti } from "jiti";
 
+import { isolateGuardEnv } from "./env.mjs";
+isolateGuardEnv();
+
 // Изолируем agent dir (guard-state.json пишется в <agentDir>/ — не в реальный ~/.pi/agent).
 const guardAgentDir = join(tmpdir(), `pi-inj-guard-state-test-${process.pid}`);
 process.env.PI_CODING_AGENT_DIR = guardAgentDir;
@@ -55,6 +58,7 @@ function makeCtx(extra = {}) {
 		hasUI: true,
 		mode: "tui",
 		cwd,
+
 		isProjectTrusted: () => true,
 		ui: {
 			notify: () => {},

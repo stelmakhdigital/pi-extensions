@@ -6,6 +6,10 @@
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
+import { isolateGuardEnv } from "./env.mjs";
+isolateGuardEnv();
+
+
 const jiti = createJiti(fileURLToPath(import.meta.url));
 const { analyzeBashCommand } = jiti("../extensions/bash-guard/index.ts");
 

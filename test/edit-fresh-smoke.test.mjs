@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { createJiti } from "jiti";
 
+import { isolateGuardEnv } from "./env.mjs";
+isolateGuardEnv();
+
 const require = createRequire(import.meta.url);
 const jiti = createJiti(fileURLToPath(import.meta.url));
 const editFresh = jiti("../extensions/edit-fresh/index.ts");
@@ -41,6 +44,7 @@ function makeCtx(cwd) {
 		hasUI: true,
 		mode: "tui",
 		cwd,
+
 		ui: {
 			notify: () => {},
 			setStatus: () => {},

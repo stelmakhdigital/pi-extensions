@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { createJiti } from "jiti";
 
+import { isolateGuardEnv } from "./env.mjs";
+isolateGuardEnv();
+
 // Изолируем agent dir (guard-state.json пишется в <agentDir>/ — не в реальный ~/.pi/agent).
 const guardAgentDir = join(tmpdir(), `pi-dir-guard-state-test-${process.pid}`);
 process.env.PI_CODING_AGENT_DIR = guardAgentDir;
@@ -48,6 +51,7 @@ function makeCtx(cwd, extra = {}) {
 		hasUI: true,
 		mode: "tui",
 		cwd,
+
 		ui: {
 			notify: () => {},
 			setStatus: () => {},
@@ -87,6 +91,14 @@ mkdirSync(cwd, { recursive: true });
 mkdirSync(outside, { recursive: true });
 writeFileSync(join(cwd, "inner.txt"), "hello");
 writeFileSync(join(outside, "secret.txt"), "s3cr3t");
+
+/** Зафиксировать состояние dir-guard в файле: тесты на toggle пишут его, а
+ * factory читает на старте — без пина следующий блок проверял бы «всё разрешено». */
+function pinGuardState(disabled) {
+	mkdirSync(guardAgentDir, { recursive: true });
+	writeFileSync(join(guardAgentDir, "guard-state.json"), JSON.stringify({ "dir-guard": { disabled } }));
+}
+pinGuardState(false);
 
 // === dir-guard ===
 {
@@ -335,6 +347,72 @@ await check("dir-guard: /dir-guard персистентен и восстана�
 		throw new Error("после возврата поведение неверно (ожидалось block=" + !before + "): " + JSON.stringify(resBack));
 	}
 });
+
+// === инструменты поиска: у них тоже есть input.path (найдённая дыра) ===
+pinGuardState(false);
+{
+	const pi = makePi();
+	dirGuard.default(pi);
+	const handler = pi.handlers.tool_call;
+	const ctx = makeCtx(cwd);
+	const ssh = join(base, ".ssh", "id_ed25519");
+
+	for (const tool of ["grep", "find", "ls"]) {
+		await check(`(${tool}) путь наружу блокируется так же, как у read`, async () => {
+			const res = await handler({ toolName: tool, input: { pattern: "x", path: outside } }, ctx);
+			if (!res?.block) throw new Error(`${tool} наружу пропущен: ${JSON.stringify(res)}`);
+		});
+	}
+
+	await check("grep по ключу блокируется (то же, что cat ключа)", async () => {
+		const res = await handler({ toolName: "grep", input: { pattern: "pass", path: join(base, ".ssh") } }, ctx);
+		if (!res?.block) throw new Error("grep по ~/.ssh пропущен");
+		if (!ssh.startsWith(base)) throw new Error("фикстура вне базы");
+	});
+
+	for (const tool of ["grep", "find", "ls"]) {
+		await check(`(${tool}) path внутри CWD и опущенный path прощаются`, async () => {
+			if (await handler({ toolName: tool, input: { pattern: "x", path: cwd } }, ctx)) throw new Error("внутренний path заблокирован");
+			if (await handler({ toolName: tool, input: { pattern: "x" } }, ctx)) throw new Error("опущенный path заблокирован");
+		});
+	}
+}
+
+// === разбор bash: кавычки, флаги и присваивания не прячут путь ===
+pinGuardState(false);
+{
+	const pi = makePi();
+	dirGuard.default(pi);
+	const handler = pi.handlers.tool_call;
+	const ctx = makeCtx(cwd);
+
+	const blocked = async (command, label) => {
+		const res = await handler({ toolName: "bash", input: { command } }, ctx);
+		if (!res?.block) throw new Error(`${label} пропущен: ${command}`);
+	};
+	const passed = async (command, label) => {
+		const res = await handler({ toolName: "bash", input: { command } }, ctx);
+		if (res) throw new Error(`ложный блок (${label}): ${command} → ${JSON.stringify(res)}`);
+	};
+
+	await check("bash: путь в кавычках блокируется", async () => {
+		await blocked('cat "/etc/passwd"', "в двойных кавычках");
+		await blocked("cat '/etc/passwd'", "в одинарных кавычках");
+	});
+
+	await check("bash: путь после флага (--file=, -C) блокируется", async () => {
+		await blocked("sed --file=/etc/hosts/x sedscript", "флаг со значением");
+	});
+
+	await check("bash: точка с запятой в кавычках не режет команду пополам", async () => {
+		await blocked('echo "a; b" ; cat /etc/shadow', "путь после кавычки");
+		await passed('grep "a ; b" notes.txt', "внутренний разделитель в кавычках");
+	});
+
+	await check("bash: относительный путь с .. в середине блокируется", async () => {
+		await blocked("cat src/../../../etc/passwd", ".. в середине");
+	});
+}
 
 rmSync(base, { recursive: true, force: true });
 console.log(results.join("\n"));

@@ -90,5 +90,28 @@ const ev = (command, code = 1) => ({
 	});
 }
 
+{
+	await check("кавычки не ломают разбор: grep \"a && b\" f — одна цепочка", async () => {
+		const res = await pi.handler(ev('grep "a && b" f'));
+		if (!res || res.isError !== false) throw new Error(`не снят isError: ${JSON.stringify(res)}`);
+	});
+
+	await check("глоб в аргументах не мешает: head всё равно grep", async () => {
+		const res = await pi.handler(ev("grep x *.log"));
+		if (!res || res.isError !== false) throw new Error(`не снят isError: ${JSON.stringify(res)}`);
+	});
+
+	await check("неразрешимая утилита (rm с глобом) флаг не снимает", async () => {
+		const res = await pi.handler(ev("rm x*.log"));
+		if (res !== undefined) throw new Error(`флаг снят у не-probe: ${JSON.stringify(res)}`);
+	});
+
+	await check("перенос строки — вторая команда: падение make не прикрывается", async () => {
+		const res = await pi.handler(ev("grep -q pat file\nmake deploy"));
+		if (res !== undefined) throw new Error("прикрыт make: " + JSON.stringify(res));
+	});
+}
+
+
 console.log(results.join("\n"));
 if (results.some((r) => r.startsWith("FAIL"))) process.exit(1);
