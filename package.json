@@ -45,6 +45,7 @@
       "extensions/edit-check/index.ts"
     ],
     "skills": [
+      "skills/review-backend",
       "skills/session-insights",
       "skills/ui-design",
       "skills/ui-review"

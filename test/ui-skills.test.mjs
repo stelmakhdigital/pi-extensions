@@ -170,6 +170,31 @@ check("ui-review: поведение виджетов описано и не п�
 	}
 });
 
+check("ui-review: ревью кода экранов плюс дев-сервер", () => {
+	const text = skillText("ui-review");
+	assert(text.includes("references/code.md"), "SKILL.md не ссылается на references/code.md");
+	assert(existsSync(join(repo, "skills", "ui-review", "references", "code.md")), "нет references/code.md");
+	assert(/Дев-сервер не поднят/.test(text), "нет правила поднять дев-сервер");
+	for (const needle of ["Ключ по индексу", "dangerouslySetInnerHTML", "localStorage", "мемоизаци"]) {
+		assert(text.includes(needle), `в коде-ревью нет про ${needle}`);
+	}
+});
+
+check("review-backend: манифест, делегирование метода, чеклист бэкенда", () => {
+	const skills = JSON.parse(read("package.json")).pi.skills;
+	assert(skills.includes("skills/review-backend"), "review-backend нет в pi.skills");
+	const meta = frontmatter(read("skills", "review-backend", "SKILL.md"));
+	assert(meta.name === "review-backend", `name=${meta.name}`);
+	assert((meta.description || "").length > 60, "description слишком короткий для роутинга");
+	const text = skillText("review-backend");
+	// метод, порядок важности и формат отчёта живут в ponytail-review — здесь только специфика домена
+	assert(text.includes("ponytail-review"), "нет ссылки на ponytail-review");
+	assert(/не менять|только отч\u00ebт/.test(text), "нет ограничения «без правок»");
+	for (const needle of ["миграц", "индекс", "идемпот", "таймзон", "стектрейс", "сломает текущих"]) {
+		assert(text.includes(needle), `в чеклисте нет про ${needle}`);
+	}
+});
+
 check("скиллы: ссылки на references не битые", () => {
 	for (const name of UI_SKILLS) {
 		const text = read("skills", name, "SKILL.md");
