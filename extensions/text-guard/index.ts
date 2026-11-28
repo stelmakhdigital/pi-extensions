@@ -180,7 +180,6 @@ export function lineOf(text: string, index: number): number {
 // ---------------------------------------------------------------------------
 
 type Config = {
-	allow: RegExp[]; // пути, которые не сканируем (поверх skip-глобов)
 	skip: RegExp[]; // пути, которые не сканируем (дефолт + пользовательские)
 	words: Array<{ word: string; re: RegExp }>; // пользовательские слова-маркеры
 	ignore: Set<string>; // слова/токены, исключённые из проверки
@@ -199,7 +198,6 @@ function globToRegExp(glob: string): RegExp {
 
 function readConfig(cwd: string, ctx?: ExtensionContext): Config {
 	const cfg: Config = {
-		allow: [],
 		skip: DEFAULT_SKIP.map(globToRegExp),
 		words: [],
 		ignore: new Set(),
@@ -218,7 +216,6 @@ function readConfig(cwd: string, ctx?: ExtensionContext): Config {
 	const o = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
 	const asStrings = (v: unknown): string[] =>
 		Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-	for (const g of asStrings(o.allow)) cfg.allow.push(globToRegExp(g));
 	for (const g of asStrings(o.skip)) cfg.skip.push(globToRegExp(g));
 	for (const w of asStrings(o.words)) cfg.words.push({ word: w, re: wordRegex(w) });
 	for (const w of asStrings(o.ignore)) cfg.ignore.add(w.toLowerCase());
@@ -230,7 +227,7 @@ function readConfig(cwd: string, ctx?: ExtensionContext): Config {
 function isSkipped(p: string, cfg: Config): boolean {
 	const norm = p.replace(/\\/g, "/");
 	if (/(^|\/)(node_modules|\.git|\.next|dist|build|coverage)(\/|$)/.test(norm)) return true;
-	return cfg.skip.some((re) => re.test(norm)) || cfg.allow.some((re) => re.test(norm));
+	return cfg.skip.some((re) => re.test(norm));
 }
 
 function scopeForPath(p: string): Scope {
@@ -529,6 +526,20 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
+	/**
+	 * Автофикс правит `event.input` молча: модель помнит свой исходный текст, и
+	 * следующий `edit` с oldText по памяти не совпадёт (edit-fresh блокирует).
+	 * О факте переписывания сообщаем хотя бы пользователю — из tool_call больше
+	 * достучаться до модели нечем.
+	 */
+	function autofixNotify(ctx: ExtensionContext, subject: string, hits: Hit[]): void {
+		if (!ctx.hasUI) return;
+		ctx.ui.notify(
+			`text-guard: в ${subject} убраны символы (${describeHits(hits, 3)}) — на диске текст не тот, что у модели в сообщении. При правке этого файла читай его заново.`,
+			"info",
+		);
+	}
+
 	/** true → пропустить вызов (модель дважды не исправила текст; дальше — тоже). */
 	function loopGuard(key: string, ctx: ExtensionContext): boolean {
 		if (passedLoops.has(key)) return true;
@@ -591,6 +602,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (autofix && hits.every((h) => h.category === "symbols")) {
 				event.input.content = stripSymbols(content); // механическая чистка in place
+				autofixNotify(ctx, `файле ${p}`, hits);
 				return;
 			}
 			if (loopGuard(`write:${p}:${fnv(content)}`, ctx)) return;
@@ -621,6 +633,7 @@ export default function (pi: ExtensionAPI) {
 				edits.forEach((e, i) => {
 					if (perEdit[i].length) e.newText = stripSymbols(String(e.newText));
 				});
+				autofixNotify(ctx, `изменении файла ${p}`, all);
 				return;
 			}
 			if (loopGuard(`edit:${p}:${fnv(all.map((h) => h.token + ":" + h.line).join("|"))}`, ctx)) return;

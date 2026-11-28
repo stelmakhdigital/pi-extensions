@@ -181,6 +181,11 @@ const MD = "doc.md";
 		if (res !== undefined) throw new Error("автофикс не должен блокировать: " + JSON.stringify(res));
 		if (/[🎉✅→]/u.test(input.input.content)) throw new Error("символы не убраны: " + JSON.stringify(input.input.content));
 		if (input.input.content !== "Список: первый пункт второй третий") throw new Error("неожиданный результат: " + JSON.stringify(input.input.content));
+		if (!ctx.notifications.some((n) => n.m.includes("убраны символы"))) throw new Error("модель/пользователь не предупреждены о переписанном тексте");
+		const editInput = { toolName: "edit", input: { path: join(cwd, MD), edits: [{ oldText: "a", newText: "пункт → ещё ✅" }] } };
+		const editRes = await handler(editInput, ctx);
+		if (editRes !== undefined) throw new Error("автофикс edit не должен блокировать: " + JSON.stringify(editRes));
+		if (/[→✅]/u.test(editInput.input.edits[0].newText)) throw new Error("newText не почищен: " + JSON.stringify(editInput.input.edits[0].newText));
 	});
 
 	await check("автофикс не заменяет слова: «давайте» + эмодзи → блок", async () => {
@@ -211,18 +216,18 @@ const MD = "doc.md";
 		if (!statusVal || !statusVal.includes("TG")) throw new Error("бейдж: " + JSON.stringify(statusVal));
 	});
 
-	await check(".text-guard.json: allow-глобы и ignore", async () => {
-		writeFileSync(join(cwd, ".text-guard.json"), JSON.stringify({ allow: ["README*"], ignore: ["robust"] }));
+	await check(".text-guard.json: skip-глобы и ignore", async () => {
+		writeFileSync(join(cwd, ".text-guard.json"), JSON.stringify({ skip: ["README*"], ignore: ["robust"] }));
 		const pi2 = makePi();
 		textGuard.default(pi2);
 		const h2 = pi2.handlers.tool_call;
 		const ctx2 = makeCtx(cwd);
 		const ok = await h2({ toolName: "write", input: { path: join(cwd, "README.md"), content: "Крутой 🚀 проект" } }, ctx2);
-		if (ok !== undefined) throw new Error("README* должен быть в allow: " + JSON.stringify(ok));
+		if (ok !== undefined) throw new Error("README* должен быть в skip: " + JSON.stringify(ok));
 		const ok2 = await h2({ toolName: "write", input: { path: join(cwd, "x.md"), content: "Robust и надёжный механизм." } }, ctx2);
 		if (ok2 !== undefined) throw new Error("ignore не сработал: " + JSON.stringify(ok2));
-		const bad = await h2({ toolName: "write", input: { path: join(cwd, "y.md"), content: "Давайте проверим allow дальше." } }, ctx2);
-		if (!bad?.block) throw new Error("файл вне allow должен блокироваться");
+		const bad = await h2({ toolName: "write", input: { path: join(cwd, "y.md"), content: "Давайте проверим skip дальше." } }, ctx2);
+		if (!bad?.block) throw new Error("файл вне skip должен блокироваться");
 	});
 
 	await check("custom words из конфига блокируются", async () => {
