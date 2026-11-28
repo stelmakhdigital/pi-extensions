@@ -79,7 +79,10 @@ export interface LoadConfigOptions {
 
 export function loadConfig(opts: LoadConfigOptions): SubagentsConfig {
 	const env = opts.env ?? process.env;
-	let config = { ...DEFAULT_CONFIG };
+	// Глубокая копия: без неё env-оверрайды (`config.tmux.handoff = …`) дописывали
+	// бы значения в сам DEFAULT_CONFIG, и следующий loadConfig в этом же процессе
+	// (refreshConfig, тесты) стартовал бы с чужими числами.
+	let config = structuredClone(DEFAULT_CONFIG);
 
 	const globalFile = opts.globalFile ?? globalConfigPath();
 	const globalData = readJsonFile(globalFile);
@@ -110,6 +113,16 @@ export function loadConfig(opts: LoadConfigOptions): SubagentsConfig {
 	if (env.PI_SUBAGENTS_SHELL_READY_MS) {
 		config.tmux.shellReadyMs = toPositiveInt(Number(env.PI_SUBAGENTS_SHELL_READY_MS), config.tmux.shellReadyMs);
 	}
+
+	// Числа из файлов проходят как пришли, а env-ветки выше меняют их только если
+	// переменная задана. `intervalMs: 0` → setInterval с нулём, то есть hot loop на
+	// `execFileSync tmux list-panes` + чтении файлов каждый тик; `maxConcurrent: 0`
+	// отказывает каждому спавну с видом будто лимит настоящий. stallRepingTicks не
+	// трогаем: там 0 осмысленное «выкл».
+	config.tmux.shellReadyMs = toPositiveInt(config.tmux.shellReadyMs, DEFAULT_CONFIG.tmux.shellReadyMs);
+	config.limits.maxConcurrent = toPositiveInt(config.limits.maxConcurrent, DEFAULT_CONFIG.limits.maxConcurrent);
+	config.watch.intervalMs = toPositiveInt(config.watch.intervalMs, DEFAULT_CONFIG.watch.intervalMs);
+	config.watchdog.snapshotStaleMs = toPositiveInt(config.watchdog.snapshotStaleMs, DEFAULT_CONFIG.watchdog.snapshotStaleMs);
 
 	return config;
 }

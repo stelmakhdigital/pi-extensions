@@ -7,7 +7,7 @@
  *   ~/.pi/agent/sessions/--<path>--/<timestamp>_<session-id>.jsonl
  * Header v3: {"type":"session","version":3,"id","timestamp","cwd"[,"parentSession"]}
  */
-import { existsSync, openSync, fstatSync, readSync, closeSync, writeFileSync } from "node:fs";
+import { existsSync, openSync, fstatSync, readSync, closeSync, writeFileSync, mkdirSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -113,6 +113,10 @@ export function createChildSession(opts: SeedOptions): SeededChildSession {
 	if (opts.writeFile) {
 		opts.writeFile(session.file, data);
 	} else {
+		// Каталог `--<-child cwd-->/` создаём здесь: спавн в свежий worktree (обычный
+		// путь после `git worktree add`) — первый, кто пишет в этот каталог, и
+		// writeFileSync падал с ENOENT прямо в ответе spawn_agent.
+		mkdirSync(dirname(session.file), { recursive: true });
 		writeFileSync(session.file, data, "utf8");
 	}
 	return session;

@@ -16,6 +16,7 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { writeJson } from "../json-store.ts";
 import { contentHasText } from "./session.ts";
 
 const CHILD_ID = process.env.PI_SUBAGENTS_CHILD_ID ?? "";
@@ -32,7 +33,9 @@ function writeSidecar(ctx: ExtensionContext, payload: Record<string, unknown>): 
 	if (!file) return;
 	const exitFile = `${file}.exit`;
 	try {
-		writeFileSync(exitFile, JSON.stringify(payload), "utf8");
+		// tmp + rename: родитель опрашивает этот файл каждый тик и сносит его после
+		// первой осмысленной записи, поэтому полурезанный JSON терял завершение субагента.
+		writeJson(exitFile, payload);
 	} catch {
 		// Parent falls back to the terminal sentinel.
 	}

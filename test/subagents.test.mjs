@@ -61,6 +61,21 @@ await check("config: global < project < env, untrusted project игнориру�
 	assert(c.limits.maxConcurrent === 9, "env maxConcurrent");
 });
 
+await check("config: env-оверрайды не пишут в DEFAULT_CONFIG", () => {
+	const before = JSON.stringify(DEFAULT_CONFIG);
+	loadConfig({ cwd: tmp, env: { ...emptyEnv, PI_SUBAGENTS_MAX_CONCURRENT: "2", PI_SUBAGENTS_HANDOFF: "auto" }, globalFile: join(tmp, "nope-g.json"), projectFile: join(tmp, "nope-p.json") });
+	assert(JSON.stringify(DEFAULT_CONFIG) === before, "DEFAULT_CONFIG изменён: " + JSON.stringify(DEFAULT_CONFIG));
+});
+
+await check("config: числа из файла приводятся (intervalMs 0, maxConcurrent 0, shellReadyMs строка)", () => {
+	const file = join(tmp, "numbers.json");
+	writeFileSync(file, JSON.stringify({ watch: { intervalMs: 0 }, limits: { maxConcurrent: 0 }, tmux: { shellReadyMs: "быстро" } }));
+	const c = loadConfig({ cwd: tmp, env: emptyEnv, globalFile: file, projectFile: join(tmp, "nope-p.json") });
+	assert(c.watch.intervalMs === DEFAULT_CONFIG.watch.intervalMs, "intervalMs: " + c.watch.intervalMs);
+	assert(c.limits.maxConcurrent === DEFAULT_CONFIG.limits.maxConcurrent, "maxConcurrent: " + c.limits.maxConcurrent);
+	assert(c.tmux.shellReadyMs === DEFAULT_CONFIG.tmux.shellReadyMs, "shellReadyMs: " + c.tmux.shellReadyMs);
+});
+
 await check("config: битый JSON не роняет", () => {
 	const bad = join(tmp, "bad.json");
 	writeFileSync(bad, "{oops");
@@ -171,6 +186,18 @@ await check("session: standalone — только header", () => {
 	const header = JSON.parse(lines[0]);
 	assert(header.type === "session" && header.version === 3 && header.id === "abc-123", "header");
 	assert(!header.parentSession, "нет parentSession");
+});
+
+await check("session: каталог дочернего cwd создаётся (спавн в свежий worktree)", () => {
+	const s = session.createChildSession({
+		mode: "standalone",
+		sessionsRoot: join(tmp, "sessions-fresh"),
+		cwd: "/worktrees/feature-x",
+		sessionId: "fresh-1",
+		now: new Date("2026-01-01T00:00:00.123Z"),
+	});
+	assert(existsSync(s.file), "файл не создан: " + s.file);
+	assert(readFileSync(s.file, "utf8").includes('"type":"session"'), "header не записан");
 });
 
 await check("session: lineage — parentSession в header", () => {
