@@ -400,20 +400,32 @@ export type FloorRule = {
  * Обёртки, за которыми прячется настоящая команда: `sudo rm -rf /`,
  * `env FOO=1 rm …`, `command rm …`. Флаги и `VAR=` между ними пропускаются.
  */
-const WRAPPERS = new Set(["sudo", "env", "command", "time", "nohup", "nice", "stdbuf", "xon", "doas"]);
+const WRAPPERS = new Set(["sudo", "env", "command", "time", "nohup", "nice", "stdbuf", "doas"]);
 
 /**
  * Позиции команды в сегменте: сама голова и каждая обёртка на пути к ней.
  * `FOO=1 sudo rm -rf /` → [{sudo,"sudo rm -rf /"}, {rm,"rm -rf /"}] — чтобы
  * правило sudo сработало и не мешало правилу rm.
+ *
+ * Ведущие `VAR=` и путь головы из текста позиции вырезаются: правила «пола»
+ * заякорены (`^rm\b`, `^find\b`), и с префиксом `FOO=1 rm -rf /`, `LC_ALL=C rm -rf
+ * ./x` или `/bin/rm -rf /` проходили мимо. Аргументы головы (`dd if=… of=…`) при
+ * этом остаются на месте — отрезаются только токены до неё.
  */
+function headIndex(argv: string[], from: number): number {
+	for (let i = from; i < argv.length; i++) if (argv[i] && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[i])) return i;
+	return -1;
+}
+
 function segmentPositions(argv: string[]): Array<{ head: string; text: string }> {
 	const out: Array<{ head: string; text: string }> = [];
 	let i = 0;
 	for (;;) {
-		const head = headUtility(argv.slice(i));
+		const k = headIndex(argv, i);
+		if (k < 0) return out;
+		const head = headUtility(argv.slice(k));
 		if (!head) return out;
-		out.push({ head, text: argv.slice(i).join(" ") });
+		out.push({ head, text: [head, ...argv.slice(k + 1)].join(" ") });
 		if (!WRAPPERS.has(head)) return out;
 		let j = i + 1;
 		while (j < argv.length && (argv[j].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[j]))) j++;

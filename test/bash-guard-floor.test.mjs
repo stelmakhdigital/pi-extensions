@@ -34,6 +34,17 @@ check("echo 'про sudo' — не блокируется", !hit("echo 'заме
 check("FOO=1 sudo rm file — sudo в позиции команды", reason("FOO=1 sudo rm file").includes("sudo"));
 check("bash -c 'sudo reboot now' — разворачивается и блокируется", hit("bash -c 'sudo reboot now'"));
 
+// --- префикс присваиваний и путь головы не снимают якорь правила ---
+check("FOO=1 rm -rf / — блокируется", hit("FOO=1 rm -rf /")?.reason.includes("rm"));
+check("LC_ALL=C rm -rf ./build — блокируется", hit("LC_ALL=C rm -rf ./build")?.reason.includes("rm"));
+check("FOO=1 find . -delete — блокируется", hit("FOO=1 find . -delete")?.reason.includes("find"));
+check("FOO=1 chmod -R 777 / — блокируется", hit("FOO=1 chmod -R 777 /")?.reason.includes("прав"));
+check("FOO=1 git push --force — блокируется", hit("FOO=1 git push --force"));
+check("/bin/rm -rf / — блокируется (голова без пути)", hit("/bin/rm -rf /")?.reason.includes("rm"));
+check("FOO=1 dd if=… of=/dev/sda — блокируется", hit("FOO=1 dd if=/dev/zero of=/dev/sda bs=1m"));
+check("FOO=1 echo hi — не блокируется", !hit("FOO=1 echo hi"));
+check("PATH=$PATH:/x ls — не блокируется", !hit("PATH=$PATH:/x ls"));
+
 // --- строка в аргументах не команда (главная находка: ложный блок echo) ---
 check("echo 'rm -rf /' — не блокируется", !hit("echo 'rm -rf /'"));
 check("echo 'git commit' — не блокируется", !hit("echo 'git commit'"));
