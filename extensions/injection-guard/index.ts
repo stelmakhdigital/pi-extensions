@@ -13,6 +13,7 @@ import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
 import { isYolo, onYoloChange } from "../yolo-mode.ts";
 import { clearUntrusted, markUntrusted, onUntrusted, untrustedCount, untrustedSource } from "../untrusted.ts";
 import { findSecretMentions, isSecretPath } from "../secret-paths.ts";
+import { commandSegments } from "../shell-parse.ts";
 
 /**
  * injection-guard: защита от prompt injection — когда модель выполняет то, что
@@ -148,9 +149,14 @@ const SECRET_SHAPES: Array<[string, RegExp]> = [
 /** Пароль в строке подключения: postgres://user:hunter2@host -> user:[скрыто]@host */
 const URL_PASSWORD_RE = /(:\/\/[^/\s:@"']{1,64}:)([^@\s"']{4,})/g;
 
-/** Кандидаты `КЛЮЧ=значение`; имя всё равно проверяется ASSIGN_KEY_RE. */
+/**
+ * Кандидаты `КЛЮЧ=значение`; имя всё равно проверяется ASSIGN_KEY_RE. Скобки
+ * намеренно вне класса значения: иначе матчится код, а не секрет
+ * (`tokens: Token[]`, `secrets: Record<string, string>`), и модель правит файл по
+ * тексту, которого на диске нет. Значения ключей живут в [A-Za-z0-9+/=._-].
+ */
 const ASSIGN_RE =
-	/\b([A-Za-z0-9_]*(?:token|secret|password|passwd|pass|api[-_]?key|apikey|access[-_]?key|private[-_]?key|credential|authorization)[A-Za-z0-9_]*)\b(\s*[=:]\s*)(["'`]?)(?:(Bearer|Basic|Token)\s+)?([^\s"'`,;]{8,})/gi;
+	/\b([A-Za-z0-9_]*(?:token|secret|password|passwd|pass|api[-_]?key|apikey|access[-_]?key|private[-_]?key|credential|authorization)[A-Za-z0-9_]*)\b(\s*[=:]\s*)(["'`]?)(?:(Bearer|Basic|Token)\s+)?([^\s"'`,;()<>()\[\]{}]{8,})/gi;
 
 /**
  * Имя ключа, в котором значение — учётные данные. `PASS` только на конце имени:
@@ -226,9 +232,23 @@ function redactSecrets(text: string, dump: boolean, allow: RegExp[]): { text: st
 
 /* ------------------------ слои 2 и 3: опасные действия -------------------------- */
 
-/** Сетевой уход с данными (для корреляции с чтением секрета и для эскалации). */
-const EGRESS_DATA_RE =
-	/(-(-data(-binary)?|-F|-form|-upload-file|-T|-d)\b)|\bscp\b|\bsftp\b|\bnc\b|\bncat\b|\brsync\b.*@|\bgit\b.*push|POST\s|https?:\/\//i;
+/*
+ * Уход данных наружу = сетевой клиент + то, что он отправляет (аргумент «вот
+ * данные» или URL-адрес). Два условия держатся раздельно: `grep -F` — не отправка,
+ * `sed s|https://…|…| README.md` — не клиент. Раньше весь матчер висел на голом
+ * `https?://`, и «корреляция» блокировала правку доков, а `curl -d @секрет`
+ * пропускала бы без URL (одинарные дефисы в старый класс не попадали).
+ */
+const NET_SEND_RE = /\b(curl|wget|scp|sftp|nc|ncat|rsync|axel|aria2c)\b/i;
+const PURE_SEND_RE = /\b(scp|sftp|nc|ncat)\b/i; // пересылают всегда, «аргумента с данными» у них нет
+const SEND_DATA_RE = /-{1,2}(?:data(?:-binary)?|F|form|upload-file|T|d)\b|\bPOST\s|https?:\/\//i;
+
+/** Упоминания секретов в тексте, если там же есть сетевой уход с данными. */
+function egressWithSecret(text: string): string[] | undefined {
+	const mentions = findSecretMentions(text);
+	if (!mentions.length) return undefined;
+	return PURE_SEND_RE.test(text) || (NET_SEND_RE.test(text) && SEND_DATA_RE.test(text)) ? mentions : undefined;
+}
 
 /** Правка собственных файлов агента — самый успешный вектор инъекции. */
 const SELF_MOD_RE =
@@ -242,7 +262,8 @@ type Escalation = { what: string; floor: boolean };
 /** floor: true — спрашиваем/блокируем даже в yolo (автономная сессия не довод). */
 function escalationFor(text: string): Escalation | undefined {
 	if (SELF_MOD_RE.test(text)) return { what: "правка файлов агента (промпт, настройки, guard'ы)", floor: true };
-	if (EGRESS_DATA_RE.test(text) && findSecretMentions(text).length) return { what: "отправка секретов наружу", floor: true };
+	const egress = egressWithSecret(text);
+	if (egress) return { what: "отправка секретов наружу", floor: true };
 	if (INSTALL_RE.test(text)) return { what: "установка пакета из сети", floor: false };
 	if (GIT_PUSH_RE.test(text)) return { what: "git push", floor: false };
 	return undefined;
@@ -252,9 +273,15 @@ function escalationFor(text: string): Escalation | undefined {
 function secretTarget(event: ToolCallEvent, cwd: string): string | undefined {
 	if (isToolCallEventType("bash", event)) {
 		const cmd = String(event.input.command ?? "");
-		const hits = findSecretMentions(cmd);
-		if (!hits.length || !EGRESS_DATA_RE.test(cmd)) return;
-		return `${hits.join(", ")} + сетевой уход`;
+		if (!egressWithSecret(cmd)) return;
+		// Корреляция в пределах одной команды: `sed ... https://x; grep auth.json README` —
+		// две независимые команды в одном вызове, а не вывод секрета в сеть.
+		const segments = commandSegments(cmd).map((argv) => argv.join(" "));
+		for (const segment of segments.length ? segments : [cmd]) {
+			const mentions = egressWithSecret(segment);
+			if (mentions) return `${mentions.join(", ")} + сетевой уход`;
+		}
+		return undefined;
 	}
 	if (!isToolCallEventType("read", event) && !isToolCallEventType("write", event) && !isToolCallEventType("edit", event)) return;
 	const p = String(event.input.path ?? "");
