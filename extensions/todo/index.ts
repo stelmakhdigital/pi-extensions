@@ -17,7 +17,11 @@
  *
  * UI:
  * - виджет над редактором: `☐`/`☑`, счётчик, cap на 6 строк (дальше — «ещё N»);
- * - `/todos` (`alt+t`) — полноэкранный список, Escape закрывает;
+ * - `/todos` (`shift+ctrl+o`) — полноэкранный список, Escape закрывает;
+ *   ключ именно shift+ctrl+o: `ctrl+o` отдан pi (app.tools.expand) и расширениям
+ *   не достаётся, а `alt+t` конфликтует с терминальными комбинациями пользователя.
+ *   Shift+Ctrl различаются только при CSI-u раскладке (kitty protocol /
+ *   tmux `extended-keys on`); без неё клавиша не дойдёт — остаётся `/todos`.
  * - бейдж `2/5` в футере — когда виджет не виден (другое расширение заняло
  *   место, либо прогон без TUI).
  */
@@ -70,7 +74,7 @@ function widgetLines(todos: Todo[], theme: Theme): string[] {
 	const lines = [theme.fg("accent", ` задачи ${done}/${total} `)];
 	for (const t of shown) lines.push(`  ${theme.fg("warning", "☐")} ${theme.fg("text", t.text)}`);
 	const hidden = open.length - shown.length;
-	if (hidden > 0) lines.push(theme.fg("dim", `  … ещё ${hidden} (alt+t)`));
+	if (hidden > 0) lines.push(theme.fg("dim", `  … ещё ${hidden} (shift+ctrl+o)`));
 	if (done > 0) lines.push(theme.fg("dim", `  ☑ ${done} готово`));
 	return lines;
 }
@@ -257,5 +261,5 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerShortcut("alt+t", { description: "Показать список задач (todo)", handler: async (ctx) => await showOverlay(ctx) });
+	pi.registerShortcut("shift+ctrl+o", { description: "Показать список задач (todo)", handler: async (ctx) => await showOverlay(ctx) });
 }

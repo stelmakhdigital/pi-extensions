@@ -173,15 +173,17 @@ await check("без TUI виджет не рисуется, /todos отдаёт 
 	assert(/headless шаг|пуст/.test(ctx.ui.notes.join("\n")), "нет уведомление: " + ctx.ui.notes.join("\n"));
 });
 
-await check("/todos и alt+t открывают оверлей со списком", async () => {
+await check("/todos и shift+ctrl+o открывают оверлей со списком", async () => {
 	const { pi } = load();
 	const ctx = makeCtx();
 	await pi.tools.todo.execute("c1", { action: "add", text: "виден в оверлее" }, undefined, undefined, ctx);
 	await pi.commands.todos.handler("", ctx);
 	assert(ctx.ui.overlay, "оверлей не открыт");
 	assert(/виден в оверлее/.test(ctx.ui.overlay.render(60).join("\n")), "оверлей без пункта");
-	await pi.shortcuts["alt+t"].handler(ctx);
-	assert(ctx.ui.overlay, "alt+t не открыл оверлей");
+	await pi.shortcuts["shift+ctrl+o"].handler(ctx);
+	assert(ctx.ui.overlay, "shift+ctrl+o не открыл оверлей");
+	// ctrl+o занят pi (app.tools.expand): регистрация этого ключа дала бы warning и "Skipping"
+	assert(pi.shortcuts["ctrl+o"] === undefined && pi.shortcuts["alt+t"] === undefined, "неожиданные клавиши: " + Object.keys(pi.shortcuts));
 });
 
 await check("session_shutdown снимает виджет и бейдж", async () => {
