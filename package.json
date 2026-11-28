@@ -40,7 +40,9 @@
       "extensions/ask-user-question/index.ts",
       "extensions/subagents/index.ts",
       "extensions/sandbox/index.ts",
-      "extensions/gen-speed/index.ts"
+      "extensions/gen-speed/index.ts",
+      "extensions/todo/index.ts",
+      "extensions/edit-check/index.ts"
     ],
     "skills": [
       "skills/session-insights",

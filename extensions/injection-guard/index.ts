@@ -20,7 +20,7 @@ import { findSecretMentions, isSecretPath } from "../secret-paths.ts";
  * ответ MCP-инструмента, снапшот браузера).
  *
  * Инъекции по тексту не детектим (регулярки на «ignore previous instructions» —
- * театр: обходятся, а легитимный текст валят). Работают три слоя:
+ * театр: обходятся, а легитимный текст валят). Работают четыре слоя:
  *
  * 1. Маркировка (tool_result). Результат внешнего источника оборачивается в
  *    фрейс `<UNTRUSTED tool=... src=...>`, из содержимого вырезаются попытки
@@ -33,14 +33,20 @@ import { findSecretMentions, isSecretPath } from "../secret-paths.ts";
  *    (untrusted.ts), опасные действия запрашивают подтверждение: правка файлов
  *    агента (AGENTS.md, настройки, guard'ы), отправка данных наружу, установка
  *    пакетов, git push. Без UI и в субагенте — блок вместо вопроса.
+ * 4. Маскирование (tool_result). Значения по жёстким формам (AKIA…, ghp_…, PEM,
+ *    JWT, `token=…`, пароль в URL) вырезаются из вывода bash: дампы env,
+ *    `git config --list`, случайно откачанный .env не попадают в контекст и не
+ *    уезжают провайдеру. Файловые инструменты не маскируются — модель правит эти
+ *    файлы и обязана видеть их дословно (доступ к файлам ключей закрывает dir-guard).
  *
  * Режимы: off / label (по умолчанию — только слои 1 и 2) / strict (+ слой 3).
- * yolo снимает только интерактивные вопросы: слой 1 и «пол» (эксфильтрация и
+ * yolo снимает только интерактивные вопросы: слои 1 и 4 и «пол» (эксфильтрация и
  * правка файлов агента) остаются — в автономной сессии инъекцию смотреть
  * некому. Тот же «пол», что у bash-guard.
  *
  * Настройка — .injection-guard.json в CWD: { "untrusted": [...], "trusted": [...] }
- * (имена инструментов, glob `*`). Состояние — guard-state.json.
+ * (имена инструментов, glob `*`), "redact": "off|bash|all" и "redactAllow": [...]
+ * (что маскировать и какие значения не считать секретами). Состояние — guard-state.json.
  */
 
 const STATUS_KEY = " z-inj-guard"; // "z-": бейдж после иконок graft/ponytail (localeCompare)
@@ -94,15 +100,128 @@ function globToRegExp(glob: string): RegExp {
 	return new RegExp("^" + glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
 }
 
-type Config = { untrusted: RegExp[]; trusted: RegExp[]; secretPaths: RegExp[] };
+type Config = {
+	untrusted: RegExp[];
+	trusted: RegExp[];
+	secretPaths: RegExp[];
+	redact: RedactScope;
+	redactAllow: RegExp[];
+};
 
 function readConfig(cwd: string): Config {
-	const empty: Config = { untrusted: [], trusted: [], secretPaths: [] };
+	const empty: Config = { untrusted: [], trusted: [], secretPaths: [], redact: "bash", redactAllow: [] };
 	const parsed = readJson<Record<string, unknown>>(path.join(cwd, ".injection-guard.json"));
 	if (!parsed) return empty;
 	const list = (v: unknown): RegExp[] =>
 		Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").map(globToRegExp) : [];
-	return { untrusted: list(parsed.untrusted), trusted: list(parsed.trusted), secretPaths: list(parsed.secretPaths) };
+	return {
+		untrusted: list(parsed.untrusted),
+		trusted: list(parsed.trusted),
+		secretPaths: list(parsed.secretPaths),
+		redact: parsed.redact === "off" || parsed.redact === "all" ? parsed.redact : "bash",
+		redactAllow: list(parsed.redactAllow),
+	};
+}
+
+/* ---------------------------- слой 4: маскирование --------------------------- */
+
+/** off — ничего; bash — только вывод bash (дефолт); all — bash + внешние инструменты. */
+type RedactScope = "off" | "bash" | "all";
+
+/**
+ * Формы секретов: только с явным префиксом/каркасом. Голые 40-hex и base64 не
+ * трогаем сознательно — это git sha и обычные данные, а не ключи.
+ */
+const SECRET_SHAPES: Array<[string, RegExp]> = [
+	["aws-key", /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g],
+	["github-token", /\bgh[pousr]_[A-Za-z0-9]{36,255}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b/g],
+	["slack-token", /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g],
+	["google-key", /\bAIza[0-9A-Za-z_-]{35}\b/g],
+	["openai-key", /\bsk-(?:ant-|proj-)?[A-Za-z0-9]{20,}\b/g],
+	["gitlab-token", /\bglpat-[A-Za-z0-9_-]{15,}\b/g],
+	["npm-token", /\bnpm_[A-Za-z0-9]{36}\b/g],
+	["stripe-key", /\b[sp]k_(?:live|test)_[A-Za-z0-9]{20,}\b/g],
+	["jwt", /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g],
+	["private-key", /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g],
+];
+
+/** Пароль в строке подключения: postgres://user:hunter2@host -> user:[скрыто]@host */
+const URL_PASSWORD_RE = /(:\/\/[^/\s:@"']{1,64}:)([^@\s"']{4,})/g;
+
+/** Кандидаты `КЛЮЧ=значение`; имя всё равно проверяется ASSIGN_KEY_RE. */
+const ASSIGN_RE =
+	/\b([A-Za-z0-9_]*(?:token|secret|password|passwd|pass|api[-_]?key|apikey|access[-_]?key|private[-_]?key|credential|authorization)[A-Za-z0-9_]*)\b(\s*[=:]\s*)(["'`]?)(?:(Bearer|Basic|Token)\s+)?([^\s"'`,;]{8,})/gi;
+
+/**
+ * Имя ключа, в котором значение — учётные данные. `PASS` только на конце имени:
+ * `BYPASS_CACHE=...` ключом не считается.
+ */
+const ASSIGN_KEY_RE = /(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTHORIZATION|API_?KEY|ACCESS_KEY|PRIVATE_KEY|PASS$)/i;
+
+/** Дамп окружения/конфига: там секреты сидят в ключах вида FOO_API_TOKEN. */
+const DUMP_CMD_RE = /^\s*(?:env|printenv\b|export\s+-p\b|set\s*\|)|\bgit\s+config\b[^\n]*--list|(?:^|[\s'"/])(?:\.env|\.npmrc|\.pypirc)(?:$|[\s.])/i;
+const ENV_LINE_RE = /^(\s*[A-Za-z_][A-Za-z0-9_]{1,60})(\s*[=:]\s*)(["'`]?)(.*?)\3\s*$/;
+
+/**
+ * Имена переменных, чьи значения в дампе скрываем всегда. По токенам имени, а не
+ * по подстроке: PAT — это personal access token, а PATH — нет.
+ */
+const ENV_KEY_TOKEN_RE = /^(?:TOKENS?|SECRETS?|PASSWORDS?|PASSWDS?|PASS|KEYS?|APIKEYS?|CREDS?|CREDENTIALS?|AUTH|AUTHORIZATION|PAT|PRIVATE|CERTS?)$/i;
+
+function secretKeyName(key: string): boolean {
+	return key.split(/[^A-Za-z0-9]+/).some((t) => ENV_KEY_TOKEN_RE.test(t));
+}
+
+/** Префикс уже замаскированного значения — повторно не маскируем. */
+const MASK_PREFIX = "[скрыто";
+
+/** Не секреты: переменные оболочки, плейсхолдеры, тестовые значения. */
+function isPlaceholder(value: string): boolean {
+	const v = value.trim();
+	if (/^[$<{([]/.test(v) || />\)?$/.test(v)) return true; // $FOO, ${FOO}, <token>
+	if (/^["'`]?x{3,}["'`]?$/i.test(v) || /^y{3,}$/.test(v)) return true; // xxxx / yyyy
+	return /^(?:todo|tbd|changeme|change_me|placeholder|sample|dummy|example|examples?\.com|none|null|undefined|redacted|empty|your[-_]?[a-z]*[-_]?(?:here|goes[-_]?here))["'`]?$/i.test(v);
+}
+
+/**
+ * Вырезает секреты из текста вывода. dump=true (env / git config --list / .env)
+ * дополнительно маскирует значения всех переменных с «секретным» именем.
+ */
+function redactSecrets(text: string, dump: boolean, allow: RegExp[]): { text: string; hits: string[] } {
+	const hits: string[] = [];
+	const skip = (value: string) => allow.some((re) => re.test(value));
+	let out = text;
+
+	for (const [name, re] of SECRET_SHAPES) {
+		out = out.replace(re, (m) => {
+			if (skip(m)) return m;
+			hits.push(name);
+			return `[скрыто:${name}]`;
+		});
+	}
+	out = out.replace(URL_PASSWORD_RE, (m, prefix: string, password: string) => {
+		if (skip(password) || isPlaceholder(password)) return m;
+		hits.push("url-password");
+		return `${prefix}[скрыто:url-password]`;
+	});
+	out = out.replace(ASSIGN_RE, (m, key: string, sep: string, quote: string, scheme: string | undefined, value: string) => {
+		if (!ASSIGN_KEY_RE.test(key) || skip(value) || isPlaceholder(value) || value.startsWith(MASK_PREFIX)) return m;
+		if (dump && !secretKeyName(key)) return m; // в дампе — только похожие на учётки имена (PATH/HOME не трогаем)
+		hits.push(key.toLowerCase());
+		return `${key}${sep}${quote}${scheme ? `${scheme} ` : ""}[скрыто:${key.toLowerCase()}]`;
+	});
+
+	if (dump) {
+		out = out.split("\n").map((line) => {
+			const m = ENV_LINE_RE.exec(line);
+			if (!m || !secretKeyName(m[1] ?? "") || skip(m[4] ?? "") || isPlaceholder(m[4] ?? "") || (m[4] ?? "").startsWith(MASK_PREFIX)) return line;
+			const key = m[1]!.trim();
+			hits.push(key.toLowerCase());
+			return `${m[1]}${m[2]}${m[3]}[скрыто:${key.toLowerCase()}]`;
+		}).join("\n");
+	}
+
+	return { text: out, hits };
 }
 
 /* ------------------------ слои 2 и 3: опасные действия -------------------------- */
@@ -154,14 +273,22 @@ export default function (pi: ExtensionAPI) {
 	// В субагенте файл состояния не читаем — fail-safe: strict (автономно, без UI).
 	let mode: Mode = _isSubagent ? "strict" : validMode(loadGuard("injection-guard").mode);
 
-	let cfg: Config = { untrusted: [], trusted: [], secretPaths: [] };
+	let cfg: Config = { untrusted: [], trusted: [], secretPaths: [], redact: "bash", redactAllow: [] };
 	let ready = false;
 
 	// yolo снимает только интерактивные вопросы; ниже «пола» не опускаемся.
 	const effectiveMode = (): Mode => (isYolo() && mode === "off" ? "label" : mode);
 	let lastCtx: ExtensionContext | undefined;
 
-	const stats = { labeled: 0, byTool: {} as Record<string, number>, blocked: 0, asked: 0, approved: 0 };
+	const stats = {
+		labeled: 0,
+		byTool: {} as Record<string, number>,
+		blocked: 0,
+		asked: 0,
+		approved: 0,
+		redacted: 0,
+		redactKinds: {} as Record<string, number>,
+	};
 
 	function ensureReady(ctx: ExtensionContext): void {
 		if (ready) return;
@@ -201,27 +328,46 @@ export default function (pi: ExtensionAPI) {
 		ensureReady(ctx);
 
 		const tool = event.toolName;
+		const cmd = String(event.input.command ?? "");
 		const trustedByCfg = cfg.trusted.some((re) => re.test(tool));
 		const forcedByCfg = cfg.untrusted.some((re) => re.test(tool));
 		let kind: "fence" | "note" | undefined;
 		if (!trustedByCfg) {
 			if (forcedByCfg) kind = "fence";
-			else if (tool === "bash") kind = NET_RE.test(String(event.input.command ?? "")) ? "fence" : undefined;
+			else if (tool === "bash") kind = NET_RE.test(cmd) ? "fence" : undefined;
 			else if (/^(read|grep|find|ls)$/.test(tool)) kind = ctx.isProjectTrusted() ? undefined : "note";
 			else if (defaultUntrustedTool(tool)) kind = "fence";
 		}
-		if (!kind) return;
+		// Слой 4: маскирование. Не зависит от trusted/untrusted — секреты нашей машины
+		// не должны попадать в контекст ниоткуда. Файловые инструменты не маскируются:
+		// модель правит их посимвольно и обязана видеть содержимое дословно.
+		const redacts = cfg.redact !== "off" && (tool === "bash" || (cfg.redact === "all" && kind === "fence"));
+		if (!kind && !redacts) return;
 
+		const dump = tool === "bash" && DUMP_CMD_RE.test(cmd);
 		const src = sourceOf(tool, event.input as Record<string, unknown>);
+		const hits: string[] = [];
 		const content = event.content.map((item) => {
 			if (!item || (item as { type?: string }).type !== "text") return item;
-			const body = defuseFences(String((item as { text?: string }).text ?? ""));
-			return { ...item, text: kind === "fence" ? `${openTag(tool, src)}\n${body}\n${CLOSE_TAG}` : `${FILE_NOTE}\n${body}` };
+			let body = defuseFences(String((item as { text?: string }).text ?? ""));
+			if (redacts) {
+				const r = redactSecrets(body, dump, cfg.redactAllow);
+				body = r.text;
+				hits.push(...r.hits);
+			}
+			return { ...item, text: kind === "fence" ? `${openTag(tool, src)}\n${body}\n${CLOSE_TAG}` : kind === "note" ? `${FILE_NOTE}\n${body}` : body };
 		});
+		if (!kind && !hits.length) return;
 
-		stats.labeled++;
-		stats.byTool[tool] = (stats.byTool[tool] ?? 0) + 1;
-		markUntrusted(`${tool} ${src}`.slice(0, 160));
+		if (hits.length) {
+			stats.redacted += hits.length;
+			for (const h of hits) stats.redactKinds[h] = (stats.redactKinds[h] ?? 0) + 1;
+		}
+		if (kind) {
+			stats.labeled++;
+			stats.byTool[tool] = (stats.byTool[tool] ?? 0) + 1;
+			markUntrusted(`${tool} ${src}`.slice(0, 160));
+		}
 		if (ctx.hasUI) refreshStatus(ctx);
 		// structuredContent не возвращаем: он не менялся по смыслу, но content важнее
 		// (pi его сбросит — для внешних инструментов его всё равно нет).
@@ -355,11 +501,18 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("injection-guard:stats", {
 		description: "Статистика injection-guard за сессию: что маркировано, что заблокировано, текущее окно недоверия.",
 		handler: async (_args, ctx) => {
+			ensureReady(ctx);
 			const byTool = Object.entries(stats.byTool).sort((a, b) => b[1] - a[1]).slice(0, 8);
+			const kinds = Object.entries(stats.redactKinds).sort((a, b) => b[1] - a[1]).slice(0, 8);
 			const lines = [
 				`injection-guard: режим ${mode}${isYolo() ? " (+пол yolo)" : ""}; маркировано ${stats.labeled}, заблокировано ${stats.blocked}, спрошено ${stats.asked} (одобрено ${stats.approved})`,
 			];
 			if (byTool.length) lines.push("Источники: " + byTool.map(([t, n]) => `${t}=${n}`).join(", "));
+			lines.push(
+				stats.redacted
+					? `Замаскировано секретов ${stats.redacted} (область ${cfg.redact}): ` + kinds.map(([t, n]) => `${t}=${n}`).join(", ")
+					: `Секретов не маскировано (область ${cfg.redact}; redact: off|bash|all в .injection-guard.json).`,
+			);
 			lines.push(
 				untrustedSource()
 					? `Окно недоверия активно (${untrustedCount()}): ${untrustedSource()}`

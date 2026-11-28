@@ -11,11 +11,13 @@
 | [prompt-snippets](extensions/prompt-snippets/) | Комбинируемые одноцелевые промпт-правила: включаются на каждое сообщение через меню (`alt+s` / `/snippets`), вставляются перед или после вашего текста |
 | [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах, toggle персистентны (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
 | [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/find/grep/ls/bash, чьи пути уходят вне рабочей директории (CWD) и allowlist'а: realpath-канонизация (symlink-escape блокируется), allowlist — `$HOME/.pi` (дефолт) + `--dir-guard-allow` + `.dir-guard.json` в CWD, файлы учётных данных (`~/.ssh`, `~/.aws`, `auth.json`, `*.pem`, `.env`) блокируются сверх allowlist'а (`--dir-guard-allow-secrets` / `"secrets": "allow"`), `/dir-guard` и бейдж `DR OFF`, состояние персистентно (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
-| [injection-guard](extensions/injection-guard/) | Защита от prompt injection: результаты внешних инструментов (веб, сеть, MCP, файлы недоверенного репо) оборачиваются в метки `UNTRUSTED` с обезвреживанием поддельных меток + секция правил в системном промпте; блок корреляции «чтение секрета + сетевой уход»; в strict опасные действия (файлы агента, отправка наружу, установка пакетов, git push) после внешнего контента спрашиваются. Режимы off/label/strict (`/injection-guard`, дефолт label), бейдж `IG`, `/injection-guard:stats`, `.injection-guard.json` в CWD |
+| [injection-guard](extensions/injection-guard/) | Защита от prompt injection: результаты внешних инструментов (веб, сеть, MCP, файлы недоверенного репо) оборачиваются в метки `UNTRUSTED` с обезвреживанием поддельных меток + секция правил в системном промпте; блок корреляции «чтение секрета + сетевой уход»; маскирование секретов из вывода bash (формы ключей, дампы `env`/`git config --list`, пароль в URL); в strict опасные действия (файлы агента, отправка наружу, установка пакетов, git push) после внешнего контента спрашиваются. Режимы off/label/strict (`/injection-guard`, дефолт label), бейдж `IG`, `/injection-guard:stats`, `.injection-guard.json` в CWD |
 | [text-guard](extensions/text-guard/) | Контроль текста модели (документация, комментарии, коммиты, чат) — без эмодзи, стрелок, слов-маркеров ИИ-стиля («давайте», delve…) и умных названий: секция стиля в системном промпте, скан write/edit/bash (коммиты, heredoc, echo), режимы off/warn/strict (`/text-guard`, дефолт warn), автофикс эмодзи/стрелок, `.text-guard.json` в CWD (allow/skip/words/ignore), `/text-guard:stats`, бейдж `TG OFF`, состояние персистентно |
 | [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: задаёт пользователю один вопрос (текст, выбор одного, мультивыбор) и ждёт ответа |
 | [sandbox](extensions/sandbox/) | Пер-командная изоляция bash-вызовов агента (L1): bwrap (Linux) / sandbox-exec (macOS), уровни dev/untrusted/vm, стартовый промпт «доверяешь ли проекту?» (project_trust + фолбэк), маркер `.sandbox`, fake $HOME, env-allowlist |
 | [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41t/s (0.8s)` (EMA по ответам, на лету при стриминге; в скобках TTFT — время до первого токена; aborted/короткие ответы не считаются) |
+| [todo](extensions/todo/) | Живой чек-лист над редактором: инструмент `todo` (add/toggle/list/clear), виджет `задачи 2/5` с открытыми пунктами, `/todos` и `alt+t` — полный список в оверлее, бейдж в футере. Состояние в истории сессии (переживает `/reload`, корректно в любой ветке) |
+| [edit-check](extensions/edit-check/) | Проверка типов/линта в конце прогона: после правок запускает `typecheck`-скрипт проекта (или `cmd` из `.edit-check.json`), а ошибки отправляет модели с `triggerTurn` — «готово» со сломанными типами не проходит. `/edit-check`, `/edit-check off`, бейдж `✗ 2/3`, после 3 раундов цикл обрывается |
 | [subagents](extensions/subagents/) | Асинхронные подагенты в tmux: спавн в панель (не блокирует основную сессию), live-виджет статусов и токенов (starting/active/waiting/stalled), steer-результат, resume/interrupt, agent-definitions (`.pi/agents/*.md`) + 4 bundled-агента (planner/scout/worker/reviewer); команды `/spawn`, `/subagents [doctor|status]`, `/iterate [agent] <task>`, `/plan <task>` (planner→worker→reviewer); `spawning`/`deny-tools` в frontmatter; вне tmux — handoff (перезапуск pi внутри tmux с продолжением сессии) |
 
 ## Yolo: автономный запуск без вопросов
@@ -43,7 +45,7 @@ RPC. Убирает стартовые вопросы (доверие проек
 
 Инъекция приходит с данными: веб-страница, `curl`, склонированный репозиторий,
 MCP-инструмент, снапшот браузера. `injection-guard` не ищет «плохие слова»
-(регулярки обходятся и валят легитимный текст), он работает на трёх границах.
+(регулярки обходятся и валят легитимный текст), он работает на четырёх границах.
 
 1. Маркировка. `tool_result` оборачивает вывод внешних инструментов в
    `<UNTRUSTED tool=... src=...>`, из содержимого вырезаются попытки закрыть
@@ -62,15 +64,21 @@ MCP-инструмент, снапшот браузера. `injection-guard` н�
    правка файлов агента (`AGENTS.md`, `.pi/settings.json`, guard'ы), отправка
    данных наружу, установка пакетов, `git push`. В субагенте и в yolo вместо
    вопроса блок.
+4. Маскирование. Из вывода bash вырезаются секреты по жёстким формам (`AKIA…`,
+   `ghp_…`, `sk-…`, PEM, JWT, пароль в URL, `ТОКЕН=значение`), а в дампах
+   (`env`, `git config --list`, `cat .env`) — по имени переменной. `read`/`edit`
+   не маскируются: файлы модель правит посимвольно, а доступ к ключам закрывает
+   dir-guard. Настройка `redact` (`off`/`bash`/`all`) и `redactAllow` — там же.
 
 ```bash
 /injection-guard            # off -> label (дефолт) -> strict
-/injection-guard:stats      # что маркировано, что заблокировано, текущее окно
+/injection-guard:stats      # что маркировано, замаскировано, заблокировано; текущее окно
 ```
 
 Флаги `--injection-guard-off` / `--injection-guard-strict`, настройка
 `.injection-guard.json` в CWD (`untrusted` / `trusted` — имена инструментов,
-glob `*`), бейдж `IG n` в футере, режим персистентен (`guard-state.json`).
+glob `*`; `redact` — `off`/`bash`/`all`; `redactAllow` — значения-фикстуры),
+бейдж `IG n` в футере, режим персистентен (`guard-state.json`).
 В `label` guard не мешает работе, но оставляет модели явную границу
 «данные / команды».
 
@@ -140,6 +148,8 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 | sandbox | `extensions/sandbox/*` |
 | subagents | `extensions/subagents/*` |
 | gen-speed | `extensions/gen-speed/*` |
+| todo | `extensions/todo/*` |
+| edit-check | `extensions/edit-check/*` |
 
 Далее — пример для каждого (глобальные настройки `~/.pi/agent/settings.json`).
 
@@ -465,6 +475,10 @@ extensions/
     index.ts                  # per-command sandbox (bwrap / sandbox-exec)
   gen-speed/
     index.ts                  # бейдж скорости генерации токенов + TTFT в футере
+  todo/
+    index.ts                  # инструмент todo + виджет/оверлей списка задач
+  edit-check/
+    index.ts                  # typecheck/lint в конце прогона, ошибки — модели
   subagents/
     index.ts                  # родитель: инструменты, watch, виджет, steer, handoff
     child.ts                  # дочернее: agent_done/agent_ping, снапшоты активности

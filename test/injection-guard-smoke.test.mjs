@@ -225,6 +225,103 @@ await check("реплика пользователя закрывает окно
 	assert(untrusted.untrustedSource() !== undefined, "окно закрыл message от расширения");
 });
 
+// --- слой 4: маскирование секретов ---
+
+/** Записать/убрать .injection-guard.json в cwd (cfg читается на первом хендлере). */
+function injConfig(cfg) {
+	const f = join(cwd, ".injection-guard.json");
+	if (cfg === undefined) rmSync(f, { force: true });
+	else writeFileSync(f, JSON.stringify(cfg));
+}
+
+function bashResult(command, text) {
+	return { toolName: "bash", input: { command }, content: [{ type: "text", text }], isError: false };
+}
+
+await check("вывод bash: формы ключей маскируются, фрейс не ставится", async () => {
+	const pi = load("label");
+	const out = "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\npush with ghp_abcdefghijklmnopqrstuvwxyz0123456789\npassword: hunter2secret\n";
+	const res = await pi.handlers.tool_result(bashResult("git config --get-all http.extraheader", out), makeCtx());
+	const text = textOf(res);
+	assert(text.includes("[скрыто:aws-key]") && !text.includes("AKIAIOSFODNN"), "aws-ключ не замаскирован: " + text);
+	assert(!text.includes("ghp_abc"), "github-токен не замаскирован: " + text);
+	assert(!text.includes("hunter2secret"), "password: значение не замаскировано: " + text);
+	assert(!text.includes("UNTRUSTED"), "не сетевая команда промаркирована: " + text);
+});
+
+await check("дамп env: секретье имя маскируется даже без формы, PATH остаётся", async () => {
+	const pi = load("label");
+	const out = "PATH=/usr/bin:/bin\nMY_DEPLOY_KEY=supersecretvalue\nDB_PASSWORD=hunter2verysecret\nHOME=/Users/tester\n";
+	const text = textOf(await pi.handlers.tool_result(bashResult("env", out), makeCtx()));
+	assert(text.includes("PATH=/usr/bin:/bin"), "PATH задет: " + text);
+	assert(text.includes("HOME=/Users/tester"), "HOME задет: " + text);
+	assert(text.includes("[скрыто:my_deploy_key]") && !text.includes("supersecretvalue"), "MY_DEPLOY_KEY не маскируется: " + text);
+	assert(!text.includes("hunter2verysecret"), "DB_PASSWORD не маскируется: " + text);
+});
+
+await check("то же значение вне дампа не маскируется", async () => {
+	const pi = load("label");
+	const res = await pi.handlers.tool_result(bashResult("cat build.log", "MY_DEPLOY_KEY=supersecretvalue\n"), makeCtx());
+	assert(res === undefined, "обычный вывод замаскирован: " + textOf(res));
+});
+
+await check("git sha, плейсхолдеры и переменные не маскируются", async () => {
+	const pi = load("label");
+	const out = "commit 0f4c3a1b9d8e7c6b5a4938271605f4e3d2c1b0a9\nTOKEN=changeme\nAPI_KEY=$MY_API_KEY\nBYPASS_CACHE=disabled-for-tests\n";
+	const res = await pi.handlers.tool_result(bashResult("git log -1", out), makeCtx());
+	assert(res === undefined, "ложное маскирование: " + textOf(res));
+});
+
+await check("пароль в строке подключения маскируется", async () => {
+	const pi = load("label");
+	const text = textOf(await pi.handlers.tool_result(bashResult("ps aux | grep postgres", "postgres://app:hunter2pass@db:5432/prod"), makeCtx()));
+	assert(text.includes("app:[скрыто:url-password]@db") && !text.includes("hunter2pass"), "пароль в URL не скрыт: " + text);
+});
+
+await check("redactAllow сохраняет фикстуру, redact: off не маскирует", async () => {
+	injConfig({ redactAllow: ["AKIAIOSFODNN7EXAMPLE"] });
+	const kept = await load("label").handlers.tool_result(bashResult("cat fixtures.txt", "AKIAIOSFODNN7EXAMPLE"), makeCtx());
+	assert(kept === undefined, "фикстура из redactAllow замаскирована: " + textOf(kept));
+	injConfig({ redact: "off" });
+	const off = await load("label").handlers.tool_result(bashResult("cat out.txt", "AKIAIOSFODNN7EXAMPLE"), makeCtx());
+	assert(off === undefined, "redact:off маскирует: " + textOf(off));
+	injConfig(undefined);
+});
+
+await check("read не маскируется (модель правит файлы дословно)", async () => {
+	const pi = load("label");
+	const res = await pi.handlers.tool_result(
+		{ toolName: "read", input: { path: "config.ts" }, content: [{ type: "text", text: "export const KEY = 'AKIAIOSFODNN7EXAMPLE';" }], isError: false },
+		makeCtx(),
+	);
+	assert(res === undefined, "read замаскирован: " + textOf(res));
+});
+
+await check("внешний инструмент маскируется только в redact: all", async () => {
+	const pi = load("label");
+	let text = textOf(await pi.handlers.tool_result(toolResult({ content: [{ type: "text", text: "key AKIAIOSFODNN7EXAMPLE" }] }), makeCtx()));
+	assert(text.includes("AKIAIOSFODNN7EXAMPLE"), "в label внешнее содержимое изменено: " + text);
+	injConfig({ redact: "all" });
+	text = textOf(await load("label").handlers.tool_result(toolResult({ content: [{ type: "text", text: "key AKIAIOSFODNN7EXAMPLE" }] }), makeCtx()));
+	assert(text.includes("[скрыто:aws-key]") && text.includes("UNTRUSTED"), "в all не замаскировано: " + text);
+	injConfig(undefined);
+});
+
+await check("off не маскирует", async () => {
+	const pi = load("off");
+	const res = await pi.handlers.tool_result(bashResult("env", "DB_PASSWORD=hunter2verysecret\n"), makeCtx());
+	assert(res === undefined, "off маскирует: " + textOf(res));
+});
+
+await check("/injection-guard:stats показывает замаскированные секреты", async () => {
+	const pi = load("label");
+	let note = "";
+	const ctx = makeCtx({ notify: (m) => { note = m; } });
+	await pi.handlers.tool_result(bashResult("env", "DB_PASSWORD=hunter2verysecret\n"), ctx);
+	await pi.commands.find((c) => c.name === "injection-guard:stats").def.handler("", ctx);
+	assert(/\u0417\u0430\u043c\u0430\u0441\u043a\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0441\u0435\u043a\u0440\u0435\u0442\u043e\u0432 1/.test(note), "нет строки про маскирование: " + note);
+});
+
 // --- команды ---
 await check("/injection-guard переключает режимы и пишет guard-state", async () => {
 	const pi = load("label");
