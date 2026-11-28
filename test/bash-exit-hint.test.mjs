@@ -135,6 +135,31 @@ const ev = (command, code = 1) => ({
 	});
 }
 
+{
+	// Ведущий `cd <dir> &&` — штатная форма почти каждой команды модели (248 из
+	// 327 exit-1 результатов в сессиях); без его снятия hint молчит.
+	await check("cd && grep с exit 1 — штатное «нет совпадений»", async () => {
+		for (const cmd of ["cd /tmp && grep -n q f", "cd /repo; rg q .", "cd ~ && diff a b", "cd /tmp && cat log | grep foo"]) {
+			const res = await pi.handler(ev(cmd));
+			if (!res || res.isError !== false) throw new Error(`не снят isError для "${cmd}": ${JSON.stringify(res)}`);
+		}
+	});
+
+	await check("упал сам cd — ошибка остаётся", async () => {
+		const e = ev("cd /nope && grep -n q f");
+		e.content = [{ type: "text", text: "cd: no such file or directory: /nope\n\nCommand exited with code 1" }];
+		const res = await pi.handler(e);
+		if (res !== undefined) throw new Error("снято падение cd: " + JSON.stringify(res));
+	});
+
+	await check("cd && не-probe команда не прикрывается", async () => {
+		for (const cmd of ["cd /tmp && make", "cd /repo && go test ./...", "cd /tmp && head -5 f"]) {
+			const res = await pi.handler(ev(cmd));
+			if (res !== undefined) throw new Error(`прикрыта команда "${cmd}": ${JSON.stringify(res)}`);
+		}
+	});
+}
+
 
 console.log(results.join("\n"));
 if (results.some((r) => r.startsWith("FAIL"))) process.exit(1);
