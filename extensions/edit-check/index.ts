@@ -49,12 +49,15 @@ function resolveCheck(cwd: string): Check | undefined {
 	const npmScript = ["typecheck", "type-check", "check-types", "tsc"].find((s) => typeof scripts[s] === "string");
 	let cmd = fromCfg ?? (npmScript ? `npm run ${npmScript}` : undefined);
 	if (!cmd) {
-		const findTsconfig = (dir: string, depth: number): boolean => {
-			if (depth > 4 || dir === path.dirname(dir)) return false;
-			if (fs.existsSync(path.join(dir, "tsconfig.json"))) return true;
-			return findTsconfig(path.dirname(dir), depth + 1);
-		};
-		if (findTsconfig(cwd, 0)) cmd = "npx --no-install tsc --noEmit";
+		// Только tsconfig в самом cwd и только если рядом есть запускаемый tsc (`npx
+		// --no-install` ищет бинарь в node_modules/.bin вверх по дереву). Поиск
+		// tsconfig'а на 4 уровня вверх находил корень монорепа, а `tsc` в пакете без
+		// своего typescript не запускался и завершался с кодом 1 и шуточным баннером —
+		// модель ловила три раунда «проверка упала» ни за что. Нет команды — молчим.
+		const hasLocalTsc = (dir: string, depth: number): boolean =>
+			fs.existsSync(path.join(dir, "node_modules", ".bin", "tsc")) ||
+			(depth < 4 && dir !== path.dirname(dir) && hasLocalTsc(path.dirname(dir), depth + 1));
+		if (fs.existsSync(path.join(cwd, "tsconfig.json")) && hasLocalTsc(cwd, 0)) cmd = "npx --no-install tsc --noEmit";
 	}
 	return cmd ? { cmd, cwd, timeoutMs, max } : undefined;
 }
@@ -142,6 +145,9 @@ export default function (pi: ExtensionAPI) {
 		if (reports >= MAX_REPORTS) {
 			failBadge(ctx, "⚠ проверки не проходят");
 			ctx.ui.notify(`${header} — модель уже получала эти ошибки ${MAX_REPORTS} раза, дальше не стучим.`, "warning");
+			// Снимаем «грязно»: иначе каждый следующий прогон заново гоняет команду
+			// (полный typecheck, до таймаута) только ради этой же строки.
+			dirty = false;
 			return;
 		}
 		reports++;

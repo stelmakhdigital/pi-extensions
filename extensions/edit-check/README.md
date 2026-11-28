@@ -28,7 +28,10 @@
 
 1. `.edit-check.json` в CWD: `{ "cmd": "npm run check", "max": 10, "timeoutMs": 180000 }`;
 2. script проекта: `typecheck` / `type-check` / `check-types` / `tsc`;
-3. `npx --no-install tsc --noEmit`, если рядом (до 4 уровней вверх) есть `tsconfig.json`.
+3. `npx --no-install tsc --noEmit`, если в самом CWD есть `tsconfig.json` и рядом
+   (вверх по дереву) есть `node_modules/.bin/tsc`. tsconfig родителя без
+   запускаемого tsc проверки не создаёт: в пакете монорепа `npx` падал с кодом 1, и
+   модель получала три раунда «проверка упала» ни за что.
 
 Команды нет -> расширение молчит без единого сообщения (в JS-скриптах шуметь
 незачем). Парсинг вывода простой: строки со словом `error` (формат tsc

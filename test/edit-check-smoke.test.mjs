@@ -2,7 +2,7 @@
  * Смоук-тест edit-check: jiti + стаб ExtensionAPI, реальный дочерний процесс.
  * Запуск: node test/edit-check-smoke.test.mjs
  */
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +32,15 @@ function project(name, cmd) {
 const FAILS = project("fails", "node -e \"console.log('a.ts(3,7): error TS2345: Type 'x' is not assignable'); process.exit(2)\"");
 const PASSES = project("passes", "node -e \"console.log('ok'); \"");
 const NOCMD = project("nocmd", null);
+
+/** Пакет внутри TS-репозитория: tsconfig только у родителя, своего tsc нет нигде. */
+const SUBPKG = (() => {
+	const parent = join(root, "mono");
+	const pkg = join(parent, "pkg");
+	mkdirSync(pkg, { recursive: true });
+	writeFileSync(join(parent, "tsconfig.json"), "{}");
+	return pkg;
+})();
 
 const results = [];
 async function check(name, fn) {
@@ -141,6 +150,34 @@ await check("после MAX_REPORTS моделей не долбим — пре�
 	}
 	assert(h.sent.length === 3, "сообщений: " + h.sent.length);
 	assert(h.notes.some((n) => n.kind === "warning"), "нет предупреждения: " + JSON.stringify(h.notes));
+});
+
+await check("tsconfig родителя без локального tsc: проверка не выдумывается", async () => {
+	const h = load();
+	const ctx = h.ctx(SUBPKG);
+	await h.handlers.session_start({ reason: "startup" }, ctx);
+	await edited(h.handlers);
+	await h.handlers.agent_settled({}, ctx);
+	assert(h.sent.length === 0 && h.notes.length === 0, "запустил то, что не может запуститься: " + JSON.stringify({ sent: h.sent.length, notes: h.notes }));
+});
+
+await check("после капа команда не гоняется на каждый прогон", async () => {
+	const counter = join(root, "runs.txt");
+	rmSync(counter, { force: true });
+	const dir = project("capped", `node -e "const fs=require('fs');fs.appendFileSync('${counter}','x');console.log('a.ts(1,1): error TS1: bad');process.exit(2)"`);
+	const h = load();
+	const ctx = h.ctx(dir);
+	await h.handlers.session_start({ reason: "startup" }, ctx);
+	for (let i = 0; i < 4; i++) {
+		await edited(h.handlers);
+		await h.handlers.agent_settled({}, ctx);
+	}
+	assert(h.sent.length === 3, "сообщений модели: " + h.sent.length);
+	const afterCap = readFileSync(counter, "utf8").length;
+	assert(afterCap === 4, "прогонов до капа: " + afterCap + " (ожидалось 4: три репорта + предупреждение)");
+	// Правок больше нет — каждый следующий конец прогона не должен гонять команду заново.
+	for (let i = 0; i < 3; i++) await h.handlers.agent_settled({}, ctx);
+	assert(readFileSync(counter, "utf8").length === afterCap, "после капа гоняет проверку на каждый прогон");
 });
 
 await check("/edit-check запускает проверку вручную", async () => {
