@@ -300,7 +300,12 @@ class Filters:
     include_automation: bool = False
 
     def matches(self, s: SessionSummary) -> bool:
-        if self.since and s.started_at and s.started_at < self.since:
+        # Окно по последней активности, а не по дате начала: долгая сессия,
+        # начатую неделю назад и живую сегодня, `--since 1d` обязан показать —
+        # это как раз самый дорогой прогон окна. По started_at она молча выпадала
+        # (на живой выборке: 3 из 12 сессий суток не попадали в дайджест).
+        last = s.last_at or s.started_at
+        if self.since and last and last < self.since:
             return False
         if self.until and s.started_at and s.started_at > self.until:
             return False

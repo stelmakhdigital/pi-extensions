@@ -97,10 +97,38 @@ def append(entry: dict, path: Path = LEDGER) -> None:
         f.write("\n" + render_entry(entry))
 
 
-def rewrite(entries: list[dict], path: Path = LEDGER) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(HEADER + "\n" + "\n".join(render_entry(e) for e in entries),
-                    encoding="utf-8")
+def patch_fields(entry_id: str, fields: dict[str, str], path: Path = LEDGER) -> bool:
+    """Меняет поля одной записи прямо в тексте файла, всё остальное не трогая.
+
+    Пересборка файла из parse() для этого не годилась: parse знает восемь полей и
+    блоки с заголовком `### id (...)`, поэтому ручной текст между записями, свои
+    поля и текст до первой записи молча пропадали из durable-журнала после
+    `check --apply`.
+    """
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace")
+    parts = re.split(r"(?m)(^### )", text)  # [преамбула, '### ', тело, '### ', тело, ...]
+    changed = False
+    for i in range(2, len(parts), 2):
+        head, sep, rest = parts[i].partition("\n")
+        if not sep:
+            continue
+        m = re.match(r"^(\S+)", head.strip())
+        if not m or m.group(1) != entry_id:
+            continue
+        for field, value in fields.items():
+            line = f"{field}: {value}"
+            line_re = re.compile(rf"^{re.escape(field)}:.*$", re.M)
+            rest = (line_re.sub(lambda _m: line, rest, count=1) if line_re.search(rest)
+                    else rest.rstrip("\n") + f"\n{line}\n")
+        parts[i] = head + sep + rest
+        changed = True
+        break
+    if not changed:
+        return False
+    path.write_text("".join(parts), encoding="utf-8")
+    return True
 
 
 def _day(e: dict) -> datetime | None:
@@ -134,7 +162,12 @@ def measure_change(e: dict, summaries, window_override: int | None = None) -> di
         out["verdict_suggested"] = "confounded"
         out["why"] = "нет поля check=\"pattern=...\" или даты принятия — мерить нечем"
         return out
-    rx = re.compile(pattern, re.IGNORECASE)
+    try:
+        rx = re.compile(pattern, re.IGNORECASE)
+    except re.error as exc:  # битый pattern в check не должен ронять весь check
+        out["verdict_suggested"] = "confounded"
+        out["why"] = f"битый regex в check: {exc}"
+        return out
     span = timedelta(days=win_days)
 
     def hits(path: Path) -> int:
@@ -273,8 +306,7 @@ def main() -> int:
             print(f"id {args.id} не найден.", file=sys.stderr)
             return 2
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        hit[0]["verdict"] = f"adopted {today}"
-        rewrite(entries)
+        patch_fields(args.id, {"verdict": f"adopted {today}"})
         print(f"{args.id}: adopted {today}")
         return 0
 
@@ -286,7 +318,10 @@ def main() -> int:
         hit[0]["verdict"] = args.verdict
         if args.note:
             hit[0]["note"] = args.note
-        rewrite(entries)
+        fields = {"verdict": args.verdict}
+        if args.note:
+            fields["note"] = args.note
+        patch_fields(args.id, fields)
         print(f"{args.id}: {args.verdict}")
         return 0
 
@@ -310,11 +345,12 @@ def main() -> int:
     if args.apply:
         for e, r in zip(wanted, results):
             if r.get("verdict_suggested") and e.get("verdict", "").startswith("adopted"):
-                e["verdict"] = r["verdict_suggested"]
-                e["note"] = (f"check {datetime.now(timezone.utc).strftime('%Y-%m-%d')}: "
+                patch_fields(e["id"], {
+                    "verdict": r["verdict_suggested"],
+                    "note": (f"check {datetime.now(timezone.utc).strftime('%Y-%m-%d')}: "
                              + json.dumps({k: v for k, v in r.items() if k != "id"},
-                                          ensure_ascii=False))
-        rewrite(entries)
+                                          ensure_ascii=False)),
+                })
 
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=1))

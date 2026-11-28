@@ -5,7 +5,7 @@
  * Python обязателен: без python3 файл печатает skip и выходит 0 (как в smoke.test.mjs
  * с bubblewrap), чтобы ci оставалась зелёной на раннерах без python3.
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -293,6 +293,53 @@ r = L.measure_change(e, ss)
 print(r["verdict_suggested"], r["before_sessions"], r["after_sessions"], "ни до ни после" in r.get("why", ""))
 `], { encoding: "utf8", env: { ...env, SESSION_INSIGHTS_LEDGER: emptyLedger, SI_TMP: join(tmp, "zero") } });
 	assert(out.trim() === "confounded 6 6 True", out.trim());
+});
+
+await check("ledger: verdict сохраняет ручной текст и неизвестные поля", () => {
+	const text = readFileSync(ledgerPath, "utf8");
+	writeFileSync(ledgerPath, text.replace("### edit-fresh", "## Ручные заметки\nне удалять\n\n### edit-fresh") + "\n### extra\nid-extra\ncue: c\nstatus: draft\n");
+	run("ledger.py", ["verdict", "--id", "extra", "--verdict", "helped"]);
+	const after = readFileSync(ledgerPath, "utf8");
+	assert(after.includes("не удалять"), "ручной текст удалён из журнала");
+	assert(after.includes("status: draft"), "неизвестное поле удалено");
+	assert(after.includes("verdict: helped"), "verdict не записан: " + after);
+	assert(after.includes("### edit-fresh"), "чужая запись пропала");
+});
+
+await check("ledger: битый regex в check — confounded, а не traceback", () => {
+	const out = execFileSync("python3", ["-c", `
+import sys, pathlib, os
+from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
+sys.path.insert(0, ${JSON.stringify(SCRIPTS)})
+import ledger as L
+day = datetime.now(timezone.utc)
+p = pathlib.Path(os.environ["SI_TMP"]) / "broken.jsonl"
+p.write_text("x")
+ss = [SimpleNamespace(path=p, cwd="/proj/x", started_at=day - timedelta(days=i)) for i in range(1, 8)]
+e = {"id": "brk", "check": 'pattern="(" window=20d', "verdict": "adopted " + day.strftime("%Y-%m-%d")}
+r = L.measure_change(e, ss)
+print(r["verdict_suggested"], "битый regex" in r.get("why", ""))
+`], { encoding: "utf8", env: { ...env, SI_TMP: join(tmp, "zero") } });
+	assert(out.trim() === "confounded True", out.trim());
+});
+
+await check("sessions: окно --since по последней активности, не по дате начала", () => {
+	const out = execFileSync("python3", ["-c", `
+import sys
+from datetime import datetime, timedelta, timezone
+sys.path.insert(0, ${JSON.stringify(SCRIPTS)})
+import sessions as S
+now = datetime.now(timezone.utc)
+def mk(days, hours):
+    s = S.SessionSummary(path=None)
+    s.started_at = now - timedelta(days=days)
+    s.last_at = now - timedelta(hours=hours)
+    return s
+f = S.Filters(since=now - timedelta(days=1))
+print(f.matches(mk(10, 1)), f.matches(mk(0, 1)), f.matches(mk(10, 240)))
+`], { encoding: "utf8", env });
+	assert(out.trim() === "True True False", out.trim());
 });
 
 rmSync(tmp, { recursive: true, force: true });
