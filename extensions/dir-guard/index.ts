@@ -83,6 +83,10 @@ export default function (pi: ExtensionAPI) {
 	/** Pin'ит CWD (однократно) и собирает allowlist. */
 	function ensureReady(ctx: ExtensionContext): void {
 		if (ready) return;
+		// Проектный `secrets: "allow"` действует ровно на тот проект, чей конфиг
+		// прочитан: при смене CWD (session_start сбрасывает ready) флаг поднимается заново,
+		// иначе разрешение из проекта A остаётся на проекте B без конфига.
+		secretsBlocked = true;
 		const cwd = ctx.cwd || process.cwd();
 		root = canonical(cwd);
 

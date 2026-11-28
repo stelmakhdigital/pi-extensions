@@ -148,6 +148,23 @@ pinGuardState(false);
 		if (res !== undefined) throw new Error("allowlist-файл заблокирован: " + JSON.stringify(res));
 	});
 
+	await check("(a6) secrets: allow не переживает переход в проект без конфига", async () => {
+		const pi2 = makePi();
+		dirGuard.default(pi2);
+		const h = pi2.handlers.tool_call;
+		const projA = join(base, "projA");
+		const projB = join(base, "projB");
+		mkdirSync(projA, { recursive: true });
+		mkdirSync(projB, { recursive: true });
+		writeFileSync(join(projA, ".dir-guard.json"), JSON.stringify({ secrets: "allow" }));
+		const secret = join(base, ".pi/agent/auth.json");
+		const allowed = await h({ toolName: "read", input: { path: secret } }, makeCtx(projA));
+		if (allowed !== undefined) throw new Error("secrets: allow не применён в проекте A: " + JSON.stringify(allowed));
+		await pi2.handlers.session_start({ reason: "resume" }, makeCtx(projB));
+		const after = await h({ toolName: "read", input: { path: secret } }, makeCtx(projB));
+		if (!after?.block) throw new Error("разрешение из проекта A осталось в B без конфига: " + JSON.stringify(after));
+	});
+
 	await check("(b) read внутри CWD пропущен (относительный)", async () => {
 		const res = await handler({ toolName: "read", input: { path: "inner.txt" } }, ctx);
 		if (res !== undefined) throw new Error("ожидалось undefined, получили: " + JSON.stringify(res));
