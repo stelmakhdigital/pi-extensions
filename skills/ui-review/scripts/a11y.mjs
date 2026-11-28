@@ -5,7 +5,7 @@
  * Запуск:
  *   node a11y.mjs <url> [--widths 375,768,1440] [--out DIR] [--baseline DIR]
  *                       [--click "css,css"] [--wait MS] [--axe PATH] [--diff-threshold 0.12]
- *                       [--json] [--strict]
+ *                       [--dark] [--reduced-motion] [--zoom N] [--json] [--strict]
  *
  * Требует playwright (один раз на проект):
  *   npm i -D playwright && npx playwright install chromium
@@ -28,14 +28,14 @@ const DEFAULT_THRESHOLD = 0.12;
 function usage(msg) {
 	if (msg) console.error(`a11y.mjs: ${msg}`);
 	console.error(
-		"usage: node a11y.mjs <url> [--widths 375,768,1440] [--out DIR] [--baseline DIR] [--click \"css,css\"] [--wait MS] [--axe PATH] [--diff-threshold 0.12] [--json] [--strict]"
+		"usage: node a11y.mjs <url> [--widths 375,768,1440] [--out DIR] [--baseline DIR] [--click \"css,css\"] [--wait MS] [--axe PATH] [--diff-threshold 0.12] [--dark] [--reduced-motion] [--zoom N] [--json] [--strict]"
 	);
 	process.exit(2);
 }
 
 /** Флаги с значением и флаги-переключатели; неизвестное имя — сразу usage, а не « съест следующий аргумент». */
-const VALUE_FLAGS = new Set(["--widths", "--out", "--baseline", "--axe", "--wait", "--click", "--diff-threshold"]);
-const SWITCH_FLAGS = new Set(["--json", "--strict"]);
+const VALUE_FLAGS = new Set(["--widths", "--out", "--baseline", "--axe", "--wait", "--click", "--diff-threshold", "--zoom"]);
+const SWITCH_FLAGS = new Set(["--json", "--strict", "--dark", "--reduced-motion"]);
 
 function parseArgs(argv) {
 	const opts = { widths: [375, 768, 1440], wait: 500, clicks: [], threshold: DEFAULT_THRESHOLD };
@@ -44,7 +44,7 @@ function parseArgs(argv) {
 	while (args.length) {
 		const flag = args.shift();
 		if (SWITCH_FLAGS.has(flag)) {
-			opts[flag.slice(2)] = true;
+			opts[flag.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = true;
 			continue;
 		}
 		if (!VALUE_FLAGS.has(flag)) usage(`неизвестный флаг ${flag}`);
@@ -60,6 +60,10 @@ function parseArgs(argv) {
 			case "--diff-threshold":
 				opts.threshold = Number.parseFloat(value);
 				if (!Number.isFinite(opts.threshold) || opts.threshold <= 0 || opts.threshold > 1) usage("--diff-threshold — число от 0 до 1");
+				break;
+			case "--zoom":
+				opts.zoom = Number.parseFloat(value);
+				if (!Number.isFinite(opts.zoom) || opts.zoom <= 1 || opts.zoom > 4) usage("--zoom — число от 1 до 4");
 				break;
 		}
 	}
@@ -102,8 +106,23 @@ function probe() {
 		non_swappable: [],
 		fonts: { loaded: 0, failed: 0, families: [], no_display_swap: 0 },
 		css: { transition_all: 0, will_change: [], reduced_motion: false, contrast_media: false },
+		hidden_text: [],
 		viewport: "",
 	};
+
+	// «reduced-motion оставил контент невидимым»: текстовые блоки первого вьюпорта с opacity 0 / visibility hidden.
+	// display:none не считаем — это структура, а не незавершённый reveal.
+	for (const el of document.querySelectorAll("body *")) {
+		if (f.hidden_text.length >= 8) break;
+		const cs = cs2(el);
+		if (cs.display === "none" || !hasOwnText(el)) continue;
+		if (cs.visibility !== "hidden" && Number(cs.opacity) > 0) continue;
+		const r = box(el);
+		if (r.width === 0 || r.height === 0) continue;
+		if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) continue;
+		const txt = [...el.childNodes].map((n) => n.textContent).join("").trim().slice(0, 30);
+		f.hidden_text.push(`${sel(el)} «${txt}» opacity:${cs.opacity} visibility:${cs.visibility}`);
+	}
 
 	for (const el of document.querySelectorAll("body *")) {
 		if (!visible(el)) continue;
@@ -304,6 +323,8 @@ function report(opts, pages) {
 	const lines = [];
 	const worst = worstViolations(pages);
 	lines.push(`# ui-check ${opts.url}`);
+	const cond = [opts.dark && "color-scheme: dark", opts.reducedMotion && "prefers-reduced-motion: reduce", opts.zoom && `zoom ${opts.zoom}x`].filter(Boolean);
+	lines.push(`условия: ${cond.length ? cond.join(", ") : "светлая тема, движение не ограничено, zoom 1x"}; ширины: ${pages.map((p) => p.width).join(", ")}`);
 
 	for (const p of pages) {
 		// Незагруженная страница — не «нарушений 0», а «не проверено»: проход с ошибкой не должен выглядеть успехом.
@@ -336,6 +357,10 @@ function report(opts, pages) {
 			if (!f.css.contrast_media) lines.push("- нет prefers-contrast / prefers-reduced-transparency");
 			if (/user-scalable\s*=\s*no|maximum-scale\s*=\s*1/.test(f.viewport)) lines.push(`- viewport блокирует зум: ${f.viewport}`);
 			else lines.push(`- viewport: ${f.viewport}`);
+			if (opts.reducedMotion) {
+				for (const h of f.hidden_text) lines.push(`- под prefers-reduced-motion текст остался невидимым: ${h}`);
+				if (!f.hidden_text.length) lines.push("- prefers-reduced-motion: невидимых текстовых блоков в первом вьюпорте нет");
+			}
 		}
 		lines.push(`- скриншот: ${p.screenshot}`);
 		const b = p.baseline;
@@ -347,10 +372,12 @@ function report(opts, pages) {
 	}
 
 	if (opts.baseline) lines.push("\nКрасным в *-diff.png залиты изменившиеся пиксели: прочитай diff-кадр и скажи, что изменилось по делу.");
+	const invisible = opts.reducedMotion ? pages.reduce((n, p) => n + (p.findings?.hidden_text?.length || 0), 0) : 0;
+	if (invisible) lines.push(`\nНевидимого под prefers-reduced-motion текста: ${invisible} — это blocker, правь reveal.`);
 	if (pages.some((p) => p.error)) lines.push("\nЕсть ширины без проверки — результат не считается чистым, exit 1.");
 	else if (!worst.length) lines.push("\nНарушений axe moderate+ нет. Глазами всё равно смотри: иерархию, плотность, состояния данных.");
 	console.log(lines.join("\n"));
-	return worst.length || pages.some((p) => p.error) ? 1 : 0;
+	return worst.length || invisible || pages.some((p) => p.error) ? 1 : 0;
 }
 
 async function main() {
@@ -358,29 +385,37 @@ async function main() {
 	mkdirSync(opts.out, { recursive: true });
 	const pw = await loadPlaywright();
 	const browser = await launchChromium(pw);
-	const context = await browser.newContext();
+	const context = await browser.newContext({
+		colorScheme: opts.dark ? "dark" : "light",
+		reducedMotion: opts.reducedMotion ? "reduce" : "no-preference",
+	});
 	const page = await context.newPage();
 
 	const axePath = findAxe(opts.axe);
 	if (opts.axe && !axePath) usage(`--axe: файл не найден: ${opts.axe}`);
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 	const pages = [];
+	// Скриншоты каждого состояния в своё имя: тёмная тема не должна сравниться со светлым baseline.
+	const suffix = `${opts.dark ? "-dark" : ""}${opts.reducedMotion ? "-rm" : ""}${opts.zoom ? `-x${opts.zoom}` : ""}`;
 
 	for (const width of opts.widths) {
 		const rec = { width };
 		try {
 			await page.setViewportSize({ width, height: Math.round(width * 1.6) });
 			await page.goto(opts.url, { waitUntil: "load", timeout: 30000 });
+			// shortcut: CSS zoom вместо приближения браузера — reflow и переполнение даёт те же,
+			// а dppx и растровые ресурсы не меняются; апгрейд — CDP Emulation.deviceScaleFactor, когда понадобится мерить чёткость.
+			if (opts.zoom) await page.addStyleTag({ content: `html{zoom:${opts.zoom}}` });
 			for (const selector of opts.clicks) {
 				await page.click(selector, { timeout: 5000 }).catch(() => {});
 			}
 			if (opts.wait) await page.waitForTimeout(opts.wait);
 			rec.violations = await runAxe(page, axePath);
 			rec.findings = await page.evaluate(probe);
-			rec.screenshot = join(opts.out, `${width}.png`);
+			rec.screenshot = join(opts.out, `${width}${suffix}.png`);
 			await page.screenshot({ path: rec.screenshot, fullPage: true });
 			if (opts.baseline) {
-				const baselineFile = join(opts.baseline, `${width}.png`);
+				const baselineFile = join(opts.baseline, `${width}${suffix}.png`);
 				rec.baseline = existsSync(baselineFile)
 					? compareWithBaseline(baselineFile, rec.screenshot, join(opts.out, `${width}-diff.png`), opts.threshold)
 					: { baseline: `${baselineFile} (нет файла)` };
@@ -397,10 +432,11 @@ async function main() {
 
 	const moderatePlus = worstViolations(pages).length;
 	const unverifiable = pages.some((p) => !p.violations || p.error);
+	const invisible = opts.reducedMotion ? pages.reduce((n, p) => n + (p.findings?.hidden_text?.length || 0), 0) : 0;
 	if (opts.json) console.log(JSON.stringify({ url: opts.url, out: opts.out, moderatePlus, unverifiable, pages }, null, 1));
 	else report(opts, pages);
 	// Непроверившаяся ширина валит прогон всегда: «не увидели» не бывает успешным исходом.
-	process.exit(unverifiable || (opts.strict && moderatePlus > 0) ? 1 : 0);
+	process.exit(unverifiable || invisible || (opts.strict && moderatePlus > 0) ? 1 : 0);
 }
 
 export { parseArgs, probe, report, runAxe, worstViolations };

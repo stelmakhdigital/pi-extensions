@@ -45,9 +45,6 @@
     "skills": [
       "skills/session-insights",
       "skills/ui-design",
-      "skills/ui-motion",
-      "skills/ui-dashboard",
-      "skills/frontend-perf",
       "skills/ui-review"
     ]
   }

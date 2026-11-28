@@ -1,5 +1,5 @@
 /**
- * Смоук-тесты для скиллов ui-review / ui-design / ui-motion / ui-dashboard / frontend-perf.
+ * Смоук-тесты для скиллов ui-review и ui-design.
  * Run: node test/ui-skills.test.mjs
  *
  * Оффлайн-часть (проверка сборки: файлы, frontmatter, манифест, сниппеты, CLI-контракт)
@@ -19,7 +19,7 @@ const repo = join(here, "..");
 const SCRIPT = join(repo, "skills", "ui-review", "scripts", "a11y.mjs");
 const LINT = join(repo, "skills", "ui-review", "scripts", "lint-ui.mjs");
 const PERF = join(repo, "skills", "ui-review", "scripts", "perf.mjs");
-const UI_SKILLS = ["ui-review", "ui-design", "ui-motion", "ui-dashboard", "frontend-perf"];
+const UI_SKILLS = ["ui-review", "ui-design"];
 
 const results = [];
 function check(name, fn) {
@@ -115,8 +115,8 @@ check("ui-design: план, референсы, preflight и анти-шабло
 	}
 });
 
-check("ui-motion: носитель по задаче, reduced-motion без пропажи контента, проверка в движении", () => {
-	const text = skillText("ui-motion");
+check("ui-design/движение: носитель по задаче, reduced-motion без пропажи контента, проверка в движении", () => {
+	const text = read("skills", "ui-design", "references", "motion.md");
 	for (const needle of [
 		"prefers-reduced-motion",
 		"transform",
@@ -131,8 +131,8 @@ check("ui-motion: носитель по задаче, reduced-motion без пр
 	}
 });
 
-check("ui-dashboard: формы, вырожденные данные, форматтеры, состояния", () => {
-	const text = skillText("ui-dashboard");
+check("ui-design/данные: формы, вырожденные данные, форматтеры, состояния", () => {
+	const text = read("skills", "ui-design", "references", "data.md");
 	for (const needle of [
 		"Intl.NumberFormat",
 		"aria-sort",
@@ -146,13 +146,21 @@ check("ui-dashboard: формы, вырожденные данные, форма
 	}
 });
 
-check("frontend-perf: measure-first, CWV-пороги, keep-or-revert, CI-гард", () => {
-	const text = skillText("frontend-perf");
+check("ui-design: инвентарь существующего проекта и активы", () => {
+	const text = skillText("ui-design");
+	for (const needle of ["storybook", "стилевая база", "self-host", "size-adjust", "sprite"]) {
+		assert(text.includes(needle), `в скилле нет про ${needle}`);
+	}
+});
+
+check("ui-review/скорость: measure-first, CWV-пороги, keep-or-revert, CI-гард", () => {
+	const text = read("skills", "ui-review", "references", "perf.md");
 	for (const needle of ["perf.mjs", "lcp=2500", "cls=0.1", "inp=200", "--strict", "--click", "откатываем", "RUM"]) {
 		assert(text.includes(needle), `в скилле нет про ${needle}`);
 	}
-	// браузерные скрипты лежат в ui-review: скилл обязан называть это место, а не выдуманный путь
-	assert(text.includes("perf.mjs") && text.includes("каталог скилла ui-review"), "не указан путь к perf.mjs");
+	// браузерные скрипты и порядок работы с ними — в одном скилле: SKILL.md обязан ссылаться на references/perf.md
+	assert(read("skills", "ui-review", "SKILL.md").includes("references/perf.md"), "SKILL.md не ссылается на references/perf.md");
+	assert(text.includes("каталог скилла ui-review"), "в perf.md не указан путь к каталогу скриптов");
 	});
 
 check("ui-review: поведение виджетов описано и не противоречит чеклисту", () => {
@@ -395,6 +403,15 @@ check("parseArgs: ширины, клики, строгий режим", () => {
 	assert(o.out.startsWith("ui-review"), `out=${o.out} — по умолчанию под каталогом проекта`);
 	assert(o.threshold === 0.12, `порог по умолчанию=${o.threshold}`);
 	assert(mod.parseArgs(["http://a", "--diff-threshold", "0.4"]).threshold === 0.4, "порог не применился");
+	const cond = mod.parseArgs(["http://a", "--dark", "--reduced-motion", "--zoom", "2"]);
+	assert(cond.dark === true && cond.reducedMotion === true && cond.zoom === 2, `dark/reduced-motion/zoom=${JSON.stringify(cond)}`);
+});
+
+check("--zoom вне (1..4] отклоняется", () => {
+	for (const bad of ["abc", "1", "9"]) {
+		const r = runScript(["http://x", "--zoom", bad]);
+		assert(r.status === 2 && /--zoom/.test(r.stderr), `${bad}: exit=${r.status}`);
+	}
 });
 
 check("report: нарушения, поломки вёрстки и --strict по moderate+", () => {
@@ -481,6 +498,8 @@ check("lint-ui: находит заведомые поломки и слушае
 			"<main>",
 			"<p>Learn more · Acme Corp · lorem ipsum</p>",
 			"<button>🚀 Запуск</button>",
+			"<link rel=stylesheet href=https://fonts.googleapis.com/css2?family=Inter>",
+			"@font-face{font-family:X;src:url(https://cdn.example.com/x.woff2)}",
 			"<!-- ui-lint-disable no-generic-cta -->",
 			"<button>Подробнее</button>",
 			"</main>",
@@ -498,6 +517,7 @@ check("lint-ui: находит заведомые поломки и слушае
 		"no-emoji-icon",
 		"no-side-stripe",
 		"no-purple-gradient",
+		"no-remote-assets",
 	]) {
 		assert(r.stdout.includes(`[${id}]`), `нет правила ${id}`);
 	}
@@ -591,6 +611,29 @@ check("e2e: чистая страница не даёт ложных наход�
 	assert(r.stdout.includes("контраст: проверено"), "расчёт контраста не отработал");
 	assert(!r.stdout.includes("контраст ниже AA"), `ложный контраст:\n${r.stdout}`);
 	assert(!r.stdout.includes("медиа без размеров") && !r.stdout.includes("ссылка без назначения"), `ложные находки:\n${r.stdout}`);
+});
+
+check("e2e: --dark и --reduced-motion проверяют состояния, а не только светлую тему", () => {
+	writeFileSync(
+		join(tmp, "reveal.html"),
+		[
+			'<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>reveal</title>',
+			'<meta name="viewport" content="width=device-width, initial-scale=1">',
+			"<style>body{margin:0;background:#fff;color:#111;font-size:16px}.reveal{opacity:0;transform:translateY(10px)}</style></head>",
+			'<body><main><h1 class="reveal">Заголовок из reveal</h1><p>Обычный текст.</p></main></body></html>',
+		].join("\n")
+	);
+	const url = `file://${join(tmp, "reveal.html")}`;
+
+	const rm = runScript([url, "--widths", "375", "--out", join(tmp, "rm"), "--wait", "0", "--reduced-motion"]);
+	if (skipped(rm)) return true;
+	assert(rm.stdout.includes("текст остался невидимым"), `нет находки про невидимый текст:\n${rm.stdout}`);
+	assert(rm.stdout.includes("условия: prefers-reduced-motion: reduce"), "условия прогона не названы");
+	assert(rm.status === 1, `невидимый текст обязан валить прогон, exit=${rm.status}`);
+
+	const dark = runScript([url, "--widths", "375", "--out", join(tmp, "dark"), "--wait", "0", "--dark", "--zoom", "2"]);
+	if (skipped(dark)) return true;
+	assert(existsSync(join(tmp, "dark", "375-dark-x2.png")), "скриншот состояния должен писаться под своим именем, иначе тёмный кадр сравнится со светлым baseline");
 });
 
 check("e2e: --strict валит прогон на нарушениях moderate+", () => {

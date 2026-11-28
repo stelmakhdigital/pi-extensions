@@ -99,11 +99,8 @@ Guard'ы — это барьер от случайности модели, а н
 | Скилл | Назначение |
 |---|---|
 | [session-insights](skills/session-insights/) | Анализ собственных pi-сессий (`~/.pi/agent/sessions`) → отчёт с рекомендациями и черновиками улучшений (новые скиллы, правила для AGENTS.md, каркасы экстеншенов). Read-only, Python 3 stdlib |
-| [ui-design](skills/ui-design/) | Дизайн нового экрана по порядку: референсы, taste preflight, токен-план в `DESIGN.md` проекта, вёрстка на надутых данных, самопроверка. `references/anti-patterns.md` — признаки генерации и счётные ограничители |
-| [ui-motion](skills/ui-motion/) | Движение: выбор носителя (CSS / View Transitions / библиотека), motion-токены, `prefers-reduced-motion` без пропажи контента, проверка в движении через `INP`/`TBT`. `references/patterns.md` — сниппеты |
-| [ui-dashboard](skills/ui-dashboard/) | Экраны с данными: вопрос → тип графика, оси и форматтеры (`Intl`), вырожденные данные (0 строк, 1 точка, спайк, пропуск, нет прав), состояния, плотность таблицы. `references/charts.md` — responsive-SVG-шаблон и реакции на вырожденные данные |
-| [frontend-perf](skills/frontend-perf/) | Производительность: замер через `perf.mjs` (LCP/CLS/INP/TBT, вес по типам, oversized-картинки, кто двигает макет), порядок правок, keep-or-revert, бюджет в CI |
-| [ui-review](skills/ui-review/) | Ревью вёрстки тремя скриптами: `lint-ui.mjs` по исходникам, `a11y.mjs` по экрану (axe-core, свой расчёт контраста, layout/motion/тап-целы), `perf.mjs` по скорости; скриншоты в трёх ширинах с побитовым diff. Чеклист — `references/checklist.md`, поведение виджетов — `references/aria-patterns.md` |
+| [ui-design](skills/ui-design/) | Дизайн экрана по порядку: инвентарь существующей стилевой базы и компонентов, референсы, taste preflight, токен-план в `DESIGN.md` проекта, вёрстка на надутых данных, самопроверка. `references/anti-patterns.md` — признаки генерации и счётные ограничители; `references/data.md` — экраны с данными (вопрос → тип графика, оси и форматтеры `Intl`, вырожденные данные, состояния, плотность таблицы); `references/motion.md` — движение (носитель, motion-токены, `prefers-reduced-motion`, сниппеты) |
+| [ui-review](skills/ui-review/) | Ревью вёрстки тремя скриптами: `lint-ui.mjs` по исходникам, `a11y.mjs` по экрану (axe-core, свой расчёт контраста, layout/motion/тап-цели), `perf.mjs` по скорости (LCP/CLS/INP/TBT, oversized-картинки, кто двигает макет); скриншоты в трёх ширинах с побитовым diff. Чеклист — `references/checklist.md`, поведение виджетов — `references/aria-patterns.md`, порядок правок скорости и бюджет в CI — `references/perf.md` |
 
 ## Установка
 
@@ -298,7 +295,7 @@ tmux (`tmux new -A -s pi 'pi'`); вне tmux при старте предлож�
 mkdir -p ~/.pi/agent/skills
 git clone --depth 1 https://github.com/stelmakhdigital/pi-extensions /tmp/pi-ext
 ln -sfn /tmp/pi-ext/skills/session-insights ~/.pi/agent/skills/session-insights
-for s in ui-design ui-motion ui-dashboard frontend-perf ui-review; do
+for s in ui-design ui-review; do
   ln -sfn "/tmp/pi-ext/skills/$s" ~/.pi/agent/skills/"$s"
 done
 ```
@@ -364,14 +361,16 @@ Digest разделяет повторяющиеся строки промпто
 
 ### Как пользоваться UI-скиллами
 
-Скиллы включаются сами по описанию в задаче; если не подхватились — явно
-`/skill:ui-design`, `/skill:ui-motion`, `/skill:ui-dashboard`,
-`/skill:frontend-perf`, `/skill:ui-review`. Для `ui-design` и `ui-review` есть
-ещё prompt-сниппеты (они подмешивают короткий каркас в первое сообщение).
+Два скилла, различие одно: строить или проверять. Скиллы включаются сами по
+описанию в задаче; если не подхватились — явно `/skill:ui-design` или
+`/skill:ui-review`. Для обоих есть prompt-сниппеты (они подмешивают короткий
+каркас в первое сообщение).
 
-Порядок в одном тикете: `ui-design` (или правка экрана) → `ui-motion`, если
-появилось движение → `ui-review` → `frontend-perf`, если экран тяжёлый. Экран с
-данными собирается через `ui-dashboard`, дальше тот же `ui-review`.
+Всё, что раньше было отдельными скиллами, теперь разделы внутри: экраны с данными
+и движение — в `ui-design` (`references/data.md`, `references/motion.md`),
+скорость — в `ui-review` (`references/perf.md`). Порядок в одном тикете: `ui-design`
+(или правка экрана) → `ui-review`; внутри ревью скорость меряется, если экран
+тяжёлый или есть жалобы.
 
 Первый запуск в проверяемом проекте (один раз, если playwright там нет):
 
@@ -391,6 +390,8 @@ node "$S/a11y.mjs" http://localhost:3000 \            # по экрану: axe, 
   --widths 375,768,1440 --out ui-review/run-1 --wait 800 \
   --click "button.menu,button.new-item"
 node "$S/a11y.mjs" http://localhost:3000 --out ui-review/run-2 --baseline ui-review/run-1
+node "$S/a11y.mjs" http://localhost:3000 --out ui-review/run-dark --dark --widths 375,768,1440
+node "$S/a11y.mjs" http://localhost:3000 --out ui-review/run-rm --reduced-motion --widths 1440
 node "$S/perf.mjs" http://localhost:3000 --click "button.menu" --wait 1500
 node "$S/perf.mjs" http://localhost:3000 --budget lcp=2500,cls=0.1,inp=200 --strict --json
 ```
@@ -398,6 +399,12 @@ node "$S/perf.mjs" http://localhost:3000 --budget lcp=2500,cls=0.1,inp=200 --str
 `--baseline` сравнивает кадры с прошлым прогоном побитово и пишет `*-diff.png`;
 `--axe ./node_modules/axe-core/axe.min.js` — для офлайна; `file://` годится для
 статичного HTML, но там неполная ресурсная статистика и нет TTFB.
+
+Состояния проверяются отдельными прогонами, а не глазами: `--dark` ставит
+`color-scheme: dark` (контраст пересчитывается по тёмным цветам, кадры уходят в
+`<width>-dark.png`), `--reduced-motion` ловит текст, оставшийся с `opacity: 0`
+после отключения анимации (такой прогон валится с exit 1), `--zoom 2` ловит
+обрезку при крупном тексте через CSS `zoom`.
 
 В CI: `lint-ui.mjs src --strict` и `a11y.mjs <preview-url> --strict --json` на
 каждый push, `perf.mjs <preview-url> --budget ... --strict` с бюджетом от текущих
@@ -476,20 +483,15 @@ skills/
   ui-design/
     SKILL.md                  # референсы → preflight → DESIGN.md → вёрстка → самопроверка
     references/anti-patterns.md   # признаки генерации и счётные ограничители
-  ui-motion/
-    SKILL.md                  # носитель движения → токены → сборка → проверка в движении
-    references/patterns.md    # токен-шит, reduced-motion, scroll reveal, View Transitions, списки
-  ui-dashboard/
-    SKILL.md                  # вопрос → тип графика → данные → форматирование → состояния
-    references/charts.md      # выбор типа, оси, Intl-форматтеры, responsive SVG, вырожденные данные
-  frontend-perf/
-    SKILL.md                  # замер → где вес → правки по одной → keep-or-revert → CI-гард
+    references/data.md        # экраны с данными: вопрос → тип графика, оси, Intl-форматтеры, вырожденные данные, состояния
+    references/motion.md      # движение: носитель, токены, reduced-motion, scroll reveal, View Transitions, списки
   ui-review/
-    SKILL.md                  # контекст → машинная проверка → рендер → находки
+    SKILL.md                  # контекст → машинная проверка → рендер → скорость → находки
     references/checklist.md   # семантика/layout/motion/состояния/данные + эвристики Нильсена
     references/aria-patterns.md   # роли, клавиатура и возврат фокуса у самодельных виджетов
+    references/perf.md        # замер → где вес → правки по одной → keep-or-revert → CI-гард
     scripts/
-      a11y.mjs                # axe-core, контраст, layout-пробы, скриншоты по ширинам (playwright)
+      a11y.mjs                # axe-core, контраст, layout-пробы, скриншоты по ширинам и состояниям (--dark/--reduced-motion/--zoom)
       perf.mjs                # LCP/CLS/INP/TBT, вес по типам, oversized-картинки, бюджет (playwright)
       lint-ui.mjs             # статические правила по исходникам, без браузера и зависимостей
       png-diff.mjs            # декодер/энкодер PNG и побитовое сравнение кадров, без зависимостей

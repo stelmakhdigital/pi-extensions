@@ -43,6 +43,7 @@ const RULES = [
 	{ id: "no-overflow-x-hidden-root", level: "fail", exts: STYLE_EXT, re: /(?:html|body)[^{}]*\{[^}]*overflow-x\s*:\s*(?:hidden|clip)/, msg: "overflow-x на html/body маскирует переполнение, а не чинит его" },
 	{ id: "no-native-select-unstyled", level: "warn", exts: TEMPLATE_EXT, re: /<select(?![^>]*class)[^>]*>/i, msg: "нативный select без стилей: свой chevron и состояние придётся делать руками и проверить клавиатуру" },
 	{ id: "no-hardcoded-blank", level: "warn", exts: SOURCE_EXT, re: /(?:color|background(?:-color)?)\s*:\s*#(?:fff|ffffff|000|000000)\b/, msg: "чистый белый/чёрный вместо токенов поверхности" },
+	{ id: "no-remote-assets", level: "warn", exts: SOURCE_EXT, re: /@import[^;\n]*url\(\s*['"]?https?:|url\(\s*['"]?https?:\/\/[^)]*\.(?:woff2?|ttf|otf|css)\b|fonts\.googleapis|fonts\.gstatic|use\.typekit|cdn\.jsdelivr|unpkg\.com|cdnjs\.cloudflare/i, msg: "шрифты/стили с чужого CDN: self-host — экран не собирается офлайн и зависит от чужого хоста" },
 	{ id: "no-js-xss", level: "fail", exts: SOURCE_EXT, re: /(?:\.innerHTML\s*=|dangerouslySetInnerHTML)/, msg: "вставка HTML строкой: экранируй или используй текстовые узлы" },
 ];
 
