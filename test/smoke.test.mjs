@@ -495,10 +495,8 @@ print(found)`,
 	const piG = makePi();
 	genSpeed.default(piG);
 
-	// ctx в стиле TUI: футер устанавливается через setFooter
-	let footerFactory = null;
-	let lastTheme = null;
-	const themeStub = { fg: (c, s) => `[${c}]${s}`, bold: (s) => `*${s}*` };
+	// Бейдж живёт в строке статусов (ctx.ui.setStatus); к копии футера pi не возвращаемся.
+	const statuses = {};
 	const ctxG = {
 		hasUI: true,
 		mode: "tui",
@@ -506,131 +504,69 @@ print(found)`,
 		model: { id: "test-model", contextWindow: 200000, reasoning: true },
 		thinkingLevel: "medium",
 		getContextUsage: () => ({ tokens: 48000, contextWindow: 200000, percent: 24 }),
-		sessionManager: {
-			getEntries: () => [
-				{
-					type: "message",
-					message: {
-						role: "assistant",
-						usage: { input: 30000, output: 18000, cacheRead: 0, cacheWrite: 0, totalTokens: 48000, cost: { total: 0.5 } },
-						stopReason: "stop",
-					},
-				},
-			],
-			getSessionName: () => "test-session",
-			getCwd: () => repoRoot,
+		sessionManager: { getEntries: () => [], getSessionName: () => "test-session", getCwd: () => repoRoot },
+		ui: {
+			setStatus: (key, text) => { statuses[key] = text; },
+			setFooter: () => { throw new Error("gen-speed подменил футер pi — копия удалена намеренно"); },
 		},
-		ui: { setFooter: (f) => { footerFactory = f; } },
 	};
-	const tuiStub = { requestRender: () => {} };
-	const footerDataStub = {
-		getGitBranch: () => "master",
-		getExtensionStatuses: () => new Map([["bash-guard", "bash-guard: ok"]]),
-		getAvailableProviderCount: () => 1,
-		onBranchChange: () => () => {},
-	};
-	const renderFooter = () => {
-		if (!footerFactory) throw new Error("setFooter не вызван");
-		lastTheme = themeStub;
-		return footerFactory(tuiStub, themeStub, footerDataStub).render(200);
-	};
+	const badge = () => statuses[" a-gen-speed"];
 
-	await check("gen-speed: футер устанавливается и бейдж в строке токенов", async () => {
+	/** Один ассистент-ответ: старт → TTFT → дельта токенов → ещё tail мс → конец. */
+	async function answer(h, ctx, opts) {
 		const realNow = Date.now.bind(Date);
-		let fake = 1_000_000;
+		let fake = opts.at;
 		Date.now = () => fake;
 		try {
-			await piG.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxG);
-			fake += 300; // TTFT = 300ms
-			await piG.handlers.message_update({ message: { role: "assistant", usage: { output: 100 } } }, ctxG);
-			fake += 2700; // 3.0s суммарно
-			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 100 }, stopReason: "stop" } }, ctxG);
+			await h.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctx);
+			fake += opts.ttft;
+			await h.handlers.message_update({ message: { role: "assistant", usage: { output: opts.tokens } } }, ctx);
+			fake += opts.tail;
+			await h.handlers.message_end({ message: { role: "assistant", usage: { output: opts.tokens }, stopReason: opts.stopReason ?? "stop" } }, ctx);
 		} finally {
 			Date.now = realNow;
 		}
-		const lines = renderFooter();
-		if (lines.length < 2) throw new Error("мало строк: " + JSON.stringify(lines));
-		const stats = lines[1];
-		if (!stats.includes("33t/s")) throw new Error("нет 33t/s: " + stats);
-		if (!stats.includes("300ms")) throw new Error("нет TTFT: " + stats);
-		if (stats.includes("⌀") || stats.includes(" · ")) throw new Error("лишние символы в бейдже: " + stats);
-		if (!stats.includes("↑")) throw new Error("нет токенов ↑: " + stats);
-		if (!stats.includes("24.0%/200k (auto)")) throw new Error("нет context%: " + stats);
-		if (!stats.includes("test-model • medium")) throw new Error("нет модели справа: " + stats);
-		// cwd показывается сокращённо до ~ — считаем ожидаемое от реального пути репо
-		const home = homedir();
-		const pwd = repoRoot.startsWith(home) ? "~" + repoRoot.slice(home.length) : repoRoot;
-		if (lines[0] !== `[dim]${pwd} (master) • test-session`) throw new Error("pwd-строка: " + lines[0]);
-		// бейдж в строке токенов, а НЕ в строке статусов
-		if (lines[2] && lines[2].includes("t/s")) throw new Error("бейдж дублируется в статус-строке: " + lines[2]);
-		if (!lines[2] || !lines[2].includes("bash-guard: ok")) throw new Error("статусы других расширений потеряны: " + JSON.stringify(lines));
+	}
+
+	await check("gen-speed: бейдж скорости и TTFT в строке статусов", async () => {
+		await answer(piG, ctxG, { at: 1_000_000, ttft: 300, tail: 2700, tokens: 100 });
+		// 100 токенов за 3.0 s = 33.3 t/s, TTFT 300 ms
+		if (badge() !== "33t/s (300ms)") throw new Error("бейдж: " + badge());
 	});
 
-	await check("gen-speed: очень короткий ответ (<300ms) не двигает бейдж", async () => {
-		const realNow = Date.now.bind(Date);
-		let fake = 2_000_000;
-		Date.now = () => fake;
-		try {
-			await piG.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxG);
-			fake += 200;
-			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 5 }, stopReason: "stop" } }, ctxG);
-		} finally {
-			Date.now = realNow;
-		}
-		const stats = renderFooter()[1];
-		if (!stats.includes("33t/s")) throw new Error("бейдж изменился: " + stats);
+	await check("gen-speed: ответ короче 300ms не двигает бейдж", async () => {
+		await answer(piG, ctxG, { at: 2_000_000, ttft: 100, tail: 100, tokens: 5 });
+		if (badge() !== "33t/s (300ms)") throw new Error("бейдж изменился: " + badge());
 	});
 
 	await check("gen-speed: aborted-ответ не двигает бейдж", async () => {
-		const realNow = Date.now.bind(Date);
-		let fake = 3_000_000;
-		Date.now = () => fake;
-		try {
-			await piG.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxG);
-			fake += 3000;
-			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 500 }, stopReason: "aborted" } }, ctxG);
-		} finally {
-			Date.now = realNow;
-		}
-		const stats = renderFooter()[1];
-		if (!stats.includes("33t/s")) throw new Error("бейдж изменился: " + stats);
+		await answer(piG, ctxG, { at: 3_000_000, ttft: 300, tail: 2700, tokens: 500, stopReason: "aborted" });
+		if (badge() !== "33t/s (300ms)") throw new Error("бейдж изменился: " + badge());
 	});
 
-	await check("gen-speed: ответ 700ms (быстрая модель) учитывается", async () => {
-		const realNow = Date.now.bind(Date);
-		let fake = 4_000_000;
-		Date.now = () => fake;
-		try {
-			await piG.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxG);
-			fake += 100; // TTFT
-			await piG.handlers.message_update({ message: { role: "assistant", usage: { output: 90 } } }, ctxG);
-			fake += 600;
-			await piG.handlers.message_end({ message: { role: "assistant", usage: { output: 90 }, stopReason: "stop" } }, ctxG);
-		} finally {
-			Date.now = realNow;
-		}
-		const stats = renderFooter()[1];
-		// EMA от 33.3 и 128.6 (90 tok / 0.7s) с alpha 0.4 ≈ 71.4 → 71t/s
-		if (!stats.includes("71t/s")) throw new Error("быстрый ответ не учтён: " + stats);
+	await check("gen-speed: быстрый ответ (700ms) учтён в EMA", async () => {
+		await answer(piG, ctxG, { at: 4_000_000, ttft: 100, tail: 600, tokens: 90 });
+		// EMA скорости от 33.3 и 128.6 (90 tok / 0.7s) с alpha 0.4 ≈ 71.4
+		// EMA TTFT от 0.3 и 0.1 = 0.22s
+		if (badge() !== "71t/s (220ms)") throw new Error("быстрый ответ не учтён: " + badge());
 	});
 
-	await check("gen-speed: session_start сбрасывает статистику и переустанавливает футер", async () => {
-		footerFactory = null;
+	await check("gen-speed: session_start сбрасывает бейдж", async () => {
 		await piG.handlers.session_start({ reason: "startup" }, ctxG);
-		if (!footerFactory) throw new Error("футер не переустановлен");
-		const lines = renderFooter();
-		if (lines[1].includes("t/s")) throw new Error("бейдж не сброшен: " + lines[1]);
+		if (badge() !== undefined) throw new Error("бейдж не сброшен: " + badge());
 	});
 
-	await check("gen-speed: в режиме print футер не устанавливается", async () => {
-		const piP = makePi();
-		genSpeed.default(piP);
-		let called = false;
-		const ctxP = { ...ctxG, mode: "print", hasUI: false, ui: { setFooter: () => { called = true; } } };
-		await piP.handlers.message_start({ message: { role: "assistant", usage: { output: 0 } } }, ctxP);
-		if (called) throw new Error("setFooter вызван в print-режиме");
+	await check("gen-speed: сообщение не-ассистента статистику не создаёт", async () => {
+		const piU = makePi();
+		genSpeed.default(piU);
+		const st = {};
+		const ctxU = { ...ctxG, ui: { ...ctxG.ui, setStatus: (k, v) => { st[k] = v; } } };
+		await piU.handlers.message_start({ message: { role: "user", usage: { output: 0 } } }, ctxU);
+		await piU.handlers.message_end({ message: { role: "user", usage: { output: 100 }, stopReason: "stop" } }, ctxU);
+		if (st[" a-gen-speed"] !== undefined) throw new Error("статистика по сообщению пользователя: " + st[" a-gen-speed"]);
 	});
 }
+
 
 // === 8. subagents ===
 {
