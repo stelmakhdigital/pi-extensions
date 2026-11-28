@@ -173,6 +173,27 @@ await check("без TUI виджет не рисуется, /todos отдаёт 
 	assert(/headless шаг|пуст/.test(ctx.ui.notes.join("\n")), "нет уведомление: " + ctx.ui.notes.join("\n"));
 });
 
+await check("закрытый список гаснет на agent_settled и возвращается с новым пунктом", async () => {
+	const { pi, tool } = load();
+	const ctx = makeCtx();
+	await tool.execute("c1", { action: "add", text: "шаг" }, undefined, undefined, ctx);
+	await tool.execute("c2", { action: "toggle", id: 1 }, undefined, undefined, ctx);
+	assert(ctx.ui.statuses[" a-todo"] === " 1/1 ", "бейдж во время прогона: " + ctx.ui.statuses[" a-todo"]);
+	await pi.handlers.agent_settled({}, ctx);
+	assert(ctx.ui.widgets[" todo"] === undefined && ctx.ui.statuses[" a-todo"] === undefined, "не снято после прогона: " + ctx.ui.statuses[" a-todo"]);
+	await tool.execute("c3", { action: "add", text: "ещё шаг" }, undefined, undefined, ctx);
+	assert(ctx.ui.statuses[" a-todo"] === " 1/2 ", "виджет не вернулся с живым списком: " + ctx.ui.statuses[" a-todo"]);
+});
+
+await check("закрытый план из старой сессии не показывается, но доступен в /todos", async () => {
+	const { pi } = load();
+	const ctx = withBranch(makeCtx(), { todos: [{ id: 1, text: "древний план", done: true }], nextId: 2 });
+	await pi.handlers.session_start({}, ctx);
+	assert(ctx.ui.widgets[" todo"] === undefined && ctx.ui.statuses[" a-todo"] === undefined, "висит закрытый план: " + ctx.ui.statuses[" a-todo"]);
+	await pi.commands.todos.handler("", ctx);
+	assert(/древний план/.test(ctx.ui.overlay.render(60).join("\n")), "в /todos плана нет");
+});
+
 await check("/todos и shift+ctrl+o открывают оверлей со списком", async () => {
 	const { pi } = load();
 	const ctx = makeCtx();

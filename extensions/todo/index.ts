@@ -24,6 +24,10 @@
  *   tmux `extended-keys on`); без неё клавиша не дойдёт — остаётся `/todos`.
  * - бейдж `2/5` в футере — когда виджет не виден (другое расширение заняло
  *   место, либо прогон без TUI).
+ *
+ * Закрытый список исчезает вместе с прогоном, который его закрыл (agent_settled):
+ * «10/10» не висит над десятком последующих задач; `/todos` по-прежнему показывает
+ * список целиком.
  */
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
@@ -124,6 +128,10 @@ class TodoOverlay {
 export default function (pi: ExtensionAPI) {
 	let todos: Todo[] = [];
 	let nextId = 1;
+	// Закрытый план не должен висеть бейджем через десяток следующих прогонов:
+	// снимаем на agent_settled (после него pi сам уже не продолжит) и не поднимаем,
+	// пока список снова не станет живым — добавлен пункт или открыт закрытый.
+	let hideDone = false;
 
 	/** Состояние — из истории текущей ветки: любой `todo`-результат перекрывает предыдущее. */
 	const reconstruct = (ctx: ExtensionContext) => {
@@ -141,8 +149,10 @@ export default function (pi: ExtensionAPI) {
 	const paint = (ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui") return;
 		const { done, total } = progress(todos);
-		ctx.ui.setWidget(WIDGET_KEY, total ? widgetLines(todos, ctx.ui.theme) : undefined);
-		ctx.ui.setStatus(STATUS_KEY, total ? ctx.ui.theme.fg(done === total ? "success" : "dim", ` ${done}/${total} `) : undefined);
+		if (done !== total) hideDone = false;
+		const visible = total > 0 && !hideDone;
+		ctx.ui.setWidget(WIDGET_KEY, visible ? widgetLines(todos, ctx.ui.theme) : undefined);
+		ctx.ui.setStatus(STATUS_KEY, visible ? ctx.ui.theme.fg(done === total ? "success" : "dim", ` ${done}/${total} `) : undefined);
 	};
 
 	const showOverlay = async (ctx: ExtensionContext) => {
@@ -156,12 +166,23 @@ export default function (pi: ExtensionAPI) {
 		await ctx.ui.custom<void>((_tui, theme, _keys, done) => new TodoOverlay(todos.map((t) => ({ ...t })), theme, () => done()));
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
+	/** Собрать состояние из ветки. Закрытый план из старой сессии не показываем. */
+	const rebuild = (ctx: ExtensionContext) => {
 		reconstruct(ctx);
+		const { done, total } = progress(todos);
+		hideDone = total > 0 && done === total;
 		paint(ctx);
+	};
+
+	pi.on("session_start", async (_event, ctx) => {
+		rebuild(ctx);
 	});
 	pi.on("session_tree", async (_event, ctx) => {
-		reconstruct(ctx);
+		rebuild(ctx);
+	});
+	pi.on("agent_settled", async (_event, ctx) => {
+		const { done, total } = progress(todos);
+		if (total > 0 && done === total) hideDone = true;
 		paint(ctx);
 	});
 	pi.on("session_shutdown", async (_event, ctx) => {
