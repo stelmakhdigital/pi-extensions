@@ -87,10 +87,6 @@ export function splitOnOps(tokens: Token[], splitOps: string[]): Token[][] {
 	return out;
 }
 
-export function chainOpsOf(tokens: Token[]): string[] {
-	return tokens.filter(isOpToken).map((t) => t.op);
-}
-
 /**
  * Головная утилита аргументов: первая не-переменная после снятия `VAR=value`
  * и пути к бинарю. null — разобрать не во что (пусто, только переменные).
@@ -173,11 +169,6 @@ export function commandSegments(command: string, depth = 2, keepVariables = fals
 	};
 	walk(command, depth);
 	return out;
-}
-
-/** Сегменты в виде строк (для правил-регулярок): аргументы через один пробел. */
-export function segmentStrings(command: string, depth = 2, keepVariables = false): string[] {
-	return commandSegments(command, depth, keepVariables).map((argv) => argv.join(" "));
 }
 
 /** URL-схема в начале токена (`https://…`, `s3://…`) — это не файловый путь. */
