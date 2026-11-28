@@ -3,9 +3,12 @@
  *
  * Механика: перехват `tool_call` на `bash` и мутация `event.input.command` —
  * команда оборачивается бэкендом песочницы и исполняется штатным bash-тулом.
- * Пользователь (и bash-guard) видят полную команду, включая бэкенд: bash-guard
- * узнаёт обёртку по голове команды (bwrap/sandbox-exec) и не спрашивает
- * повторно — на порядок загрузки расширений это не влияет.
+ *
+ * Порядок загрузок обязывает: sandbox мутирует команду ПОСЛЕ guard'ов (иначе
+ * они разбирали бы обёртку bwrap вместо команды), поэтому bash-guard не видит
+ * обёртку и узнаёт об изоляции через registerSandboxProbe()
+ * (extensions/sandbox-state.ts): изолированную команду он не спрашивает,
+ * «пол» жёсткого блока при этом остаётся.
  *
  * Бэкенды:
  * - Linux: bubblewrap (bwrap) — mount-namespace (видна только курируемая
@@ -42,6 +45,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readJson, writeJson } from "../json-store.ts";
 import { isYolo, onYoloChange } from "../yolo-mode.ts";
+import { registerSandboxProbe } from "../sandbox-state.ts";
 
 type Level = "off" | "dev" | "untrusted" | "vm";
 type Platform = "linux" | "macos" | "unsupported";
@@ -316,6 +320,14 @@ export default function (pi: ExtensionAPI) {
 		if (savedLevel(projectRoot(ctx.cwd))) return "сохранённое решение о доверии";
 		return "по умолчанию (off)";
 	}
+
+	// Уровень спрашивается в момент tool_call (а не кэшируется на смену уровня),
+	// поэтому /sandbox on|off и /yolo видны guard'ам сразу.
+	registerSandboxProbe((ctx) => {
+		if (isYolo()) return false;
+		const level = activeLevel(ctx);
+		return (level === "dev" || level === "untrusted") && checkBackend();
+	});
 
 	/** Уровень → бинарное доверие pi: L0/L1-dev — ресурсы проекта грузим
 	 *  (доверие с изоляцией выполнения), L1+/vm — не грузим. */

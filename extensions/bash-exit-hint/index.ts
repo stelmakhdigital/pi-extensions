@@ -10,7 +10,8 @@ import { chainHeads } from "../shell-parse.ts";
  * «ошибку» и ретраит тот же вызов (71 ретрай за месяц поdigest-сессий).
  *
  * Механика (только tool_result):
- * - isError && в выводе есть "Command exited with code 1";
+ * - isError && в выводе есть "Command exited with code 1" (в т.ч. под
+ *   закрывающим UNTRUSTED-фрейсом injection-guard — см. FENCE_TAIL);
  * - головная утилита каждой цепочки (`;`, `&&`, `||`) и каждой последней стадии
  *   конвейера — probe-утилита (grep/egrep/fgrep/rg/diff/cmp/comm/pgrep). Разбор
  *   общий с остальными guard'ами (extensions/shell-parse.ts): `grep "a && b" f`
@@ -25,6 +26,11 @@ import { chainHeads } from "../shell-parse.ts";
  */
 
 const PROBES = new Set(["grep", "egrep", "fgrep", "rg", "diff", "cmp", "comm", "pgrep"]);
+// injection-guard грузится раньше и успевает закрыть вывод в UNTRUSTED-фрейс
+// (`</UNTRUSTED>` + пояснение) — из-за этого строка кода перестанет быть
+// последней. Срезаем хвост фрейса перед проверкой, иначе hint молчал бы на
+// любой probe-команде с сетевым словом в аргументах (`grep -rn curl src/`).
+const FENCE_TAIL = /\n?\n?<\/UNTRUSTED>\n\[[^\]\n]*\]\s*$/;
 const NOTE =
 	"\n[exit 1 — штатный код: «нет совпадений» (grep/rg/pgrep) или «файлы различаются» (diff/cmp/comm). " +
 	"Это не ошибка: продолжай без ретрая, при необходимости переформулируй запрос.]";
@@ -39,7 +45,7 @@ export default function (pi: ExtensionAPI) {
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
 			.map((c) => c.text)
 			.join("\n");
-		if (!/Command exited with code 1\s*$/.test(text)) return;
+		if (!/Command exited with code 1\s*$/.test(text.replace(FENCE_TAIL, ""))) return;
 		return {
 			isError: false,
 			content: [...event.content, { type: "text" as const, text: NOTE }],

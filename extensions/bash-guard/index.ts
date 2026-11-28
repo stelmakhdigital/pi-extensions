@@ -5,6 +5,7 @@ import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 import { commandSegments, headUtility, isOpToken, parseTokens, physicalLines, splitOnOps, tokensToStrings, type Token } from "../shell-parse.ts";
 import { loadGuard, saveGuard, shouldResetGuards } from "../guard-state.ts";
 import { isYolo } from "../yolo-mode.ts";
+import { sandboxIsolates } from "../sandbox-state.ts";
 
 /**
  * Перехватывает вызовы инструмента `bash` и применяет разную защиту в зависимости
@@ -479,18 +480,6 @@ export function floorMatch(command: string, rules: FloorRule[]): FloorRule | nul
 	return null;
 }
 
-/**
- * Команда уже обёрнута песочницей (голова — bwrap/sandbox-exec). Проверяем по
- * тексту, а не по маркеру на событии: порядок загрузки расширений бывает любой,
- * и при «bash-guard раньше sandbox» маркер просто не успевает появиться.
- */
-export function sandboxWrapped(command: string): boolean {
-	const BACKENDS = new Set(["bwrap", "sandbox-exec"]);
-	return commandSegments(command, 0, true)
-		.flatMap(segmentPositions)
-		.some((pos) => BACKENDS.has(pos.head));
-}
-
 export const HEADLESS_BLOCKED: FloorRule[] = [
 	// Рекурсивное удаление (rmOnly — снимается /bash-guard:rm в главной сессии)
 	{ head: ["rm"], pattern: /^rm\b[^#\n]*\s-(?:[a-zA-Z]*[rR]|-\brecursive\b)/, reason: "рекурсивное удаление (rm -r / -rf / -Rf)", rmOnly: true },
@@ -566,7 +555,6 @@ export default function (pi: ExtensionAPI) {
 			if (isYolo()) return;
 			if (!isToolCallEventType("bash", event)) return;
 			const command = event.input.command;
-			if (sandboxWrapped(command)) return;
 			const hit = floorMatch(command, HEADLESS_BLOCKED);
 			if (hit) {
 				return {
@@ -667,6 +655,10 @@ export default function (pi: ExtensionAPI) {
 	const ABORT_REMEMBER_MS = 60_000;
 	// Ключ нормализуем (схлопываем пробелы), чтобы `rm -rf  x` не была «новой» командой.
 	const normalizeCmd = (c: string) => c.replace(/\s+/g, " ").trim();
+	const directAskHint = (disabled: boolean) =>
+		disabled
+			? "Включи bash-guard через /bash-guard и подтверди интерактивно, или предложи более безопасный вариант."
+			: "Предложи более безопасный вариант или вынеси операцию за пределы песочницы (попроси пользователя запустить её саму).";
 
 	pi.on("tool_call", async (event, ctx) => {
 		// yolo: ни запросов, ни блоков, «пол» тоже снят по явному запросу
@@ -675,13 +667,13 @@ export default function (pi: ExtensionAPI) {
 		if (!isToolCallEventType("bash", event)) return;
 
 		const command = event.input.command;
-		// Команда в песочнице (bwrap/Seatbelt) — повторное подтверждение не нужно:
-		// изоляция уже сделала свою работу.
-		if (sandboxWrapped(command)) return;
 
-		// Отключённый (автономный) режим: без интерактивных запросов, но
-		// сохраняем «пол» жёсткого блока для катастрофических операций.
-		if (disabled) {
+		// Без интерактивного вопроса команда живёт на «полу»: так работает
+		// автономный режим, и то же даётся команде, которую sandbox возьмёт в
+		// изоляцию (состояние песочницы спрашивают через sandboxIsolates, а не по
+		// тексту: обёртки на этом этапе ещё нет). «Пол» остаётся в обоих случаях —
+		// изоляция закрывает хост, но рабочий каталог внутри неё доступен на запись.
+		if (disabled || sandboxIsolates(ctx)) {
 			// /bash-guard:rm снимает только rm-правила (rm -r, find -delete)
 			const rules = rmAllowed ? MAIN_DISABLED_BLOCKED.filter((r) => !r.rmOnly) : MAIN_DISABLED_BLOCKED;
 			const hit = floorMatch(command, rules);
@@ -689,9 +681,9 @@ export default function (pi: ExtensionAPI) {
 				return {
 					block: true,
 					reason:
-						`Заблокировано bash-guard («пол» автономного режима): ${hit.reason}. ` +
-						"Даже при отключённом bash-guard этот шаблон слишком разрушителен для автономного выполнения. " +
-						"Включи bash-guard через /bash-guard и подтверди интерактивно, или предложи более безопасный вариант.",
+						`Заблокировано bash-guard («пол» ${disabled ? "автономного режима" : "команд в песочнице"}): ${hit.reason}. ` +
+						"Этот шаблон слишком разрушителен: ни песочница, ни автономный режим не защищают то, что внутри них. " +
+						directAskHint(disabled),
 				};
 			}
 			return;

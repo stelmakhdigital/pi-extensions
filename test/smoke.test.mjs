@@ -23,6 +23,7 @@ const jiti = createJiti(fileURLToPath(import.meta.url));
 const repoRoot = fileURLToPath(new URL("../", import.meta.url)).replace(/\/+$/, "");
 const promptSnippets = jiti("../extensions/prompt-snippets/index.ts");
 const bashGuard = jiti("../extensions/bash-guard/index.ts");
+const sandboxState = jiti("../extensions/sandbox-state.ts");
 const askUserQuestion = jiti("../extensions/ask-user-question/index.ts");
 
 const results = [];
@@ -259,10 +260,10 @@ const noUiCtx = {
 		await pi.handlers.tool_call(ev, ctxSbx);
 		const cmd = String(ev.input.command);
 		if (!/bwrap|sandbox-exec/.test(cmd)) throw new Error("не обёрнуто: " + cmd.slice(0, 120));
-		// Обёртку должен узнавать bash-guard (по голове команды, без маркеров и
-		// зависимости от порядка загрузки расширений).
-		if (!bashGuard.sandboxWrapped(cmd)) throw new Error("bash-guard не узнал обёртку: " + cmd.slice(0, 120));
-		if (bashGuard.sandboxWrapped("rm -rf build")) throw new Error("обычная команда принята за обёртку");
+		// bash-guard идёт раньше sandbox и обёртку не разбирает: об изоляции он
+		// узнаёт из предиката extensions/sandbox-state.ts (иначе спрашивал бы
+		// подтверждение на каждую команду, которую песочница всё равно ограничит).
+		if (!sandboxState.sandboxIsolates(ctxSbx)) throw new Error("предикат изоляции false при .sandbox=dev");
 	}, needsBackend);
 
 	async function runWrapped(command, cwd) {
@@ -309,6 +310,8 @@ const noUiCtx = {
 		sbxExt.default(piVm);
 		const res = await piVm.handlers.tool_call({ toolName: "bash", input: { command: "echo x" } }, ctxSbx);
 		if (!res?.block || !res.reason.includes("vm")) throw new Error("нет блока: " + JSON.stringify(res));
+		// vm пер-командную изоляцию НЕ даёт — bash-guard обязан по-прежнему спрашивать.
+		if (sandboxState.sandboxIsolates(ctxSbx)) throw new Error("vm помечен как изолирующий уровень");
 	});
 
 	await check("sandbox: без маркера — passthrough", async () => {

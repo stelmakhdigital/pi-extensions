@@ -3,13 +3,38 @@
 Коллекция небольших расширений для [pi](https://pi.dev) в одном git-репозитории.
 Установить можно всё целиком — или только нужные расширения (см. [Установка по отдельности](#установка-по-отдельности)).
 
-## Расширения
+## Все расширения — коротко
+
+Загружаются все из `package.json` (`pi.extensions`); отключаются своей командой
+или флагом. Столбец «Включение» — что набирать в TUI и что передавать при запуске.
+
+| Расширение | Что делает | Включение / выключение |
+|---|---|---|
+| [yolo](extensions/yolo/) | Автономный режим: без стартовых вопросов, снимает интерактивные блокировки guard'ов | `--yolo`, `PI_YOLO=1`, `/yolo` |
+| [prompt-snippets](extensions/prompt-snippets/) | Одноцелевые промпт-правила на каждое сообщение | `alt+s`, `/snippets` |
+| [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/ls/find/grep/bash вне CWD и сверх allowlist'а секретов | `/dir-guard`, `--dir-guard-disabled`, `--dir-guard-allow`, `--dir-guard-allow-secrets` |
+| [bash-guard](extensions/bash-guard/) | Запрос «Выполнить / Отменить» на рискованный bash + жёсткий «пол» для катастрофических | `/bash-guard`, `/bash-guard:rm`, `--bash-guard-disabled`, `--bash-guard-auto-allow`, `--bash-guard-git-strict` |
+| [injection-guard](extensions/injection-guard/) | Метки `UNTRUSTED` на внешних данных, блок «секрет + сеть», маскирование ключей, подтверждение опасных действий после внешнего контента | `/injection-guard` (off/label/strict), `/injection-guard:stats`, `--injection-guard-off`, `--injection-guard-strict` |
+| [edit-fresh](extensions/edit-fresh/) | Блок `edit`, если файл не читали или он изменился после read (правка «по памяти») | всегда включено, `--edit-fresh-disabled` (команды нет) |
+| [bash-exit-hint](extensions/bash-exit-hint/) | Снимает флаг ошибки с `grep`/`rg`/`diff` с exit 1 и дописывает пояснение, чтобы модель не ретраила штатный код | всегда включено (команд и флагов нет) |
+| [text-guard](extensions/text-guard/) | Контроль текста модели: без эмодзи, стрелок и слов-маркеров ИИ-стиля; автофикс | `/text-guard` (off/warn/strict, дефолт warn), `/text-guard:fix`, `/text-guard:stats`, `--text-guard-off`, `--text-guard-strict` |
+| [ask-user-question](extensions/ask-user-question/) | Инструмент `ask_user_question`: один вопрос с вариантами и ожидание ответа | всегда включено |
+| [subagents](extensions/subagents/) | Асинхронные подагенты в tmux со стиром результата, resume и interrupt | `/spawn`, `/subagents`, `/iterate`, `/plan`, `--subagents-disabled` (нужен tmux) |
+| [sandbox](extensions/sandbox/) | Пер-командная изоляция bash (bwrap / sandbox-exec), fail-closed | `/sandbox status\|on <dev\|untrusted\|vm\|off>\|test\|forget`, `--sandbox-level`, файл `.sandbox` в проекте |
+| [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации и TTFT | всегда включено |
+| [todo](extensions/todo/) | Живой чек-лист сессии: инструмент `todo` + виджет над редактором | `/todos`, `alt+t` |
+| [edit-check](extensions/edit-check/) | typecheck/линт в конце прогона, ошибки — обратно модели | `/edit-check` (проверить сейчас), `/edit-check off`, `.edit-check.json` |
+
+Порядок строк — порядок загрузки, он значим (см. [Порядок загрузок](#порядок-загрузок)).
+Подробные описания — в следующей таблице и в разделах ниже.
+
+## Расширения — подробно
 
 | Расширение | Назначение |
 |---|---|
 | [yolo](extensions/yolo/) | Автономный режим `--yolo` / `PI_YOLO=1` / `/yolo`: без стартовых вопросов (доверие проекту, tmux-handoff) и без блокировок guard'ов, включая «пол» bash-guard; бейдж `YOLO` в футере, `/yolo` переключает посреди сессии. Подробности — [Автономный запуск без вопросов](#yolo-автономный-запуск-без-вопросов) |
 | [prompt-snippets](extensions/prompt-snippets/) | Комбинируемые одноцелевые промпт-правила: включаются на каждое сообщение через меню (`alt+s` / `/snippets`), вставляются перед или после вашего текста |
-| [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах, toggle персистентны (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
+| [bash-guard](extensions/bash-guard/) | Перехватывает вызовы инструмента `bash`: интерактивный запрос «Выполнить / Отменить» для рискованных команд (read-only git — без запроса, `--bash-guard-git-strict` для строгого режима), жёсткий блок катастрофических операций в субагентах и в «полу» автономного режима; команду, которую `sandbox` возьмёт в изоляцию, не спрашивает (состояние читается из `extensions/sandbox-state.ts`), «пол» при этом остаётся; toggle персистентны (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
 | [dir-guard](extensions/dir-guard/) | Жёсткий блок read/write/edit/find/grep/ls/bash, чьи пути уходят вне рабочей директории (CWD) и allowlist'а: realpath-канонизация (symlink-escape блокируется), allowlist — `$HOME/.pi` (дефолт) + `--dir-guard-allow` + `.dir-guard.json` в CWD, файлы учётных данных (`~/.ssh`, `~/.aws`, `auth.json`, `*.pem`, `.env`) блокируются сверх allowlist'а (`--dir-guard-allow-secrets` / `"secrets": "allow"`), `/dir-guard` и бейдж `DR OFF`, состояние персистентно (`~/.pi/agent/guard-state.json`, переживает `/reload`) |
 | [injection-guard](extensions/injection-guard/) | Защита от prompt injection: результаты внешних инструментов (веб, сеть, MCP, файлы недоверенного репо) оборачиваются в метки `UNTRUSTED` с обезвреживанием поддельных меток + секция правил в системном промпте; блок корреляции «чтение секрета + сетевой уход»; маскирование секретов из вывода bash (формы ключей, дампы `env`/`git config --list`, пароль в URL); в strict опасные действия (файлы агента, отправка наружу, установка пакетов, git push) после внешнего контента спрашиваются. Режимы off/label/strict (`/injection-guard`, дефолт label), бейдж `IG`, `/injection-guard:stats`, `.injection-guard.json` в CWD |
 | [text-guard](extensions/text-guard/) | Контроль текста модели (документация, комментарии, коммиты, чат) — без эмодзи, стрелок, слов-маркеров ИИ-стиля («давайте», delve…) и умных названий: секция стиля в системном промпте, скан write/edit/bash (коммиты, heredoc, echo), режимы off/warn/strict (`/text-guard`, дефолт warn), автофикс эмодзи/стрелок, `.text-guard.json` в CWD (allow/skip/words/ignore), `/text-guard:stats`, бейдж `TG OFF`, состояние персистентно |
@@ -18,6 +43,8 @@
 | [gen-speed](extensions/gen-speed/) | Бейдж скорости генерации в футере: `41t/s (0.8s)` (EMA по ответам, на лету при стриминге; в скобках TTFT — время до первого токена; aborted/короткие ответы не считаются) |
 | [todo](extensions/todo/) | Живой чек-лист над редактором: инструмент `todo` (add/toggle/list/clear), виджет `задачи 2/5` с открытыми пунктами, `/todos` и `alt+t` — полный список в оверлее, бейдж в футере. Состояние в истории сессии (переживает `/reload`, корректно в любой ветке) |
 | [edit-check](extensions/edit-check/) | Проверка типов/линта в конце прогона: после правок запускает `typecheck`-скрипт проекта (или `cmd` из `.edit-check.json`), а ошибки отправляет модели с `triggerTurn` — «готово» со сломанными типами не проходит. `/edit-check`, `/edit-check off`, бейдж `✗ 2/3`, после 3 раундов цикл обрывается |
+| [edit-fresh](extensions/edit-fresh/) | Блок `edit`, если файл не читали в этой сессии или он изменился после read: oldText «по памяти» почти никогда не совпадает, и правка ушла бы битой. Канонизация путей (symlink), бейдж `edit-fresh`, состояние сбрасывается на новой сессии; в yolo снят |
+| [bash-exit-hint](extensions/bash-exit-hint/) | Exit 1 у `grep`/`egrep`/`fgrep`/`rg`/`diff`/`cmp`/`comm`/`pgrep` — штатный код («нет совпадений», «файлы различаются»), а не падение. Снимает `isError` и дописывает пояснение, чтобы модель не ретраила тот же вызов. Коды >= 2 и произвольные скрипты не трогает; разбор цепочек общий с guard'ами (`extensions/shell-parse.ts`), работает и под `UNTRUSTED`-фрейсом injection-guard |
 | [subagents](extensions/subagents/) | Асинхронные подагенты в tmux: спавн в панель (не блокирует основную сессию), live-виджет статусов и токенов (starting/active/waiting/stalled), steer-результат, resume/interrupt, agent-definitions (`.pi/agents/*.md`) + 4 bundled-агента (planner/scout/worker/reviewer); команды `/spawn`, `/subagents [doctor|status]`, `/iterate [agent] <task>`, `/plan <task>` (planner→worker→reviewer); `spawning`/`deny-tools` в frontmatter; вне tmux — handoff (перезапуск pi внутри tmux с продолжением сессии) |
 
 ## Yolo: автономный запуск без вопросов
@@ -82,6 +109,42 @@ glob `*`; `redact` — `off`/`bash`/`all`; `redactAllow` — значения-ф
 В `label` guard не мешает работе, но оставляет модели явную границу
 «данные / команды».
 
+## Порядок загрузок
+
+Список `pi.extensions` в `package.json` — это и порядок цепочки хендлеров
+(`tool_call` и `tool_result` идут по нему). Он значим, переставлять элементы
+без причины не стоит:
+
+- `yolo` первым — отвечает на `project_trust` раньше `sandbox`, иначе автономная
+  сессия упрётся в вопрос о доверии проекту.
+- `dir-guard` до `bash-guard` — жёсткая граница путей проверяется до того, как
+  пользователь уже ответил на «Выполнить / Отменить». Иначе выходил диалог на
+  команду, которая в итоге всё равно блокируется.
+- `sandbox` — последним из тех, кто меняет bash-команду: guard'ы обязаны
+  разбирать сырую команду, а не обёртку `bwrap`/`sandbox-exec`.
+- `edit-check` последним — ему нужен чистый `tool_result`.
+
+Следствия порядка закрыты явными мостами, а не угадыванием по тексту:
+
+- bash-guard и sandbox. Guard не видит обёртку, поэтому спрашивает состояние
+  песочницы через `extensions/sandbox-state.ts`: изолированную команду не
+  спрашивает (изоляция уже ограничила хост), но «пол» жёсткого блока держит —
+  рабочий каталог внутри песочницы доступен на запись. Нет sandbox'а или
+  предикат бросил — guard спрашивает как обычно.
+- bash-exit-hint и injection-guard. injection-guard закрывает вывод в
+  `UNTRUSTED`-фрейс раньше, и строка `Command exited with code 1` перестаёт быть
+  последней — hint срезает хвост фрейса перед проверкой.
+- Субагенты. Состояние guard'ов из `guard-state.json` в ребёнке не читается:
+  `dir-guard` всегда включён, `injection-guard`/`text-guard` в strict, у
+  `bash-guard` остаётся «пол». `/dir-guard off` в родителе на детей не
+  распространяется — это fail-safe, а не рассинхрон.
+- edit-check запускает проверку через `spawn`, мимо `sandbox` и `bash-guard`:
+  typecheck исполняется на хосте. Учитывайте это при `sandbox untrusted`.
+
+Фильтры в `settings.json` порядок манифеста сохраняют. Одно исключение:
+force-include вида `+extensions/...` дописывает файл в конец списка и порядок
+ломает — для guard'ов это заметная смена поведения.
+
 ## Границы защиты
 
 Guard'ы — это барьер от случайности модели, а не от атакующего с shell'ом.
@@ -134,7 +197,8 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 
 Пакет — это весь репозиторий, но в настройках можно загрузить только нужные
 расширения через фильтры (объектная форма записи пакета). Конкретный паттерн
-для каждого расширения:
+для каждого расширения: порядок манифеста при этом сохраняется
+(см. [Порядок загрузок](#порядок-загрузок)).
 
 | Расширение | Фильтр |
 |---|---|
@@ -142,6 +206,8 @@ pi update --extensions   # обновить пакеты (подтянет ак�
 | yolo | `extensions/yolo/*` |
 | bash-guard | `extensions/bash-guard/*` |
 | dir-guard | `extensions/dir-guard/*` |
+| edit-fresh | `extensions/edit-fresh/*` |
+| bash-exit-hint | `extensions/bash-exit-hint/*` |
 | injection-guard | `extensions/injection-guard/*` |
 | text-guard | `extensions/text-guard/*` |
 | ask-user-question | `extensions/ask-user-question/*` |
@@ -460,13 +526,22 @@ extensions/
   shell-parse.ts              # разбор bash-команд: токены, сегменты, головы, кандидаты путей
   paths.ts                    # canonical / resolvePath (realpath с шагом вверх)
   untrusted.ts                # «окно недоверия»: флаг внешнего контента в контексте
+  sandbox-state.ts            # мост sandbox -> bash-guard: «будет ли команда изолирована»
   yolo/
     index.ts                  # флаг --yolo, команда /yolo, авто-доверие проекту, бейдж
   prompt-snippets/
     index.ts                  # расширение
     snippets/                 # сниппеты (по одному .md на правило)
   bash-guard/
-    index.ts
+    index.ts                  # запрос на рискованный bash + «пол» катастрофических
+  dir-guard/
+    index.ts                  # блок путей вне CWD и сверх allowlist'а секретов
+  edit-fresh/
+    index.ts                  # блок edit без свежего read
+  bash-exit-hint/
+    index.ts                  # штатный exit 1 у grep/diff — не ошибка
+  text-guard/
+    index.ts                  # стиль текста модели, автофикс эмодзи/стрелок
   injection-guard/
     index.ts                  # маркировка UNTRUSTED, блок «секрет + сеть», эскалация
   ask-user-question/

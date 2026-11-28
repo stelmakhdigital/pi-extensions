@@ -31,8 +31,8 @@
     "extensions": [
       "extensions/yolo/index.ts",
       "extensions/prompt-snippets/index.ts",
-      "extensions/bash-guard/index.ts",
       "extensions/dir-guard/index.ts",
+      "extensions/bash-guard/index.ts",
       "extensions/injection-guard/index.ts",
       "extensions/edit-fresh/index.ts",
       "extensions/bash-exit-hint/index.ts",
